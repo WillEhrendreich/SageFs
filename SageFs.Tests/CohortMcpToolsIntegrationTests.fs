@@ -413,4 +413,41 @@ let cohortMcpToolsTests =
         |> Expect.stringContains "a non-conductor's reassign must be refused by the role gate" "cannot call reassign_claim (your role is"
       })
     }
+
+    /// A claim whose holder left is cleared by the conductor with `release_claim`, and the scope is free at once. The
+    /// silent-holder half of the rule is judged against the clock, so it is held by the pure cases and the simulation
+    /// (`CohortClearClaimTests`, `CohortVacancySpec`); a real connection cannot be made silent for two minutes in a test.
+    testTask "the conductor clears the claim a member left behind with release_claim, and another member can take the scope" {
+      do! withDaemon (fun port -> task {
+        use! conductor = connect port
+        use! holder = connect port
+        use! other = connect port
+
+        let! _ = joinCohort conductor "the-conductor" "Implementer"
+        let! _ = joinCohort holder "the-holder" "Implementer"
+        let! _ = joinCohort other "the-other" "Implementer"
+        let! acquired = acquireClaim holder "the-holder" "file:src/Cleared.fs" "editing Cleared.fs"
+        let claimId = claimIdFromAcquireResult acquired
+
+        let! blocked = acquireClaim other "the-other" "file:src/Cleared.fs" "wants the same file"
+        blocked |> Expect.stringContains "the scope is shut while the holder holds it" "already claimed"
+
+        let! _ = callTool holder "leave_cohort" [ "agentName", box "the-holder" ]
+        let! status = getCohortStatus conductor
+        let fence =
+          let m = System.Text.RegularExpressions.Regex.Match(status, sprintf @"- %s .*? fence=(\d+)" (System.Text.RegularExpressions.Regex.Escape claimId))
+          if not m.Success then failwithf "status did not list claim %s with a fence: %s" claimId status
+          int64 m.Groups.[1].Value
+        status |> Expect.stringContains "the status marks the orphaned claim clearable" "| clearable: "
+
+        let! refused = releaseClaim other "the-other" claimId fence
+        refused |> Expect.stringContains "a member that is not the conductor cannot clear it" "does not hold claim"
+
+        let! cleared = releaseClaim conductor "the-conductor" claimId fence
+        cleared |> Expect.stringContains "the conductor's release is a clear" "Cleared claim"
+
+        let! taken = acquireClaim other "the-other" "file:src/Cleared.fs" "now free"
+        taken |> Expect.stringContains "the other member takes the scope at once" "Acquired claim c-"
+      })
+    }
   ]

@@ -66,6 +66,8 @@ module Linearizability =
     | NotClaimHolder
     | UnknownClaim
     | ClaimNotOrphaned
+    /// A clear refused: how long the holder had been silent differs between permutations, so only the refusal matters.
+    | ClearRefused
     | DuplicateClaimId
     | StaleClaimFence
     | InvalidPurpose
@@ -108,6 +110,7 @@ module Linearizability =
     | CohortError.NotClaimHolder _ -> ErrorKind.NotClaimHolder
     | CohortError.UnknownClaim _ -> ErrorKind.UnknownClaim
     | CohortError.ClaimNotOrphaned _ -> ErrorKind.ClaimNotOrphaned
+    | CohortError.ClearRefused _ -> ErrorKind.ClearRefused
     | CohortError.DuplicateClaimId _ -> ErrorKind.DuplicateClaimId
     | CohortError.StaleClaimFence _ -> ErrorKind.StaleClaimFence
     | CohortError.InvalidPurpose _ -> ErrorKind.InvalidPurpose

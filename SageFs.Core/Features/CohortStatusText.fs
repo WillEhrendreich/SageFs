@@ -63,6 +63,37 @@ module CohortStatusText =
       | HolderSilence.SilentSince(since, lapsesAt) ->
         sprintf "silent for %d min, lapses at %s" (int (now - since).TotalMinutes) (lapsesAt.ToString "u")
 
+  /// How long a member has been silent, in the unit a reader measures a silence in: "45 s" under a minute, "7 min" after.
+  let silenceText (span: TimeSpan) : string =
+    match span.TotalSeconds < 60.0 with
+    | true -> sprintf "%d s" (int span.TotalSeconds)
+    | false -> sprintf "%d min" (int span.TotalMinutes)
+
+  /// The tool a conductor clears a claim with, as the words that name it. One home: the status line, the refusals and
+  /// the docs all send a reader to it.
+  [<Literal>]
+  let clearToolText = "release_claim"
+
+  /// What a claim's standing says to a conductor, in one clause, or "" when there is nothing to clear. It names the
+  /// claim's holder and how long it has been gone, and the call that clears it: `release_claim` with the claim's id
+  /// and the fence printed on the same line.
+  let claimClearableText (standing: SageFs.Cohort.ClaimStanding<SageFs.MemberTable.MemberId>) : string =
+    match standing with
+    | SageFs.Cohort.ClaimStanding.SilentHolder(holder, silentFor) ->
+      sprintf
+        "%s has been silent for %s; the conductor clears this claim with %s (this claim id and fence)"
+        (SageFs.MemberTable.MemberId.display holder)
+        (silenceText silentFor)
+        clearToolText
+    | SageFs.Cohort.ClaimStanding.NoHolder(former, _) ->
+      sprintf
+        "%s left it with no holder; the conductor clears it with %s (this claim id and fence), or hands it on with reassign_claim"
+        (SageFs.MemberTable.MemberId.display former)
+        clearToolText
+    // default policy: a claim held by a member that is here, or one already released, has nothing to clear.
+    | SageFs.Cohort.ClaimStanding.ActiveHolder _
+    | SageFs.Cohort.ClaimStanding.Released _ -> ""
+
   /// A DURATION, in the minutes a lease is reasoned about in: "27m", "1h03m".
   /// `hh\:mm` wall-clock stamps and bare second counts are both the wrong unit
   /// for "how long have I got" — a reader has to subtract one from the other by
@@ -201,8 +232,12 @@ module CohortStatusText =
   /// The cohort status text. `silence` is the standing of the seat's holder, which a frame cannot say (it carries no
   /// lease): the caller reads it off the cohort's state with `HolderSilence.ofState`. `reportFor` gives what the daemon
   /// recorded about a landing's failing tests, by landing id.
-  let renderWithSilenceAndReports
+  ///
+  /// `clearances` is the claims a conductor could clear now (`Cohort.ClaimStanding.clearable`), which a frame cannot say
+  /// either: each such claim's line says so, whose it is and which call clears it.
+  let renderWithClearancesAndReports
     (silence: HolderSilence)
+    (clearances: Map<SageFs.Cohort.ClaimId, SageFs.Cohort.ClaimStanding<SageFs.MemberTable.MemberId>>)
     (reportFor: string -> FailingTestsText.Report option)
     (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
     : string =
@@ -267,7 +302,12 @@ module CohortStatusText =
       let holder =
         if frame.ClaimHolderIndex.[i] >= 0 then MemberTable.MemberId.display frame.MemberIds.[frame.ClaimHolderIndex.[i]]
         else "(none)"
-      sb.AppendLine(sprintf "  - %s %A held-by=%s fence=%d state=%A" cid frame.ClaimScope.[i] holder (int64 frame.ClaimFence.[i]) frame.ClaimState.[i]) |> ignore
+      // A claim a conductor may clear says so after its state, behind a marker a reader (and sagefs.nvim) can split on.
+      let clearable =
+        match Map.tryFind frame.ClaimIds.[i] clearances |> Option.map claimClearableText with
+        | Some text when text <> "" -> sprintf " | clearable: %s" text
+        | _ -> ""
+      sb.AppendLine(sprintf "  - %s %A held-by=%s fence=%d state=%A%s" cid frame.ClaimScope.[i] holder (int64 frame.ClaimFence.[i]) frame.ClaimState.[i] clearable) |> ignore
     if claimView.HiddenTotal > 0 then
       sb.AppendLine(sprintf "  %s" (CohortBoundedView.claimOverflowLabel claimView)) |> ignore
     sb.AppendLine(sprintf "Integration head: %s" frame.IntegrationHead) |> ignore
@@ -295,6 +335,14 @@ module CohortStatusText =
       if landingView.HiddenTotal > 0 then
         sb.AppendLine(sprintf "  %s" (CohortBoundedView.landingOverflowLabel landingView)) |> ignore
     sb.ToString()
+
+  /// The cohort status text with no claim called clearable.
+  let renderWithSilenceAndReports
+    (silence: HolderSilence)
+    (reportFor: string -> FailingTestsText.Report option)
+    (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
+    : string =
+    renderWithClearancesAndReports silence Map.empty reportFor frame
 
   /// The cohort status text for a holder nobody calls silent. `reportFor` gives what the daemon recorded about a landing's
   /// failing tests, by landing id.

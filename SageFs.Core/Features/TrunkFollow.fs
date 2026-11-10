@@ -172,6 +172,7 @@ module TrunkFollow =
     | CohortEvent.ClaimReleased _
     | CohortEvent.ClaimOrphaned _
     | CohortEvent.ClaimReassigned _
+    | CohortEvent.ClaimCleared _
     | CohortEvent.ClaimViolationObserved _
     | CohortEvent.LandingQueued _
     | CohortEvent.LandingStateChanged _

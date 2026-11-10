@@ -164,7 +164,7 @@ One cohort spans every session and agent on the daemon, so these four events car
 | Event | Payload | Description |
 |:---|:---|:---|
 | `cohort_matrix` | `Version`, `CohortScope`, `Members[]` (id, role, seat, conductor), `Claims[]` (id, scope, holder, fence, state), `Tests[]`, `Rows[]` (generation, pass[], fail[], stale[]) | The full projected cohort frame: every member, every claim, and the test matrix. Version-gated per cohort: an unchanged frame emits nothing. The daemon runs one cohort per scope, `CohortScope` names the one the frame is about, and every cohort that exists is pushed and replayed on connect. `claim_changed`, `landing_changed` and `save_observed` come from the cohort the daemon was launched in only; for any other cohort the matrix is the whole report. |
-| `claim_changed` | `ClaimId`, `Scope`, `Holder` (nullable), `Fence`, `Kind` (acquired\|released\|orphaned\|reassigned) | One claim's state changed. `Holder` is the current holder, or null when orphaned or released. |
+| `claim_changed` | `ClaimId`, `Scope`, `Holder` (nullable), `Fence`, `Kind` (acquired\|released\|orphaned\|reassigned\|cleared) | One claim's state changed. `Holder` is the current holder, or null when orphaned, released or cleared (the conductor released a claim whose holder had gone). |
 | `landing_changed` | `LandingId`, `Requester`, `State` (queued\|rebasing\|verifying\|blocked\|landed\|withdrawn), `Blocker`, `NextAction` | One landing's state changed. `Blocker` and `NextAction` are populated only when `State = "blocked"`. |
 | `save_observed` | `ClaimId`, `Observer`, `Holder`, `Scope`, `Path` | Claim early warning: a cohort member's file watcher saw a save land inside a different member's held claim. Advisory only: it never blocks the save. |
 

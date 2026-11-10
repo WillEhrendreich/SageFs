@@ -8,13 +8,23 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | Built on master, 2026-11-09, awaiting the release gate. Pure command, simulation, tool, status text, docs and the Neovim view are done. The dashboard Clear control and a `sagefs cohort` clear command are not built. |
 | Size | S for the pure command, M with the tool, the dashboard control and the docs |
-| Branch and worktree | none yet |
-| Last green commit | none yet. It starts from `SageFs.Core/Cohort.fs` as on master (`ReleaseClaim`, `ReassignClaim`, `Retention`). |
-| Next action | Answer the decision below, then write the RED cases in "Tests". |
-| Decisions made | none yet |
-| Surprises | none yet |
+| Branch and worktree | none: committed on master in the shared checkout. sagefs.nvim commit `dddec14` is local and not pushed. |
+| Last green commit | see `git log -- SageFs.Tests/CohortClearClaimTests.fs`; the REPL proofs are in "What was proved" below |
+| Next action | Run the release gate. Then the dashboard control (see "Not built"), if a person needs to clear without a conductor. |
+| Decisions made | The conductor may clear a `Held` claim of a silent member before its lease lapses, with the silence recorded in the event. No person's yes is asked. "Silent" is `Timeouts.cohortHolderSilentAfter` (two minutes), the measure the status text already uses for a seat's holder, not the 30 minute lease. The tool is `release_claim`: the conductor naming a claim that is not its own is a clear (`Cohort.releaseOrClear` picks the command), so there is no new tool and no new parameter. A call under a member token never clears. The command carries the fence and compares it as `ReleaseClaim` does. |
+| Surprises | The status text could not say a claim is clearable from a frame, because a frame carries no lease; `Cohort.ClaimStanding.clearable state now` is read off the state at the edge, as `HolderSilence.ofState` is. `reassign_claim` has no fence, so a clear through it would have skipped the compare-and-swap; that is why the clear rides on `release_claim`. The `ClaimConflict` and `NotClaimHolder` refusals sent a caller to "ask the holder" with no word about a silent one; both say the conductor can clear it now. |
+
+### What was proved
+
+Against the real `Cohort.decide` in a SageFs REPL session (bare session, the pure files `#load`ed), before the build: the conductor's plain `release_claim` of bob's claim was `NotClaimHolder` (RED); a clear at one minute was `ClearRefused HolderActive(bob, 1 min, 2 min)`; at two minutes it released the claim, bob's late release was `StaleClaimFence`, carol took the scope, carol's own clear was `NotConductor`, a stale fence was `StaleClaimFence`, a second clear was `AlreadyReleased`, and a claim orphaned by bob's departure was cleared with no present target. A landing bob had queued was `Blocked(StaleClaimFence)` at `FastForwardCompleted`. `CohortVacancySpec.proof ()` closed over 149 nodes with no violation, and each of the three twins (`clearFaultsAny`, `clearFaultsNonConductor`, `clearFaultsKeepFence`) closed and violated exactly its rule.
+
+### Not built
+
+- The dashboard cohort panel lists claims with no actions today. A Clear button needs a person's authority (the daemon operator route and a one-use ticket, as the Seat button has) and a command with no `by`, which would make a `Released` claim's "by" the former holder or a new case. I left it: a person replaces a silent conductor (`sagefs cohort seat <id> --replace <holder>`), and the new conductor clears.
+- `sagefs cohort` has only `seat`; there is no sibling command for claims, so none was added.
+- The silent-holder path through a real daemon is not tested end to end: a connection cannot be made silent for two minutes inside a test. The model and the pure cases hold it.
 
 ## What done looks like
 
@@ -32,6 +42,8 @@ Read from `SageFs.Core/Cohort.fs` and `docs/mcp-tools.md` on 2026-11-08.
 - A token that lapses stays lapsed, and a new mint is a new member, so the replacement cannot release what its predecessor held (`docs/mcp-tools.md`, the call section).
 
 ## Decisions for Will
+
+Both were built on the recommendations below (2026-11-09: yes to the conductor's clear, no person's yes). Either can be overruled; a person's yes would be a `seat_conductor`-style question in front of `release_claim`'s clear branch.
 
 - May the conductor force-release a silent member's `Held` claim before its lease lapses? My recommendation is yes, for the conductor only, with the holder's silence recorded in the event. The fence already makes it safe: the release bumps the fence, so the old holder's late `release_claim` is refused as stale, and a landing the old holder had queued is Blocked as `StaleClaimFence` when it comes to land, which is what already happens when a claim is released, reassigned or orphaned under a queued landing, and its requester can withdraw and resubmit. The cost is that a member that is only slow, not gone, loses its claim. The question the person is shown says how long it has been silent, the same way the replace-a-conductor question does (`seat-replace-by-asking`).
 - Should the person's yes be required, as it is for replacing a conductor? A conductor is one agent, and agents already `reassign_claim` on their own say-so, so I would not add a question here. Say so if you want it.

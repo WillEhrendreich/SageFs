@@ -127,6 +127,24 @@ let membershipTests =
       r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
       r.Violations |> Expect.contains "a replacement that departs the holder moves more than the seat" "REPLACE-MOVES-ONLY-THE-SEAT"
 
+    testCase "FAULTS — a clear that never asks whether the holder is here VIOLATES CLEAR-NEVER-TAKES-A-PRESENT-HOLDERS-CLAIM, so the silence rule has teeth" <| fun _ ->
+      // A twin that clears any Held claim: the conductor takes the claim of a member that renewed a moment ago.
+      let r = CohortVacancySpec.clearFaultsAny ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "clearing a present holder's claim breaks the silence rule" "CLEAR-NEVER-TAKES-A-PRESENT-HOLDERS-CLAIM"
+
+    testCase "FAULTS — a clear any member may make VIOLATES CLEAR-IS-THE-CONDUCTORS, so the authority rule has teeth" <| fun _ ->
+      let r = CohortVacancySpec.clearFaultsNonConductor ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "a non-conductor's accepted clear breaks the authority rule" "CLEAR-IS-THE-CONDUCTORS"
+
+    testCase "FAULTS — a clear that keeps the fence VIOLATES CLEAR-TOUCHES-ONLY-THAT-CLAIM, so the compare-and-swap rule has teeth, and the real clear is REACHABLE" <| fun _ ->
+      // The twin differs from the real decide only on an ACCEPTED clear, so its violation also shows the real clears are
+      // reached in the explored space: the proof's silence about ClearClaim is not vacuous.
+      let r = CohortVacancySpec.clearFaultsKeepFence ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "a clear that leaves the fence where it was breaks the one-claim rule" "CLEAR-TOUCHES-ONLY-THAT-CLAIM"
+
     testCase "the replacement states are REACHABLE — the proof's alphabet really replaces a conductor, so its silence about ReplaceConductor is not vacuous" <| fun _ ->
       let machine = SageFs.CohortScope.Machine
       let at = System.DateTime(2020, 1, 1)

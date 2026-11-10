@@ -708,7 +708,7 @@ let formatCohortMatrixEvent (opts: JsonSerializerOptions) (frame: Cohort.CohortF
 /// applied — because the event DUs themselves don't all carry `Scope`
 /// (`ClaimReleased`/`ClaimOrphaned`/`ClaimReassigned` don't), so the caller
 /// looks the claim up by id instead of projecting the event's own fields.
-/// `kind` names which event fired: "acquired" | "released" | "orphaned" | "reassigned".
+/// `kind` names which event fired: "acquired" | "released" | "orphaned" | "reassigned" | "cleared".
 let formatClaimChangedEvent (opts: JsonSerializerOptions) (kind: string) (claim: Cohort.Claim<MemberTable.MemberId>) : string =
   let (Cohort.ClaimId cid) = claim.Id
   let holder =

@@ -76,3 +76,13 @@ sit, who held the seat and why it is empty. Only their explicit yes seats anyone
 - Under a member token the tool is not callable, and a member under a token is never the one seated. If you hold a token,
   the person seats a member that joined on its own connection.
 - Meanwhile do what needs no conductor: `acquire_claim`, `release_claim`, `request_landing`, `withdraw_landing`, `veto_landing`.
+
+## When a scope is shut by a member that went quiet
+
+`acquire_claim` is refused while a member holds the scope, and a member that has gone silent keeps its claims until its lease
+lapses (30 minutes). `get_cohort_status` marks such a claim `| clearable: ...` on its line: its holder has had no open stream
+and no call for two minutes, or nobody holds it. If you are the conductor, call `release_claim` with that claim's id and the
+fence on the same line. Naming a claim that is not yours is a clear. It is refused while the holder is here (the refusal says
+how long it has been silent), and the old holder's late `release_claim` is refused as stale. If you are not the conductor, ask
+the conductor; do not retry. A landing the holder had queued is blocked as stale when it reaches the front: withdraw it and
+request it again. A call under a member token never clears.

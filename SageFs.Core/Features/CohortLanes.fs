@@ -138,6 +138,10 @@ module CohortLanes =
       closeClaim claimId clock SpanOutcome.Succeeded acc
     | CohortEvent.ClaimOrphaned(claimId, _previousHolder, _fence) ->
       closeClaim claimId clock SpanOutcome.Failed acc
+    // The conductor cut the holder's claim short, so its span ends as an orphaned one does. A claim that was orphaned
+    // first has no open span left and this is a no-op.
+    | CohortEvent.ClaimCleared(claimId, _former, _silentFor, _by, _fence) ->
+      closeClaim claimId clock SpanOutcome.Failed acc
     | CohortEvent.ClaimReassigned(claimId, toMember, _fence) ->
       // Always follows an Orphaned close (see `Acc.ClaimScopes`'s doc) — this
       // opens a fresh span for `toMember` rather than trying to close one,

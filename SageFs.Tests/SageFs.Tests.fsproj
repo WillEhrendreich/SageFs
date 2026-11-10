@@ -1130,6 +1130,7 @@
         <Compile Include="CohortLedgerExportTests.fs" />
         <Compile Include="CohortPlayTests.fs" />
         <Compile Include="CohortExportCommandTests.fs" />
+        <Compile Include="CohortClearClaimTests.fs" />
         <Compile Include="CohortProjectEquivalenceTests.fs" />
         <Compile Include="CohortPerfBudgetTests.fs" />
         <Compile Include="InputHashCoverageTests.fs" />

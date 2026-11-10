@@ -20,6 +20,9 @@ open SageFs.Cohort
 ///     departed member's seat alive and exercise the purge exemption),
 ///   * `DelegateConductor` from whoever holds the seat to the other member,
 ///     and
+///   * `ClearClaim` by every present member over every claim in every state, at the claim's current fence: the
+///     conductor's release of a claim whose holder is silent or gone, which needs the clocks below because "silent"
+///     is a lease that went unrenewed for `Timeouts.cohortHolderSilentAfter`, and
 ///   * `Tick` as a SINGLE "everything silent lapses" action — the reaper's
 ///     whole job in one edge, which is what keeps this from exploding into
 ///     every intermediate clock.
@@ -102,9 +105,23 @@ module CohortVacancySpec =
       | Authority.Anonymous -> true
     membersOk && strangerOk
 
+  /// No two `Held` claims cover overlapping scope, whatever mix of acquires, departures, reaper ticks and clears
+  /// got the cohort here: clearing frees a scope and never double-books one.
+  let claimsExclusive (s: CohortState<Member>) : bool =
+    let held =
+      s.Claims
+      |> Map.toList
+      |> List.choose (fun (_, c) -> match c.State with ClaimState.Held _ -> Some c.Scope | _ -> None)
+    let rec pairsOk =
+      function
+      | [] -> true
+      | x :: rest -> (rest |> List.forall (fun y -> not (ClaimScope.overlaps x y))) && pairsOk rest
+    pairsOk held
+
   let rules : (string * (CohortState<Member> -> bool)) list =
     [ "BOUND-IS-PRESENT", boundIsPresent
-      "CONDUCTOR-ONLY-WHEN-BOUND-TO-THEM", conductorOnlyWhenBoundToThem ]
+      "CONDUCTOR-ONLY-WHEN-BOUND-TO-THEM", conductorOnlyWhenBoundToThem
+      "CLAIMS-EXCLUSIVE", claimsExclusive ]
 
   // ── The bounded alphabet ──────────────────────────────────────────────────
 
@@ -176,11 +193,52 @@ module CohortVacancySpec =
       && after.Claims = before.Claims
     | _ -> true
 
+  /// A clear is the conductor's: it is accepted only over a seat bound to the member that issued it.
+  let clearIsTheConductors (before: CohortState<Member>) (command: CohortCommand<Member>) (_after: CohortState<Member>) : bool =
+    match command with
+    | CohortCommand.ClearClaim(by, _, _, _) -> before.Conductor = ConductorBinding.Bound by
+    | _ -> true
+
+  /// A claim of a member that is here is never cleared. A `Held` claim goes only when its holder had been silent for the
+  /// window at the clock of the clear (read back from the `Released(_, at)` the clear stamps), and an `Orphaned` claim
+  /// has no holder to protect. A clear accepted over a claim that was already released broke the rule too.
+  let clearNeverTakesAPresentHoldersClaim (before: CohortState<Member>) (command: CohortCommand<Member>) (after: CohortState<Member>) : bool =
+    match command with
+    | CohortCommand.ClearClaim(_, claimId, _, _) ->
+      match Map.tryFind claimId before.Claims, Map.tryFind claimId after.Claims with
+      | Some { State = ClaimState.Held holder }, Some { State = ClaimState.Released(_, at) } ->
+        match Map.tryFind holder before.Members with
+        | Some record -> at - record.LastRenewal >= Timeouts.cohortHolderSilentAfter
+        | None -> true
+      | Some { State = ClaimState.Orphaned _ }, Some { State = ClaimState.Released _ } -> true
+      | _ -> false
+    | _ -> true
+
+  /// A clear moves one claim and nothing else: that claim ends released at a later fence (so the old holder's release
+  /// is stale and the claim is never held again under its old fence), and every other claim, every member, the seat,
+  /// the landings and the queue are exactly as they were. So a clear never loses another member's claim.
+  let clearTouchesOnlyThatClaim (before: CohortState<Member>) (command: CohortCommand<Member>) (after: CohortState<Member>) : bool =
+    match command with
+    | CohortCommand.ClearClaim(_, claimId, fence, _) ->
+      match Map.tryFind claimId after.Claims with
+      | Some { State = ClaimState.Released _; Fence = newFence } ->
+        newFence > fence
+        && Map.remove claimId after.Claims = Map.remove claimId before.Claims
+        && after.Members = before.Members
+        && after.Conductor = before.Conductor
+        && after.Landings = before.Landings
+        && after.Queue = before.Queue
+      | _ -> false
+    | _ -> true
+
   let stepRules : (string * (CohortState<Member> -> CohortCommand<Member> -> CohortState<Member> -> bool)) list =
     [ "SEATING-FILLS-ONLY-AN-EMPTY-SEAT", seatingFillsOnlyAnEmptySeat
       "SEATING-NAMES-A-PRESENT-MEMBER", seatingNamesAPresentMember
       "REPLACE-NAMES-THE-HOLDER", replaceNamesTheHolder
-      "REPLACE-MOVES-ONLY-THE-SEAT", replaceMovesOnlyTheSeat ]
+      "REPLACE-MOVES-ONLY-THE-SEAT", replaceMovesOnlyTheSeat
+      "CLEAR-IS-THE-CONDUCTORS", clearIsTheConductors
+      "CLEAR-NEVER-TAKES-A-PRESENT-HOLDERS-CLAIM", clearNeverTakesAPresentHoldersClaim
+      "CLEAR-TOUCHES-ONLY-THAT-CLAIM", clearTouchesOnlyThatClaim ]
 
   /// The dedup key: exactly the projection the two rules above read. See the
   /// module doc for why this is the key and not the whole state.
@@ -234,6 +292,12 @@ module CohortVacancySpec =
     for holder in members do
       for m in members do
         acc.Add(CohortCommand.ReplaceConductor(holder, m, cohortScope), [||])
+    // A conductor's clear, offered for EVERY present member (so the conductor and a non-conductor both try) and EVERY claim
+    // in whatever state it is in (held by a silent or an active member, orphaned, released), at the claim's current fence.
+    for m in members do
+      if isPresent s m then
+        for KeyValue(cid, c) in s.Claims do
+          acc.Add(CohortCommand.ClearClaim(m, cid, c.Fence, cohortScope), [||])
     // "everything silent lapses", in one edge
     acc.Add(CohortCommand.Tick cohortScope, [||])
     List.ofSeq acc
@@ -360,6 +424,57 @@ module CohortVacancySpec =
         let departed = { after with Members = Map.add holder { after.Members.[holder] with Presence = MemberPresence.Departed clk } after.Members }
         Ok(departed, events, effects)
       | result, _ -> result
+
+  /// The state and event of a clear that asks nothing: the claim is released by `by` at `clk`, at the next fence.
+  let forcedClear (clk: Clock) (state: CohortState<Member>) (by: Member) (claim: Claim<Member>) (former: Member) : CohortState<Member> * CohortEvent<Member> list =
+    let fence = state.NextFence + 1L<Measures.fence>
+    let released = { claim with Fence = fence; State = ClaimState.Released(by, clk) }
+    { state with NextFence = fence; Claims = Map.add claim.Id released state.Claims },
+    [ CohortEvent.ClaimCleared(claim.Id, former, System.TimeSpan.Zero, by, fence) ]
+
+  /// A clear that never asks whether the holder is here: the conductor clears any `Held` claim. The claim of a member that
+  /// renewed a moment ago goes, which is the loss the silence rule exists to prevent.
+  let faultClearsAnyClaim : Decide =
+    fun clk ent state command ->
+      match command with
+      | CohortCommand.ClearClaim(by, claimId, fence, _) when Authority.present by state = Authority.Conductor by ->
+        match Map.tryFind claimId state.Claims with
+        | Some({ State = ClaimState.Held holder } as claim) when claim.Fence = fence ->
+          let after, events = forcedClear clk state by claim holder
+          Ok(after, events, [])
+        | _ -> Cohort.decide clk ent state command
+      | _ -> Cohort.decide clk ent state command
+
+  /// A clear any present member may make: a member that is not the conductor is treated as if it were. The seat's holder
+  /// stands in for the authority check and the clear is recorded under the name of the member that asked.
+  let faultAnyMemberClears : Decide =
+    fun clk ent state command ->
+      match command, state.Conductor with
+      | CohortCommand.ClearClaim(by, claimId, fence, scope), ConductorBinding.Bound conductor when by <> conductor && isPresent state by ->
+        match Cohort.decide clk ent state (CohortCommand.ClearClaim(conductor, claimId, fence, scope)) with
+        | Ok(after, events, effects) ->
+          let relabelled =
+            events
+            |> List.map (function
+              | CohortEvent.ClaimCleared(id, former, silentFor, _, f) -> CohortEvent.ClaimCleared(id, former, silentFor, by, f)
+              | other -> other)
+          Ok(after, relabelled, effects)
+        | Error e -> Error e
+      | _ -> Cohort.decide clk ent state command
+
+  /// A clear that forgets to move the fence on: the claim is released at the fence it had, so the old holder's release
+  /// presents a fence that still matches, and the compare-and-swap that guards the claim no longer guards it.
+  let faultClearKeepsFence : Decide =
+    fun clk ent state command ->
+      match Cohort.decide clk ent state command, command with
+      | Ok(after, events, effects), CohortCommand.ClearClaim(_, claimId, fence, _) ->
+        let kept = { after.Claims.[claimId] with Fence = fence }
+        Ok({ after with Claims = Map.add claimId kept after.Claims }, events, effects)
+      | result, _ -> result
+
+  let clearFaultsAny () : ExploreResult = explore faultClearsAnyClaim defaultCap
+  let clearFaultsNonConductor () : ExploreResult = explore faultAnyMemberClears defaultCap
+  let clearFaultsKeepFence () : ExploreResult = explore faultClearKeepsFence defaultCap
 
   let replaceFaultsStale () : ExploreResult = explore faultReplacesWithoutNamingTheHolder defaultCap
   let replaceFaultsAbsent () : ExploreResult = explore faultReplaceSeatsAbsentMember defaultCap

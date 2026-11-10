@@ -1757,6 +1757,7 @@ let private claimChangeKind (ev: SageFs.Cohort.CohortEvent<SageFs.MemberTable.Me
   | SageFs.Cohort.CohortEvent.ClaimReleased(cid, _, _) -> Some(cid, "released")
   | SageFs.Cohort.CohortEvent.ClaimOrphaned(cid, _, _) -> Some(cid, "orphaned")
   | SageFs.Cohort.CohortEvent.ClaimReassigned(cid, _, _) -> Some(cid, "reassigned")
+  | SageFs.Cohort.CohortEvent.ClaimCleared(cid, _, _, _, _) -> Some(cid, "cleared")
   | _ -> None
 
 /// Claim early-warning (multi-agent vision §5.1): given the cohort state

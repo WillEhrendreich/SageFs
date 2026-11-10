@@ -1776,3 +1776,36 @@ seeded edits against F#'s rule written apart from the classifier; three real mut
 (`selectionForBuildInputs`, `verifyByRebuild`); `docs/plans/big-landings-pass-the-verifier.md`.
 Reopen it if: a landing is blocked on a whole run that a narrower selection would have been safe for, with the file that proves it
 (then the case is the one to teach the scan), or a file is found that changed another file's meaning without being named.
+
+## The conductor clears a lapsed member's claims with `release_claim`, and asks nobody
+
+A member that went silent kept its `Held` claims, and the scope stayed shut to everyone else until its 30 minute lease lapsed. An
+orphaned claim could leave the table only by being handed to a member who was present. The conductor now clears both
+(2026-11-09, `lapsed-members-claims-can-be-cleared`).
+
+The decision. `Cohort.CohortCommand.ClearClaim` is the conductor's release of a claim whose holder is gone, and it is decided by
+the cohort, not by the tool. A `Held` claim is clearable when its holder's lease has gone `Timeouts.cohortHolderSilentAfter` (two
+minutes) without a renewal. That is the measure `get_cohort_status` already uses to call a seat's holder silent, and the reaper
+renews a member that holds a stream or made a call every minute, so two minutes of no renewal means no stream and no call. It is
+not the 30 minute lease: waiting that long was the problem. An `Orphaned` claim is clearable at once. A holder that is here is
+refused as `ClearRefused(HolderActive(holder, silentFor, clearableAfter))`, a released claim as `AlreadyReleased`, a stale fence as
+`StaleClaimFence` (the same compare-and-swap `ReleaseClaim` has), and anyone who is not the sitting conductor as `NotConductor` or
+`ConductorVacant`. `ClaimStanding` is the one reading of a claim's standing, used by `decide`, by the status text that marks a claim
+`| clearable: ...` and by the simulation, so they cannot disagree about "silent".
+
+The tool is `release_claim`, with no new tool and no new parameter, so the tool list gets no heavier (its two parameter sentences
+were shortened by more than the sentence grew). The conductor naming a claim that is not its own is a clear: `Cohort.releaseOrClear`
+picks the command from the state, and `decide` still judges it. A call under a member token never clears. `reassign_claim` was not
+extended because it has no fence, and a clear through it would have skipped the compare-and-swap.
+
+No person's yes. A conductor is one agent, and agents already `reassign_claim` on their own say-so. The clear is a release, and the
+fence moves on: the old holder's late release is `StaleClaimFence`, and a landing it had queued is Blocked as `StaleClaimFence` when
+it reaches the front, which is what already happens when a claim is released, reassigned or orphaned under a queued landing. The
+cost is that a member that is slow and not gone loses its claim after two minutes of silence. A member that is waiting on a long
+call and holds no stream is the case to watch.
+
+Evidence: `SageFs.Core/Cohort.fs` (`ClearClaim`, `ClaimStanding`, `releaseOrClear`); `SageFs.Tests/CohortClearClaimTests.fs`;
+`SageFs.Simulation/CohortVacancySpec.fs` (three rules, three twins; `CohortSpecTests`); `docs/mcp-tools.md`;
+`docs/plans/lapsed-members-claims-can-be-cleared.md`.
+Reopen it if: a member that was working loses a claim to a clear (then the window, or what counts as presence, is wrong), or a
+person needs to clear with no conductor seated (then the dashboard route and a command with no `by` are the next piece).

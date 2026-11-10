@@ -465,6 +465,10 @@ module McpCohortIntegration =
           | Some _, None
           | None, _ -> ""
         // The holder's standing is read off the cohort's own state (a frame carries no lease), at the clock of this read.
-        let silence = Features.CohortStatusText.HolderSilence.ofState (owner.ReadCohortState()) DateTime.UtcNow
-        return Ok (Features.CohortStatusText.renderWithSilenceAndReports silence failingTestReportFor (owner.ReadFrame()) + integration + "\n" + trunk)
+        // The claims a conductor could clear are read the same way: a holder gone silent, or a claim nobody holds.
+        let state = owner.ReadCohortState()
+        let now = DateTime.UtcNow
+        let silence = Features.CohortStatusText.HolderSilence.ofState state now
+        let clearances = Cohort.ClaimStanding.clearable state now
+        return Ok (Features.CohortStatusText.renderWithClearancesAndReports silence clearances failingTestReportFor (owner.ReadFrame()) + integration + "\n" + trunk)
     }

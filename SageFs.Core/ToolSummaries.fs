@@ -74,7 +74,7 @@ module ToolSummaries =
     | ToolName.JoinCohort -> "Join this repository's cohort: who is working here, file claims and landing requests."
     | ToolName.LeaveCohort -> "Leave the cohort. The claims you hold become orphaned until the conductor reassigns them."
     | ToolName.AcquireClaim -> "Claim a file or directory so other members know it is yours to edit now."
-    | ToolName.ReleaseClaim -> "Release a claim you hold."
+    | ToolName.ReleaseClaim -> "Release a claim you hold. The conductor can clear a silent member's."
     | ToolName.ReassignClaim -> "Conductor only: give an orphaned claim to a present member."
     | ToolName.DelegateConductor -> "Conductor only: hand the conductor seat to another present member."
     | ToolName.SeatConductor -> "Ask the person at your client to fill an empty conductor seat or replace its holder; only their ticked yes acts."

@@ -347,6 +347,28 @@ module Cohort =
     | ReleasedPastRetention of at: DateTime
     | SupersededBy of ClaimId
 
+  /// Where a claim stands for a conductor who wants to clear it, read from the claim and the lease of whoever holds it.
+  /// One answer for `decide`'s `ClearClaim`, the status text that tells the conductor a claim is clearable, and the
+  /// simulation's rules, so they cannot disagree about what "silent" means: a holder is silent once its lease has gone
+  /// `Timeouts.cohortHolderSilentAfter` without a renewal, the same measure the seat's holder is called silent by.
+  [<RequireQualifiedAccess>]
+  type ClaimStanding<'m> =
+    /// Held by a member whose lease has not been renewed for the silence window: its connection is gone.
+    | SilentHolder of holder: 'm * silentFor: TimeSpan
+    /// Held by a member that is here: its lease was renewed inside the window.
+    | ActiveHolder of holder: 'm * silentFor: TimeSpan
+    /// Orphaned: nobody holds it, and `former` is the member that did.
+    | NoHolder of former: 'm * silentFor: TimeSpan
+    /// Released already: nothing is held and there is nothing to clear.
+    | Released of by: 'm * at: DateTime
+
+  /// Why a conductor's `ClearClaim` was refused for a claim it was allowed to look at. The rule and what to do next are
+  /// both in the case: `HolderActive` carries how long the holder has been silent and how long it must be.
+  [<RequireQualifiedAccess>]
+  type ClearRefusal<'m> =
+    | HolderActive of holder: 'm * silentFor: TimeSpan * clearableAfter: TimeSpan
+    | AlreadyReleased of by: 'm * at: DateTime
+
   // ── Landing (§5.4) ──────────────────────────────────────────────────────
 
   [<RequireQualifiedAccess>]
@@ -576,6 +598,46 @@ module Cohort =
       | Some { Presence = MemberPresence.Departed _ }
       | None -> Authority.Anonymous
 
+  module ClaimStanding =
+    /// How long `who`'s lease has gone without a renewal at `now`; `since` stands in for a member the cohort no longer
+    /// has a record of. Never negative: a clock that reads earlier than the last renewal is no silence at all.
+    let silentFor (state: CohortState<'m>) (now: DateTime) (who: 'm) (since: DateTime) : TimeSpan =
+      let lastSeen =
+        match Map.tryFind who state.Members with
+        | Some record -> record.LastRenewal
+        | None -> since
+      match now - lastSeen with
+      | span when span < TimeSpan.Zero -> TimeSpan.Zero
+      | span -> span
+
+    /// The standing of one claim at `now`.
+    let ofClaim (state: CohortState<'m>) (now: DateTime) (claim: Claim<'m>) : ClaimStanding<'m> =
+      match claim.State with
+      | ClaimState.Held holder ->
+        let silent = silentFor state now holder claim.Since
+        match silent >= Timeouts.cohortHolderSilentAfter with
+        | true -> ClaimStanding.SilentHolder(holder, silent)
+        | false -> ClaimStanding.ActiveHolder(holder, silent)
+      | ClaimState.Orphaned(former, since) -> ClaimStanding.NoHolder(former, silentFor state now former since)
+      | ClaimState.Released(by, at) -> ClaimStanding.Released(by, at)
+
+    /// A conductor may clear a claim whose holder is silent or gone. A claim held by a member that is here, and one
+    /// that is released already, are not clearable.
+    let isClearable (standing: ClaimStanding<'m>) : bool =
+      match standing with
+      | ClaimStanding.SilentHolder _
+      | ClaimStanding.NoHolder _ -> true
+      | ClaimStanding.ActiveHolder _
+      | ClaimStanding.Released _ -> false
+
+    /// Every claim a conductor could clear at `now`, with its standing: what the status text lists.
+    let clearable (state: CohortState<'m>) (now: DateTime) : Map<ClaimId, ClaimStanding<'m>> =
+      state.Claims
+      |> Map.toList
+      |> List.map (fun (id, claim) -> id, ofClaim state now claim)
+      |> List.filter (fun (_, standing) -> isClearable standing)
+      |> Map.ofList
+
   // ── Commands, events, effects (§7.1: effects are data) ────────────────────
 
   [<RequireQualifiedAccess>]
@@ -622,6 +684,14 @@ module Cohort =
     /// by state = Authority.Conductor _` (Phase 1 item 8) — refused with
     /// `CohortError.NotConductor` otherwise.
     | ReassignClaim of by: 'm * claimId: ClaimId * toMember: 'm * scope: CohortScope
+    /// Conductor action: release a claim whose holder is gone, so its scope is free before the holder's lease lapses.
+    /// Allowed for a claim that is `Orphaned` (no present member needed to hand it to) and for a `Held` claim whose
+    /// holder has been silent for `Timeouts.cohortHolderSilentAfter` (`ClaimStanding`). Refused for a holder that is
+    /// here (`ClearRefused`), for a released claim, for a stale `fence` (the same compare-and-swap `ReleaseClaim`
+    /// has) and for anyone who is not the conductor. The release bumps the fence, so the old holder's late
+    /// `ReleaseClaim` is `StaleClaimFence` and a landing it had queued is Blocked as `StaleClaimFence` when it comes to
+    /// land. Gated like `ReassignClaim`.
+    | ClearClaim of by: 'm * claimId: ClaimId * fence: int64<fence> * scope: CohortScope
     /// Conductor action: rebind `Conductor` to another Present member (§4.2's
     /// "delegate conductor to member X rebinds it"). Gated the same way as
     /// `ReassignClaim`.
@@ -728,6 +798,9 @@ module Cohort =
     | ClaimReleased of ClaimId * by: 'm * fence: int64<fence>
     | ClaimOrphaned of ClaimId * previousHolder: 'm * fence: int64<fence>
     | ClaimReassigned of ClaimId * toMember: 'm * fence: int64<fence>
+    /// The conductor `by` cleared the claim of `former`, which had been silent for `silentFor` (or gone: orphaned).
+    /// The claim is released from this event on, at `fence`.
+    | ClaimCleared of ClaimId * former: 'm * silentFor: TimeSpan * by: 'm * fence: int64<fence>
     | ClaimViolationObserved of ClaimId * observer: 'm * holder: 'm * path: string
     | LandingQueued of LandingId * requester: 'm
     | LandingStateChanged of LandingId * LandingState<'m>
@@ -784,6 +857,8 @@ module Cohort =
     | NotClaimHolder of ClaimId * requester: 'm
     | UnknownClaim of ClaimId
     | ClaimNotOrphaned of ClaimId
+    /// `ClearClaim` named a claim that is not clearable: its holder is here, or it was released already.
+    | ClearRefused of ClaimId * ClearRefusal<'m>
     | DuplicateClaimId of ClaimId
     | StaleClaimFence of ClaimId * presented: int64<fence> * current: int64<fence>
     | InvalidPurpose of string
@@ -867,6 +942,7 @@ module Cohort =
     | CohortCommand.AcquireClaim(_, _, _, scope)
     | CohortCommand.ReleaseClaim(_, _, _, scope)
     | CohortCommand.ReassignClaim(_, _, _, scope)
+    | CohortCommand.ClearClaim(_, _, _, scope)
     | CohortCommand.DelegateConductor(_, _, scope)
     | CohortCommand.SeatConductor(_, scope)
     | CohortCommand.ReplaceConductor(_, _, scope)
@@ -883,6 +959,22 @@ module Cohort =
     | CohortCommand.VetoLanding(_, _, _, scope)
     | CohortCommand.SetIntegrationHead(_, _, scope)
     | CohortCommand.ResolveVeto(_, _, scope) -> scope
+
+  /// What a `release_claim` call is. A member releases its own claim. The conductor, naming a claim that is not its own,
+  /// is clearing it: `ClearClaim`, which `decide` still judges (the holder must be silent or gone, the fence must be
+  /// current). Everyone else gets `ReleaseClaim`, whose refusal says whose claim it is. The caller decides whether the
+  /// call came under a member token (a token may never clear), and passes this only for one that did not.
+  let releaseOrClear (state: CohortState<'m>) (who: 'm) (claimId: ClaimId) (fence: int64<fence>) (scope: CohortScope) : CohortCommand<'m> =
+    let isConductor = Authority.present who state = Authority.Conductor who
+    let holdsIt =
+      match Map.tryFind claimId state.Claims with
+      | Some { State = ClaimState.Held holder } -> holder = who
+      | Some { State = ClaimState.Orphaned _ }
+      | Some { State = ClaimState.Released _ }
+      | None -> false
+    match isConductor && not holdsIt with
+    | true -> CohortCommand.ClearClaim(who, claimId, fence, scope)
+    | false -> CohortCommand.ReleaseClaim(who, claimId, fence, scope)
 
   /// Rebuild a scope from its canonical `label`. Total, never throwing: an
   /// unrecognised label becomes `Named label` rather than an exception, so a
@@ -1395,6 +1487,34 @@ module Cohort =
       // other Authority (Member, Anonymous) is refused, and a call facing an
       // EMPTY seat is refused as `ConductorVacant` instead (`refuseConductorOnly`).
       | _ -> Error(refuseConductorOnly clock by state)
+
+    | CohortCommand.ClearClaim(by, claimId, presentedFence, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
+      match Authority.present by state with
+      | Authority.Conductor _ ->
+        match Map.tryFind claimId state.Claims with
+        | None -> Error(CohortError.UnknownClaim claimId)
+        | Some claim when presentedFence <> claim.Fence ->
+          // The same compare-and-swap `ReleaseClaim` has: a conductor clears the claim it looked at, at the fence it saw.
+          Error(CohortError.StaleClaimFence(claimId, presentedFence, claim.Fence))
+        | Some claim ->
+          let release (former: 'm) (silentFor: TimeSpan) =
+            let fence = state.NextFence + 1L<fence>
+            let updated = { claim with Fence = fence; State = ClaimState.Released(by, clock) }
+            let newState = { state with NextFence = fence; Claims = Map.add claimId updated state.Claims }
+            Ok(newState, [ CohortEvent.ClaimCleared(claimId, former, silentFor, by, fence) ], [])
+          match ClaimStanding.ofClaim state clock claim with
+          | ClaimStanding.SilentHolder(holder, silentFor) -> release holder silentFor
+          | ClaimStanding.NoHolder(former, silentFor) -> release former silentFor
+          | ClaimStanding.ActiveHolder(holder, silentFor) ->
+            Error(CohortError.ClearRefused(claimId, ClearRefusal.HolderActive(holder, silentFor, Timeouts.cohortHolderSilentAfter)))
+          | ClaimStanding.Released(releasedBy, at) ->
+            Error(CohortError.ClearRefused(claimId, ClearRefusal.AlreadyReleased(releasedBy, at)))
+      // Only a bound Conductor may clear a claim: every other Authority is refused, and an empty seat is `ConductorVacant`.
+      | Authority.Member _
+      | Authority.Anonymous -> Error(refuseConductorOnly clock by state)
 
     | CohortCommand.DelegateConductor(by, toMember, scope) ->
       match checkScope scope with

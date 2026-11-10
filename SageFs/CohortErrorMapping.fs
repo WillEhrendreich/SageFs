@@ -38,11 +38,32 @@ module CohortErrorMapping =
     | Cohort.CohortError.ClaimConflict(scope, holder) ->
       failed
         (sprintf "The scope %s is already claimed by %s." (scopeStr scope) (mid holder))
-        "Coordinate with the current holder, or acquire a different, non-overlapping scope."
+        (sprintf
+          "Coordinate with the current holder, or acquire a different, non-overlapping scope. If the holder has gone silent, get_cohort_status marks its claim clearable and the conductor frees the scope with %s."
+          Features.CohortStatusText.clearToolText)
     | Cohort.CohortError.NotClaimHolder(Cohort.ClaimId cid, requester) ->
       failed
         (sprintf "%s does not hold claim %s." (mid requester) cid)
-        "Acquire it with acquire_claim, or ask the current holder to release it."
+        (sprintf
+          "Acquire it with acquire_claim, or ask the current holder to release it. If the holder is gone, the conductor can clear it with %s (get_cohort_status marks the claims that are clearable)."
+          Features.CohortStatusText.clearToolText)
+    | Cohort.CohortError.ClearRefused(Cohort.ClaimId cid, Cohort.ClearRefusal.HolderActive(holder, silentFor, clearableAfter)) ->
+      failed
+        (sprintf
+          "Claim %s is held by %s, which is here: it was last heard from %s ago, and a claim is cleared once its holder has been silent for %s."
+          cid
+          (mid holder)
+          (Features.CohortStatusText.silenceText silentFor)
+          (Features.CohortStatusText.silenceText clearableAfter))
+        (sprintf
+          "Ask %s to release it, or wait: once it has been silent for %s, get_cohort_status marks the claim clearable and %s clears it."
+          (mid holder)
+          (Features.CohortStatusText.silenceText clearableAfter)
+          Features.CohortStatusText.clearToolText)
+    | Cohort.CohortError.ClearRefused(Cohort.ClaimId cid, Cohort.ClearRefusal.AlreadyReleased(by, at)) ->
+      failed
+        (sprintf "Claim %s was released already, by %s at %s, so there is nothing to clear." cid (mid by) (at.ToString "u"))
+        "Run get_cohort_status for the claims that are still held; this scope is free for acquire_claim."
     | Cohort.CohortError.UnknownClaim(Cohort.ClaimId cid) ->
       failed
         (sprintf "No claim %s exists in this cohort." cid)

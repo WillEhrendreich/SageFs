@@ -299,10 +299,26 @@ module McpCohortTools =
     task {
       let who = memberIdFor agentName
       let fenceMeasure = LanguagePrimitives.Int64WithMeasure<Measures.fence> fence
-      let! result =
-        commitCohort ctx (
-          Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure, scopeOf workingDirectory))
-      return result |> Result.map (fun _ -> sprintf "Released claim %s." claimId)
+      let scope = scopeOf workingDirectory
+      // The conductor naming a claim that is not its own is clearing it. A call under a member token never is:
+      // no token holds the conductor's tools, so a token is always a member releasing what it names.
+      let command =
+        match currentCapability.Value, SageFs.McpTools.cohortOwnerFor ctx workingDirectory with
+        | None, Some owner -> Cohort.releaseOrClear (owner.ReadCohortState()) who (Cohort.ClaimId claimId) fenceMeasure scope
+        | Some _, _
+        | None, None -> Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure, scope)
+      let! result = commitCohort ctx command
+      return
+        result
+        |> Result.map (fun (events, _) ->
+          match events |> List.tryPick (function Cohort.CohortEvent.ClaimCleared(_, former, silentFor, _, _) -> Some(former, silentFor) | _ -> None) with
+          | Some(former, silentFor) ->
+            sprintf
+              "Cleared claim %s: %s held it and had been silent for %s. The scope is free."
+              claimId
+              (MemberTable.MemberId.display former)
+              (Features.CohortStatusText.silenceText silentFor)
+          | None -> sprintf "Released claim %s." claimId)
     }
 
   /// Conductor-only (`Cohort.decide` gates `ReassignClaim` on

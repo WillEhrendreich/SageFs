@@ -2749,13 +2749,15 @@ OUTPUT: Confirmation text with the new claim id and fence, or a conflict error n
 
 The presented fence must match the claim's current fence exactly (from acquire_claim's or get_cohort_status's output) — a stale fence is refused, and only the current holder may release.
 
-OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
+THE CONDUCTOR CAN ALSO CLEAR a claim that is not its own, when its holder has gone: the holder's lease has gone unrenewed for two minutes (no open stream, no call), or the claim is orphaned (the holder left). get_cohort_status marks such a claim "clearable" on its line. Naming a claim whose holder is here is refused with how long it has been silent. Clearing is a release: the fence moves on, so the old holder's late release_claim is refused as stale, and a landing it had queued is blocked as stale when it comes to land (withdraw it and request it again). A call under a member token never clears, and a member that is not the conductor is refused.
+
+OUTPUT: Confirmation text (for a clear, who held the claim and how long it had been silent), or an error naming why the release was refused.""")>]
     member _.release_claim(
         [<Description(AgentNameMemberParam)>]
         agentName: string,
-        [<Description("The claim id to release (from acquire_claim's output or get_cohort_status).")>]
+        [<Description("The claim id, from get_cohort_status or acquire_claim.")>]
         claimId: string,
-        [<Description("The claim's current fence (from acquire_claim's output or get_cohort_status) — a stale value is refused.")>]
+        [<Description("The claim's current fence, as get_cohort_status prints it; a stale one is refused.")>]
         fence: int64,
         [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
