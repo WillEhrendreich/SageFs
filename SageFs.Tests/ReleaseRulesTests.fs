@@ -512,6 +512,7 @@ let private git (dir: string) (args: string list) : int * string =
   info.UseShellExecute <- false
   for arg in [ "-c"; "user.name=gate-test"; "-c"; "user.email=gate-test@example.invalid"; "-c"; "commit.gpgsign=false" ] @ args do
     info.ArgumentList.Add arg
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply info
   use proc = Diagnostics.Process.Start info
   let output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd()
   proc.WaitForExit()
