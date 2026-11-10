@@ -262,13 +262,21 @@ module ConfirmWorkers =
       | WorkPut.Buffer file ->
         ledger.AddOrUpdate (session, (fun _ -> SessionHandWork.noteBufferFor workerPid file None), (fun _ existing -> SessionHandWork.noteBufferFor workerPid file (Some existing)))
         |> ignore
+      | WorkPut.DebugHold ->
+        let at = System.DateTimeOffset.UtcNow
+        ledger.AddOrUpdate (session, (fun _ -> SessionHandWork.noteDebugHoldFor workerPid at None), (fun _ existing -> SessionHandWork.noteDebugHoldFor workerPid at (Some existing)))
+        |> ignore
+      | WorkPut.DebugReleased ->
+        ledger.AddOrUpdate (session, (fun _ -> SessionHandWork.noteDebugReleasedFor workerPid None), (fun _ existing -> SessionHandWork.noteDebugReleasedFor workerPid (Some existing)))
+        |> ignore
       | WorkPut.Cleared -> ledger.TryRemove session |> ignore
       | WorkPut.Nothing -> ()
 
-    /// What the worker with this pid holds. Nothing for a worker the store has not seen.
+    /// What the worker with this pid holds. Nothing for a worker the store has not seen. A debug hold nobody has mentioned for
+    /// the hold's own length (`Timeouts.debugHold`) is not counted: the host dropped it.
     member _.HeldBy (session: SessionId) (workerPid: int) : SessionHandWork.Held =
       match ledger.TryGetValue session with
-      | true, known when known.WorkerPid = workerPid -> known.Held
+      | true, known when known.WorkerPid = workerPid -> SessionHandWork.unlessLapsed System.DateTimeOffset.UtcNow Timeouts.debugHold known.Held
       | true, _
       | false, _ -> SessionHandWork.nothing
 

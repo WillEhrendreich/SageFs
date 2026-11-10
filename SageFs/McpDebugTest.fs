@@ -52,6 +52,17 @@ module McpDebugTest =
       | other -> return Error(DebugAnswer.NoSession(formatSessionResolution other))
     }
 
+  /// Say that the test the host held for this session is over, or was never held. Beginning a hold is noted by the proxy, as
+  /// every message into a worker is; no message says a hold ended, so the route that reads the host's answer says it.
+  /// A confirming build asks whether the worker holds something a swap would lose, and a held test is one of them.
+  let private noteHoldOver (ctx: McpContext) (sid: string) : Task<unit> =
+    task {
+      let! info = ctx.SessionOps.GetSessionInfo(toSessionId sid)
+      match info |> Option.bind (fun i -> WorkerProtocol.SessionLifecycleStatus.workerPid i.Status) with
+      | Some pid -> ConfirmWorkers.handWork.Note (toSessionId sid) pid WorkerProtocol.WorkPut.DebugReleased
+      | None -> ()
+    }
+
   /// Hold the chosen test in the session's host. The test must have been discovered into THIS session's own cycle.
   let beginDebug (held: HeldTargets) (ctx: McpContext) (request: DebugRequest) : Task<int * DebugWire> =
     task {
@@ -72,7 +83,7 @@ module McpDebugTest =
               let! answer = DebugTestRequest.beginDebug ctx.SessionOps (toSessionId sid) test
               match answer with
               | DebugAnswer.Begun(SageFs.HostAgent.TestDebug.DebugBegin.Held target) -> held.Add(sid, target)
-              | _ -> ()
+              | _ -> do! noteHoldOver ctx sid
               match hostVoiceOf answer with
               | HostVoice.ClearNote -> SilentHost.clear sid
               | HostVoice.NoteSilent _
@@ -95,6 +106,9 @@ module McpDebugTest =
           SilentHost.note sid (info |> Option.bind (fun i -> WorkerProtocol.SessionLifecycleStatus.workerPid i.Status)) silence
         | HostVoice.ClearNote -> SilentHost.clear sid
         | HostVoice.KeepNote -> ()
+        match answer with
+        | DebugAnswer.Progress(SageFs.HostAgent.TestDebug.DebugProgress.Ended _) -> do! noteHoldOver ctx sid
+        | _ -> ()
         // The hold ended with a verdict: it goes on the test's row, where a normal run's would, without a normal run.
         match answer, ctx.Dispatch with
         | DebugAnswer.Progress(SageFs.HostAgent.TestDebug.DebugProgress.Ended ended), Some dispatch ->

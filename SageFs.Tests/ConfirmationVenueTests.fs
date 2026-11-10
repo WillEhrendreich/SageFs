@@ -15,7 +15,13 @@ let private session (n: int) : SessionId =
   | Error reason -> invalidOp reason
 
 let private held (evals: int) (files: string list) : SessionHandWork.Held =
-  { HandEvals = evals; BufferFiles = Set.ofList files }
+  { HandEvals = evals; BufferFiles = Set.ofList files; DebugHold = SessionHandWork.DebugHoldKept.NoHold }
+
+let private noon = System.DateTimeOffset(2026, 11, 10, 12, 0, 0, System.TimeSpan.Zero)
+
+/// What a worker holds when a test is held in its host, as of noon, and nothing else.
+let private heldTest : SessionHandWork.Held =
+  { held 0 [] with DebugHold = SessionHandWork.DebugHoldKept.HeldSince noon }
 
 let private factsOf (file: string) (state: SessionHandWork.Held) (startup: RespawnAfterReap.Sequencing) (memory: MemoryHeadroom) : VenueFacts =
   { File = file; Held = state; Startup = startup; Memory = memory }
@@ -34,11 +40,16 @@ type FactsGen =
       let! buffers = Gen.subListOf files
       let! startsApp = Gen.elements [ true; false ]
       let! short = Gen.elements [ true; false ]
+      let! debugHeld = Gen.elements [ true; false ]
       return
         SomeFacts (
           factsOf
             "A.fs"
-            (held evals buffers)
+            { held evals buffers with
+                DebugHold =
+                  (match debugHeld with
+                   | true -> SessionHandWork.DebugHoldKept.HeldSince noon
+                   | false -> SessionHandWork.DebugHoldKept.NoHold) }
             (match startsApp with | true -> binds | false -> spawnFirst)
             (match short with | true -> MemoryHeadroom.Short "memory is short" | false -> MemoryHeadroom.Roomy))
     }
@@ -47,7 +58,9 @@ type FactsGen =
 let private cfg = { FsCheckConfig.defaultConfig with arbitrary = [ typeof<FactsGen> ]; maxTest = 500 }
 
 let private holdsSomething (facts: VenueFacts) : bool =
-  facts.Held.HandEvals > 0 || not (List.isEmpty (SessionHandWork.buffersElsewhere facts.File facts.Held))
+  facts.Held.HandEvals > 0
+  || not (List.isEmpty (SessionHandWork.buffersElsewhere facts.File facts.Held))
+  || facts.Held.DebugHold <> SessionHandWork.DebugHoldKept.NoHold
 
 [<Tests>]
 let venueTests =
@@ -75,6 +88,12 @@ let venueTests =
       testCase "an evaluated buffer of another file" <| fun _ ->
         Venue.decide (factsOf "A.fs" (held 0 [ "A.fs"; "B.fs" ]) spawnFirst MemoryHeadroom.Roomy)
         |> Expect.equal "throwaway, keeping the other buffer" (Venue.ThrowawayWorker [ KeptState.UnsavedBuffers [ "B.fs" ] ])
+
+      // Found by hand on 2026-11-10: a test held for a debugger, on a session with nothing else in it, was swapped away by the
+      // next confirming build, and the release answered 409 `no_such_hold` because the host it was held in went with the worker.
+      testCase "WHY: a test held for a debugger is not lost to a swap, even when it is all the session holds" <| fun _ ->
+        Venue.decide (factsOf "A.fs" heldTest spawnFirst MemoryHeadroom.Roomy)
+        |> Expect.equal "throwaway, keeping the held test" (Venue.ThrowawayWorker [ KeptState.HeldDebugTest ])
 
       testCase "both are named" <| fun _ ->
         Venue.decide (factsOf "A.fs" (held 1 [ "B.fs"; "C.fs" ]) spawnFirst MemoryHeadroom.Roomy)
@@ -110,9 +129,11 @@ let venueTests =
       testPropertyWithConfig cfg "the throwaway names exactly what the session holds" <| fun (SomeFacts facts) ->
         match Venue.decide facts with
         | Venue.ThrowawayWorker keeps ->
-          let evals = keeps |> List.sumBy (function KeptState.ReplDefinitions n -> n | KeptState.UnsavedBuffers _ -> 0)
-          let files = keeps |> List.collect (function KeptState.UnsavedBuffers fs -> fs | KeptState.ReplDefinitions _ -> [])
-          evals = facts.Held.HandEvals && files = SessionHandWork.buffersElsewhere facts.File facts.Held
+          let evals = keeps |> List.sumBy (function KeptState.ReplDefinitions n -> n | KeptState.UnsavedBuffers _ | KeptState.HeldDebugTest -> 0)
+          let files = keeps |> List.collect (function KeptState.UnsavedBuffers fs -> fs | KeptState.ReplDefinitions _ | KeptState.HeldDebugTest -> [])
+          let debugTests = keeps |> List.sumBy (function KeptState.HeldDebugTest -> 1 | KeptState.ReplDefinitions _ | KeptState.UnsavedBuffers _ -> 0)
+          let heldTests = match facts.Held.DebugHold with | SessionHandWork.DebugHoldKept.HeldSince _ -> 1 | SessionHandWork.DebugHoldKept.NoHold -> 0
+          evals = facts.Held.HandEvals && files = SessionHandWork.buffersElsewhere facts.File facts.Held && debugTests = heldTests
         | Venue.SwapInPlace _
         | Venue.Refused _ -> true
 
@@ -135,6 +156,19 @@ let venueTests =
       testCase "a reset empties the session" <| fun _ ->
         WorkPut.ofMessage (WorkerMessage.ResetSession "r4") |> Expect.equal "soft reset" WorkPut.Cleared
         WorkPut.ofMessage (WorkerMessage.HardResetSession (true, "r5")) |> Expect.equal "hard reset" WorkPut.Cleared
+
+      testCase "beginning a hold and asking about it are both the hold" <| fun _ ->
+        let test : SageFs.Features.LiveTesting.TestCase =
+          { Id = SageFs.Features.LiveTesting.TestId.create "t" SageFs.Features.LiveTesting.TestFramework.Expecto
+            FullName = "t"
+            DisplayName = "t"
+            NamePath = []
+            Origin = SageFs.Features.LiveTesting.TestOrigin.ReflectionOnly
+            Labels = []
+            Framework = SageFs.Features.LiveTesting.TestFramework.Expecto
+            Category = SageFs.Features.LiveTesting.TestCategory.Unit }
+        WorkPut.ofMessage (WorkerMessage.DebugTestBegin (test, "r7")) |> Expect.equal "a hold" WorkPut.DebugHold
+        WorkPut.ofMessage (WorkerMessage.DebugTestContinue ("debug-1-1", System.TimeSpan.Zero, "r8")) |> Expect.equal "still the hold" WorkPut.DebugHold
 
       testCase "a status read puts nothing in" <| fun _ ->
         WorkPut.ofMessage (WorkerMessage.GetStatus "r6") |> Expect.equal "nothing" WorkPut.Nothing
@@ -166,6 +200,24 @@ let venueTests =
         store.HeldBy sid 10 |> Expect.equal "two evals and a buffer" (held 2 [ "B.fs" ])
         store.Note sid 10 WorkPut.Cleared
         store.HeldBy sid 10 |> Expect.equal "emptied by the reset" SessionHandWork.nothing
+
+      testCase "a held test is counted until the route says it ended, and a swap forgets it with the rest" <| fun _ ->
+        let store = ConfirmWorkers.HandWorkStore()
+        let sid = session 9
+        store.Note sid 10 WorkPut.DebugHold
+        let heldNow = store.HeldBy sid 10
+        heldNow.DebugHold
+        |> Expect.notEqual "a hold is noted, as of the moment it was said" SessionHandWork.DebugHoldKept.NoHold
+        store.HeldBy sid 11 |> Expect.equal "the replacement worker holds no test" SessionHandWork.nothing
+        store.Note sid 10 WorkPut.DebugReleased
+        store.HeldBy sid 10 |> Expect.equal "released" SessionHandWork.nothing
+
+      testCase "a hold nobody has mentioned for the hold's own length is not counted: the host dropped it" <| fun _ ->
+        let window = System.TimeSpan.FromMinutes 2.0
+        SessionHandWork.unlessLapsed (noon + System.TimeSpan.FromMinutes 1.0) window heldTest
+        |> Expect.equal "inside the window it is counted" heldTest
+        SessionHandWork.unlessLapsed (noon + System.TimeSpan.FromMinutes 3.0) window heldTest
+        |> Expect.equal "past it, it is not" SessionHandWork.nothing
 
       testCase "a swap starts from nothing, and the new worker is counted afresh" <| fun _ ->
         let store = ConfirmWorkers.HandWorkStore()

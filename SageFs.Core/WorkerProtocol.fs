@@ -590,6 +590,10 @@ module WorkerProtocol =
     | Buffer of file: string
     /// A reset emptied the session.
     | Cleared
+    /// A test is held in the worker's host for a debugger. A swap of the worker would take the host, and the hold with it.
+    | DebugHold
+    /// The held test ended or was never held. No message says so: the daemon's route reads the host's answer and notes it.
+    | DebugReleased
     /// Nothing the session would miss.
     | Nothing
 
@@ -604,6 +608,10 @@ module WorkerProtocol =
       | WorkerMessage.EvalLiveTestFile (file, _, _) -> WorkPut.Buffer file
       | WorkerMessage.ResetSession _
       | WorkerMessage.HardResetSession _ -> WorkPut.Cleared
+      // A release is still the hold: it renews the daemon's note of it, so a test stopped at a breakpoint stays counted for as
+      // long as its editor keeps asking.
+      | WorkerMessage.DebugTestBegin _
+      | WorkerMessage.DebugTestContinue _ -> WorkPut.DebugHold
       // Every other message reads or runs what the session already holds. Each is listed, so a new message cannot slip
       // by unconsidered.
       | WorkerMessage.CheckCode _
@@ -624,8 +632,6 @@ module WorkerProtocol =
       | WorkerMessage.RunApp _
       | WorkerMessage.StopApp _
       | WorkerMessage.AwaitAppChange _
-      | WorkerMessage.DebugTestBegin _
-      | WorkerMessage.DebugTestContinue _
       | WorkerMessage.SetSaveSource _
       | WorkerMessage.ApplySaves _
       | WorkerMessage.Shutdown -> WorkPut.Nothing

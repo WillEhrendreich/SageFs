@@ -13,13 +13,22 @@ open SageFs.WorkerProtocol
 /// What a worker's life has put in it that a swap would lose, as the daemon saw it.
 module SessionHandWork =
 
-  /// What one worker holds: how many times a person or an agent evaluated by hand (`EvalCode`), and which files'
-  /// editor buffers the live loop evaluated into it (`EvalLiveTestFile`).
+  /// Whether a test is held in the worker's host for a debugger, and when the daemon last heard anything about that hold. A
+  /// hold the host drops by itself (nobody released it) says nothing when it goes, so a hold nobody has mentioned for the
+  /// hold's own length is not counted (`unlessLapsed`).
+  [<RequireQualifiedAccess>]
+  type DebugHoldKept =
+    | NoHold
+    | HeldSince of at: System.DateTimeOffset
+
+  /// What one worker holds: how many times a person or an agent evaluated by hand (`EvalCode`), which files'
+  /// editor buffers the live loop evaluated into it (`EvalLiveTestFile`), and the test held in its host for a debugger.
   type Held =
     { HandEvals: int
-      BufferFiles: Set<string> }
+      BufferFiles: Set<string>
+      DebugHold: DebugHoldKept }
 
-  let nothing : Held = { HandEvals = 0; BufferFiles = Set.empty }
+  let nothing : Held = { HandEvals = 0; BufferFiles = Set.empty; DebugHold = DebugHoldKept.NoHold }
 
   /// The worker a count belongs to. A count for another worker says nothing about this one: a swap starts from nothing.
   type ForWorker =
@@ -49,6 +58,21 @@ module SessionHandWork =
   let noteHandEval (session: SessionId) (workerPid: int) (ledger: Ledger) : Ledger =
     Map.add session (noteHandEvalFor workerPid (Map.tryFind session ledger)) ledger
 
+  /// A test is held in this worker's host, or someone asked about the hold (a release): it is held as of `at`.
+  let noteDebugHoldFor (workerPid: int) (at: System.DateTimeOffset) (current: ForWorker option) : ForWorker =
+    changeFor workerPid (fun held -> { held with DebugHold = DebugHoldKept.HeldSince at }) current
+
+  /// The held test ended, or was never held.
+  let noteDebugReleasedFor (workerPid: int) (current: ForWorker option) : ForWorker =
+    changeFor workerPid (fun held -> { held with DebugHold = DebugHoldKept.NoHold }) current
+
+  /// `held` without a debug hold the daemon has heard nothing about for `window` (the hold's own length): the host dropped it.
+  let unlessLapsed (now: System.DateTimeOffset) (window: System.TimeSpan) (held: Held) : Held =
+    match held.DebugHold with
+    | DebugHoldKept.HeldSince at when now - at > window -> { held with DebugHold = DebugHoldKept.NoHold }
+    | DebugHoldKept.HeldSince _
+    | DebugHoldKept.NoHold -> held
+
   let noteBuffer (session: SessionId) (workerPid: int) (file: string) (ledger: Ledger) : Ledger =
     Map.add session (noteBufferFor workerPid file (Map.tryFind session ledger)) ledger
 
@@ -76,6 +100,8 @@ type MemoryHeadroom =
 type KeptState =
   | ReplDefinitions of evals: int
   | UnsavedBuffers of files: string list
+  /// A test is held in the host for a debugger; the host, and the hold with it, belong to the worker a swap replaces.
+  | HeldDebugTest
 
 /// Why a confirmation was not attempted. The rows say so, with the sentence from `ConfirmRefusal.describe`.
 [<RequireQualifiedAccess>]
@@ -129,7 +155,10 @@ module Venue =
         | evals -> KeptState.ReplDefinitions evals
         match SessionHandWork.buffersElsewhere facts.File facts.Held with
         | [] -> ()
-        | files -> KeptState.UnsavedBuffers files ]
+        | files -> KeptState.UnsavedBuffers files
+        match facts.Held.DebugHold with
+        | SessionHandWork.DebugHoldKept.HeldSince _ -> KeptState.HeldDebugTest
+        | SessionHandWork.DebugHoldKept.NoHold -> () ]
     match keeps with
     | [] -> Venue.SwapInPlace SwapReason.NothingWouldBeLost
     | _ ->
