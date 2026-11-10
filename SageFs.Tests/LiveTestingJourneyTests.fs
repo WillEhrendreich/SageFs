@@ -60,7 +60,7 @@ let private connect (feed: SseFeed) : Task<unit> =
   }
 
 /// Run a journey with a feed, putting Hello.fs and the daemon's buffer back however it ends.
-let private journey (body: HttpClient -> string -> SseFeed -> string -> Task<unit>) : Task<unit> =
+let journey (body: HttpClient -> string -> SseFeed -> string -> Task<unit>) : Task<unit> =
   task {
     use http = client ()
     let! sid = sessionId http

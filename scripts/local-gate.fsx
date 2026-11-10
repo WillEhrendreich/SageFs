@@ -373,6 +373,9 @@ let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.Pa
   // `--keep-going` reaches the pipeline as SAGEFS_KEEP_GOING: its command line refuses the option.
   for name, value in ReleaseRules.failureModeEnvironment mode do
     psi.Environment[name] <- value
+  // This machine has netcoredbg, so a debug journey that finds no debugger is a failure and not a skip.
+  for name, value in ReleaseRules.debuggerRequirementEnvironment do
+    psi.Environment[name] <- value
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   // A tier that already went green on this commit with these exact bytes is not run again; `--force` and
   // `ship --fresh` (SAGEFS_FRESH) run every tier.

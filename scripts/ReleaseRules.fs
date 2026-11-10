@@ -336,6 +336,11 @@ let failureModeEnvironment (mode: FailureMode) : (string * string) list =
   | StopAtFirstRed -> []
   | KeepGoing -> [ "SAGEFS_KEEP_GOING", "1" ]
 
+/// The gate runs on a machine that has a managed debugger (netcoredbg), so the debug journeys and the extension-host debug case
+/// must run and a machine without one must fail them. The tests read this variable (`DebugAttachJourneyTests`,
+/// `VscodeCommandProofTests`, the extension-host suite). The hosted pull-request job has no debugger and does not set it.
+let debuggerRequirementEnvironment : (string * string) list = [ "SAGEFS_REQUIRE_DEBUGGER", "1" ]
+
 /// Where the pipeline keeps its tier pass records: beside the gate's passes, outside every checkout.
 let tierPassesDirectory (gateHome: string) : string = gateHome.TrimEnd('/') + "/tier-passes"
 

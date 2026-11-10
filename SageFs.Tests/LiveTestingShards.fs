@@ -21,12 +21,9 @@ open SageFs.Build
 /// test that never runs. The daemon's hold expires by itself, but the expiry is longer than the
 /// patience of the cases around it.
 ///
-/// `DebugRowJourneyTests.journeyTests` (a debugged test's row shows its verdict) is NOT in the tree, on purpose, since 2026-11-08.
-/// Its first run, in the release gate, failed on the daemon answering 502 `worker_failed` to the release (a confirming build
-/// replaced the worker under the held test, which `fromRest` now waits out). The cause found on 2026-11-09 is the debugger: this
-/// machine's `dotnet-debug` is an inspector that freezes the host while attached and never makes `Debugger.IsAttached` true, so a
-/// released test does not run under it. The journeys need a managed debugger (netcoredbg), which neither this machine nor the
-/// gate machine has. They come back when one has run them to green: see docs/plans/debug-row-journeys-run-green.md.
+/// The debug cases need a managed debugger (netcoredbg) on PATH, and SAGEFS_REQUIRE_DEBUGGER=1 makes a machine without one fail
+/// them. The row journeys come before the attach cases because the last attach case binds a value in the session's REPL, which
+/// stays there. See docs/plans/debug-row-journeys-run-green.md.
 let tree () : Test =
   testSequenced (
     testList
@@ -34,6 +31,7 @@ let tree () : Test =
       [ LiveTestingJourneyTests.journeyTests
         LiveTestingBrowserTests.tests
         LiveTestingLatencyTests.latencyTests
+        DebugRowJourneyTests.journeyTests
         DebugAttachJourneyTests.journeyTests ])
 
 /// The name of a case: its own, which is unique across the tier.

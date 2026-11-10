@@ -469,6 +469,18 @@ let wiringTests =
       // The one deliberate mention: the test that says the bash scripts are gone lives in RatchetRegistryTests.
       offenders |> Expect.isEmpty "every reference carries the .fsx name"
 
+    testCase "WHY — the gate makes a missing debugger a failure: it passes SAGEFS_REQUIRE_DEBUGGER to the pipeline, and the debug cases read that same variable" <| fun _ ->
+      let name, value = ReleaseRules.debuggerRequirementEnvironment |> List.exactlyOne
+      value |> Expect.equal "the switch is on" "1"
+      read "scripts/local-gate.fsx"
+      |> Expect.stringContains "the gate applies the requirement to the pipeline's environment" "ReleaseRules.debuggerRequirementEnvironment"
+      for source in [ "SageFs.Tests/DebugAttachJourneyTests.fs"; "sagefs-vscode/test-electron/ExtensionHostSuite.fs"; "SageFs.Tests/VscodeCommandProofTests.fs" ] do
+        read source |> Expect.stringContains (sprintf "%s reads the variable the gate sets" source) name
+      let workflow = read ".github/workflows/main.yml"
+      let hostedJob = workflow.Substring(workflow.IndexOf "\n  pr:\n")
+      hostedJob |> Expect.stringContains "the hosted pull-request job runs the pipeline" "ci-pipeline.fsx -- ci"
+      hostedJob.Contains name |> Expect.isFalse "and it does not require a debugger, which the hosted image has none of"
+
     testCase "WHY — the gate prints only a failure report this pass wrote: it removes the old one first, notes when the pass began, and asks the rule" <| fun _ ->
       let gate = read "scripts/local-gate.fsx"
       let at (marker: string) = gate.IndexOf marker
