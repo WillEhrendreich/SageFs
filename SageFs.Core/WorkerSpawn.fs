@@ -128,7 +128,7 @@ module WorkerSpawn =
     // agrees with the daemon's instead of reading the machine again. The environment it inherits is the person's.
     SageFs.ProcessEnvironment.applyToWithForwarding
       psi
-      (envVars @ SessionOptionsRegistry.workerEnvironmentOf (SessionId.value sessionId) projects workingDir @ RuntimeCompat.rollForwardEnv runtimeChoice)
+      (envVars @ SessionOptionsRegistry.workerEnvironmentOf sessionId projects workingDir @ RuntimeCompat.rollForwardEnv runtimeChoice)
 
     let proc = new Process()
     proc.StartInfo <- psi

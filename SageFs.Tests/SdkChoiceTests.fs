@@ -168,7 +168,7 @@ let tests =
     testList "global.json" [
       testCase "WHY — a global.json with comments and a trailing comma still parses, and a missing rollForward is latestPatch" <| fun () ->
         let text = "{\n  // pin\n  \"sdk\": { \"version\": \"10.0.201\", },\n}"
-        match parseGlobalJson "/repo/global.json" text with
+        match parseGlobalJson { FilePath = "/repo/global.json"; Contents = text } with
         | Result.Ok(PinFound pin) ->
           pin.Version.Text |> Expect.equal "version" "10.0.201"
           pin.RollForward |> Expect.equal "default policy" RollForward.LatestPatch
@@ -176,16 +176,16 @@ let tests =
         | other -> failtestf "expected a pin, got %A" other
 
       testCase "WHY — a global.json that only carries msbuild-sdks pins nothing" <| fun () ->
-        parseGlobalJson "g" "{ \"msbuild-sdks\": { \"X\": \"1.0.0\" } }" |> Expect.equal "no pin" (Result.Ok NoPinFound)
+        parseGlobalJson { FilePath = "g"; Contents = "{ \"msbuild-sdks\": { \"X\": \"1.0.0\" } }" } |> Expect.equal "no pin" (Result.Ok NoPinFound)
 
       testCase "WHY — an unparseable version or an unknown rollForward is a named error that says which file" <| fun () ->
         let cases =
           [ "{ \"sdk\": { \"version\": \"latest\" } }", VersionNotParsable("/repo/global.json", "latest")
             "{ \"sdk\": { \"version\": \"10.0.201\", \"rollForward\": \"sideways\" } }", RollForwardUnknown("/repo/global.json", "sideways") ]
         for text, expected in cases do
-          parseGlobalJson "/repo/global.json" text |> Expect.equal (sprintf "the error for %s" text) (Result.Error expected)
+          parseGlobalJson { FilePath = "/repo/global.json"; Contents = text } |> Expect.equal (sprintf "the error for %s" text) (Result.Error expected)
           describeGlobalJsonError expected |> Expect.stringContains "names the file" "/repo/global.json"
-        match parseGlobalJson "/repo/global.json" "{ nope" with
+        match parseGlobalJson { FilePath = "/repo/global.json"; Contents = "{ nope" } with
         | Result.Error(NotJson(path, _)) -> path |> Expect.equal "names the file" "/repo/global.json"
         | other -> failtestf "expected NotJson, got %A" other
 

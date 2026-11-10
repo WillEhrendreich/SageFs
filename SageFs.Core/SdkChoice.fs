@@ -47,12 +47,17 @@ module SdkVersion =
       Some { Major = major; Minor = minor; Patch = patch; Pre = pre; Text = trimmed }
     | _ -> None
 
-  let compareIdentifier (a: string) (b: string) : int =
-    match Int32.TryParse a, Int32.TryParse b with
-    | (true, x), (true, y) -> compare x y
-    | (true, _), (false, _) -> -1
-    | (false, _), (true, _) -> 1
-    | (false, _), (false, _) -> String.CompareOrdinal(a, b)
+  /// One dot-separated pre-release identifier. SemVer ranks a number below text, numbers by value and text in ordinal
+  /// order, which is the order the derived comparison gives these cases and their payloads.
+  [<RequireQualifiedAccess>]
+  type PreIdentifier =
+    | Numeric of int
+    | Text of string
+
+  let identifierOf (text: string) : PreIdentifier =
+    match Int32.TryParse text with
+    | true, number -> PreIdentifier.Numeric number
+    | false, _ -> PreIdentifier.Text text
 
   let rec comparePre (a: string list) (b: string list) : int =
     match a, b with
@@ -60,7 +65,7 @@ module SdkVersion =
     | [], _ -> 1 // a release is newer than any pre-release of the same number
     | _, [] -> -1
     | x :: xs, y :: ys ->
-      match compareIdentifier x y with
+      match compare (identifierOf x) (identifierOf y) with
       | 0 -> comparePre xs ys
       | other -> other
 
@@ -141,8 +146,11 @@ let describeGlobalJsonError (error: GlobalJsonError) : string =
   | VersionNotParsable(path, text) -> sprintf "sdk.version '%s' in %s is not a version number" text path
   | RollForwardUnknown(path, text) -> sprintf "sdk.rollForward '%s' in %s is not a rollForward policy" text path
 
+/// A `global.json` as read: where it was found and what it says.
+type GlobalJsonFile = { FilePath: string; Contents: string }
+
 /// The pin a `global.json`'s text carries.
-let parseGlobalJson (path: string) (text: string) : Result<PinState, GlobalJsonError> =
+let parseGlobalJson ({ FilePath = path; Contents = text }: GlobalJsonFile) : Result<PinState, GlobalJsonError> =
   let parsed =
     Guarded.attempt (fun () ->
       let options = JsonDocumentOptions(CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)
@@ -379,7 +387,7 @@ let findPin (startDir: string) : PinState =
   let read (candidate: string) : PinState =
     match Guarded.attempt (fun () -> File.ReadAllText candidate) with
     | Guarded.Attempt.Completed text ->
-      match parseGlobalJson candidate text with
+      match parseGlobalJson { FilePath = candidate; Contents = text } with
       | Result.Ok state -> state
       | Result.Error _ -> NoPinFound
     | Guarded.Attempt.Threw _ -> NoPinFound

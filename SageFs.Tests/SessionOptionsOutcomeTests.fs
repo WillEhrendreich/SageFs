@@ -79,7 +79,7 @@ let private saveRow (place: Place) (descriptor: SettingDescriptor) (raw: string)
 
 /// What the daemon does when a session is created: resolve the options, with no project asked about.
 let private prepare (place: Place) (projects: string list) =
-  DirectoryConfig.prepareSession place.GlobalDir (fun _ -> SessionOptions.ProjectLeavesArtifacts, []) projects place.Directory
+  DirectoryConfig.prepareSession (SettingsCatalog.pathsFor place.GlobalDir place.Directory) (fun _ -> SessionOptions.ProjectLeavesArtifacts, []) projects place.Directory
   |> Expect.isTrue "auto-open stays on"
 
 let private create (harness: Harness) (targets: SessionProjectTarget list) (directory: string) : Task<SessionInfo> =

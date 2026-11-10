@@ -86,7 +86,7 @@ module DirectoryConfig =
 
   /// Resolve the options for a session that is being created in a directory, and answer whether warmup auto-opens namespaces.
   /// The options are what `config.fsx` sets, option by option, over what the settings layers hold (the directory's own
-  /// `.SageFs/settings.json` over the global one in `globalDir`). When the options ask for an artifacts path, `askClaim` is
+  /// `.SageFs/settings.json` over the global one, as `paths` says). When the options ask for an artifacts path, `askClaim` is
   /// asked whether the projects already set one, and the project's choice stays (`SessionOptions.reconcileArtifacts`).
   /// Everything refused on the way is logged and kept with the resolution, so the Settings page can say it.
   ///
@@ -95,7 +95,7 @@ module DirectoryConfig =
   /// nothing is forgotten. The record is the PENDING one: a session fixes its own options when its worker is first spawned,
   /// so creating another session here later cannot change one that is running.
   let prepareSession
-    (globalDir: string)
+    (paths: ConfigPaths)
     (askClaim: string list -> SessionOptions.ProjectClaim * string list)
     (projects: string list)
     (workingDir: string)
@@ -105,7 +105,7 @@ module DirectoryConfig =
       match config with
       | Some cfg -> SessionOptions.ofConfig cfg
       | None -> SessionOptions.none, []
-    let fromSettings, settingRefusals = SessionOptionSettings.optionsAt (SettingsCatalog.pathsFor globalDir workingDir)
+    let fromSettings, settingRefusals = SessionOptionSettings.optionsAt paths
     let overlaid = SessionOptions.overlay fromSettings fromFile (fileRefusals @ settingRefusals)
     let options, claimRefusals =
       match overlaid.Options.Artifacts with
@@ -121,7 +121,7 @@ module DirectoryConfig =
 
   /// `prepareSession` against the daemon's own settings folder and MSBuild, for the projects of the session being created.
   let prepareForCreateOf (projects: string list) (workingDir: string) : bool =
-    prepareSession DaemonState.SageFsDir (ProjectArtifactsProbe.claimOf ProjectArtifactsProbe.ask) projects workingDir
+    prepareSession (SettingsCatalog.pathsFor DaemonState.SageFsDir workingDir) (ProjectArtifactsProbe.claimOf ProjectArtifactsProbe.ask) projects workingDir
 
   /// `prepareForCreateOf` for a session whose projects are not known to the caller (no artifacts conflict is looked for).
   let prepareForCreate (workingDir: string) : bool =

@@ -92,12 +92,18 @@ module ProjectFileChange =
 
   type Parsed = { Compiles: string list; Facts: Fact list }
 
-  let directoryOf(path: string) : string =
-    match path.LastIndexOf '/' with
-    | -1 -> ""
-    | i -> path.Substring(0, i)
+  /// A project file as a commit holds it: its repository-relative path and its text.
+  type ProjectFileText = { ProjectPath: string; Xml: string }
 
-  let resolveFrom(dir: string) (relative: string) : string =
+  /// A directory named from the repository root, `""` for the root itself.
+  type RepoDirectory = RepoDirectory of string
+
+  let directoryOf(path: string) : RepoDirectory =
+    match path.LastIndexOf '/' with
+    | -1 -> RepoDirectory ""
+    | i -> RepoDirectory(path.Substring(0, i))
+
+  let resolveFrom(RepoDirectory dir) (relative: string) : string =
     match dir with
     | "" -> CohortLandingPlan.normalize relative
     | _ -> CohortLandingPlan.normalize (dir + "/" + relative)
@@ -182,7 +188,7 @@ module ProjectFileChange =
 
   /// Read a project file's text: its compile list (repository-relative, in order) and everything else it states. `None` for text
   /// that is not XML or has no root.
-  let parse(projectPath: string) (xml: string) : Parsed option =
+  let parse({ ProjectPath = projectPath; Xml = xml }: ProjectFileText) : Parsed option =
     try
       let doc = XDocument.Parse xml
       match doc.Root with
@@ -222,7 +228,7 @@ module ProjectFileChange =
     | None, Some _ -> [ Change.ProjectCreated project ]
     | Some _, None -> [ Change.ProjectDeleted project ]
     | Some earlier, Some later ->
-      match parse project earlier, parse project later with
+      match parse { ProjectPath = project; Xml = earlier }, parse { ProjectPath = project; Xml = later } with
       | Some was, Some now ->
         let removed = onlyIn was.Facts now.Facts
         let added = onlyIn now.Facts was.Facts

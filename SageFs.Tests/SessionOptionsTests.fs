@@ -148,17 +148,19 @@ let sessionOptionsTests =
     testCase "WHY - a directory's options are remembered by the daemon for its builds and its worker, and another directory does not see them" <| fun _ ->
       let a = Path.Combine(Path.GetTempPath(), "registry-a")
       let b = Path.Combine(Path.GetTempPath(), "registry-b")
+      let sessionA = WorkerProtocol.SessionId.newId ()
+      let sessionB = WorkerProtocol.SessionId.newId ()
       let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art-a" }))
       SessionOptionsRegistry.remember a options
       SessionOptionsRegistry.optionsFor a |> Expect.equal "a has it" options
       SessionOptionsRegistry.optionsFor b |> Expect.equal "b does not" SessionOptions.none
-      SessionOptionsRegistry.workerEnvironmentOf "reg-session-a" [] a |> Expect.equal "a's worker gets the one carrier" (SessionOptions.workerEnvironment options)
-      SessionOptionsRegistry.workerEnvironmentOf "reg-session-b" [] b |> Expect.isEmpty "b's worker gets nothing"
+      SessionOptionsRegistry.workerEnvironmentOf sessionA [] a |> Expect.equal "a's worker gets the one carrier" (SessionOptions.workerEnvironment options)
+      SessionOptionsRegistry.workerEnvironmentOf sessionB [] b |> Expect.isEmpty "b's worker gets nothing"
       let psi = SessionBuild.buildStartInfo [ "build" ] a
       psi.ArgumentList |> Seq.toList |> Expect.contains "a's build builds under the artifacts path, as a global property" "-p:ArtifactsPath=/tmp/art-a"
       (SessionBuild.buildStartInfo [ "build" ] b).ArgumentList |> Seq.toList |> Expect.equal "b's build is the project's own" [ "build" ]
-      SessionOptionsRegistry.release "reg-session-a"
-      SessionOptionsRegistry.release "reg-session-b"
+      SessionOptionsRegistry.release sessionA
+      SessionOptionsRegistry.release sessionB
       SessionOptionsRegistry.remember a SessionOptions.none
       SessionOptionsRegistry.optionsFor a |> Expect.equal "a config that stops asking is forgotten" SessionOptions.none
 

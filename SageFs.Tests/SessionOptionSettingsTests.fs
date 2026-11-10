@@ -188,7 +188,7 @@ let resolutionTests =
         let paths = pathsIn root
         SettingsCatalog.edit paths LRepo (Path.Combine(root, "mine")) SessionOptionSettings.artifactsSetting |> Expect.isOk "saved"
         let claimed _ = SessionOptions.ProjectSetsArtifacts "/repo/artifacts", []
-        DirectoryConfig.prepareSession paths.GlobalDir claimed [ Path.Combine(root, "App.fsproj") ] root |> Expect.isTrue "auto-open stays on"
+        DirectoryConfig.prepareSession (SettingsCatalog.pathsFor paths.GlobalDir root) claimed [ Path.Combine(root, "App.fsproj") ] root |> Expect.isTrue "auto-open stays on"
         try
           SessionOptionsRegistry.optionsFor root |> Expect.equal "the registry holds the project's choice" SessionOptions.none
           let resolution = SessionOptionsRegistry.resolutionFor root
@@ -206,11 +206,11 @@ let resolutionTests =
         let paths = pathsIn root
         let asked = ref 0
         let counting _ = asked.Value <- asked.Value + 1; SessionOptions.ProjectLeavesArtifacts, []
-        DirectoryConfig.prepareSession paths.GlobalDir counting [ "App.fsproj" ] root |> ignore
+        DirectoryConfig.prepareSession (SettingsCatalog.pathsFor paths.GlobalDir root) counting [ "App.fsproj" ] root |> ignore
         asked.Value |> Expect.equal "nothing requested, nothing asked" 0
         SettingsCatalog.edit paths LGlobal (Path.Combine(root, "art")) SessionOptionSettings.artifactsSetting |> Expect.isOk "saved"
         try
-          DirectoryConfig.prepareSession paths.GlobalDir counting [ "App.fsproj" ] root |> ignore
+          DirectoryConfig.prepareSession (SettingsCatalog.pathsFor paths.GlobalDir root) counting [ "App.fsproj" ] root |> ignore
           asked.Value |> Expect.equal "requested, asked once" 1
         finally
           SessionOptionsRegistry.remember root SessionOptions.none)
@@ -232,16 +232,18 @@ let perSessionTests =
       let dir = Path.Combine(Path.GetTempPath(), "optset-held-" + Guid.NewGuid().ToString "N")
       let projectOne = Path.Combine(dir, "One.fsproj")
       let projectTwo = Path.Combine(dir, "Two.fsproj")
+      let heldOne = WorkerProtocol.SessionId.newId ()
+      let heldTwo = WorkerProtocol.SessionId.newId ()
       let first = options (fun o -> { o with Gc = ServerGc; Artifacts = ArtifactsIn "/tmp/optset-first" })
       let second = options (fun o -> { o with Env = [ EnvEntry("SECOND", "1") ]; Artifacts = ArtifactsIn "/tmp/optset-second" })
       try
         SessionOptionsRegistry.remember dir first
         // The first session's worker is spawned: its options are fixed here.
-        SessionOptionsRegistry.optionsOfSession "held-one" [ projectOne ] dir |> Expect.equal "first spawn" first
+        SessionOptionsRegistry.optionsOfSession heldOne [ projectOne ] dir |> Expect.equal "first spawn" first
         SessionOptionsRegistry.remember dir second
-        SessionOptionsRegistry.optionsOfSession "held-two" [ projectTwo ] dir |> Expect.equal "the second session starts with the second" second
-        SessionOptionsRegistry.optionsOfSession "held-one" [ projectOne ] dir |> Expect.equal "the first session still has the first, on its restart" first
-        SessionOptionsRegistry.workerEnvironmentOf "held-one" [ projectOne ] dir
+        SessionOptionsRegistry.optionsOfSession heldTwo [ projectTwo ] dir |> Expect.equal "the second session starts with the second" second
+        SessionOptionsRegistry.optionsOfSession heldOne [ projectOne ] dir |> Expect.equal "the first session still has the first, on its restart" first
+        SessionOptionsRegistry.workerEnvironmentOf heldOne [ projectOne ] dir
         |> Expect.equal "the respawned worker gets the first session's carrier" (SessionOptions.workerEnvironment first)
         SessionOptionsRegistry.forBuild [ projectOne ] dir |> Expect.equal "the first session's rebuild" first
         SessionOptionsRegistry.forBuild [ projectTwo ] dir |> Expect.equal "the second session's rebuild" second
@@ -250,20 +252,20 @@ let perSessionTests =
         argumentsOf projectOne |> Expect.contains "the first session's build goes to its own folder" "-p:ArtifactsPath=/tmp/optset-first"
         argumentsOf projectTwo |> Expect.contains "the second session's build goes to its own folder" "-p:ArtifactsPath=/tmp/optset-second"
       finally
-        SessionOptionsRegistry.release "held-one"
-        SessionOptionsRegistry.release "held-two"
+        SessionOptionsRegistry.release heldOne
+        SessionOptionsRegistry.release heldTwo
         SessionOptionsRegistry.remember dir SessionOptions.none
 
     testProperty "WHY - however many sessions are created in one directory, each reads its own options on every later ask"
       (Prop.forAll (Arb.fromGen (Gen.nonEmptyListOf genOptions)) (fun created ->
         let dir = Path.Combine(Path.GetTempPath(), "optset-prop-" + Guid.NewGuid().ToString "N")
-        let ids = created |> List.mapi (fun i _ -> sprintf "prop-%s-%d" (Path.GetFileName dir) i)
+        let ids = created |> List.map (fun _ -> WorkerProtocol.SessionId.newId ())
         try
           for id, requested in List.zip ids created do
             SessionOptionsRegistry.remember dir requested
-            SessionOptionsRegistry.optionsOfSession id [ id + ".fsproj" ] dir |> ignore
+            SessionOptionsRegistry.optionsOfSession id [ WorkerProtocol.SessionId.value id + ".fsproj" ] dir |> ignore
           List.zip ids created
-          |> List.forall (fun (id, requested) -> SessionOptionsRegistry.optionsOfSession id [ id + ".fsproj" ] dir = requested)
+          |> List.forall (fun (id, requested) -> SessionOptionsRegistry.optionsOfSession id [ WorkerProtocol.SessionId.value id + ".fsproj" ] dir = requested)
         finally
           ids |> List.iter SessionOptionsRegistry.release
           SessionOptionsRegistry.remember dir SessionOptions.none))
@@ -271,27 +273,29 @@ let perSessionTests =
     testCase "WHY - a stopped session's options are released, so a build with that session's projects falls back to what is pending" <| fun _ ->
       let dir = Path.Combine(Path.GetTempPath(), "optset-release-" + Guid.NewGuid().ToString "N")
       let project = Path.Combine(dir, "App.fsproj")
+      let releaseOne = WorkerProtocol.SessionId.newId ()
       let held = options (fun o -> { o with Gc = ServerGc })
       try
         SessionOptionsRegistry.remember dir held
-        SessionOptionsRegistry.optionsOfSession "release-one" [ project ] dir |> ignore
+        SessionOptionsRegistry.optionsOfSession releaseOne [ project ] dir |> ignore
         SessionOptionsRegistry.remember dir SessionOptions.none
         SessionOptionsRegistry.forBuild [ project ] dir |> Expect.equal "held while it runs" held
-        SessionOptionsRegistry.release "release-one"
+        SessionOptionsRegistry.release releaseOne
         SessionOptionsRegistry.forBuild [ project ] dir |> Expect.equal "pending after it stops" SessionOptions.none
       finally
-        SessionOptionsRegistry.release "release-one"
+        SessionOptionsRegistry.release releaseOne
 
     testCase "WHY - a project path is the same key whether it is written relative or absolute, so a rebuild finds its session" <| fun _ ->
       let dir = Path.Combine(Path.GetTempPath(), "optset-key-" + Guid.NewGuid().ToString "N")
+      let keyOne = WorkerProtocol.SessionId.newId ()
       let held = options (fun o -> { o with Gc = ServerGc })
       try
         SessionOptionsRegistry.remember dir held
-        SessionOptionsRegistry.optionsOfSession "key-one" [ "App.fsproj" ] dir |> ignore
+        SessionOptionsRegistry.optionsOfSession keyOne [ "App.fsproj" ] dir |> ignore
         SessionOptionsRegistry.remember dir SessionOptions.none
         SessionOptionsRegistry.forBuild [ Path.Combine(dir, "App.fsproj") ] dir |> Expect.equal "found by the absolute path" held
       finally
-        SessionOptionsRegistry.release "key-one"
+        SessionOptionsRegistry.release keyOne
   ]
 
 [<Tests>]
@@ -390,7 +394,7 @@ let realMsBuildTests =
         let paths = pathsIn root
         SettingsCatalog.edit { paths with Repo = RepoRootAt directory } LRepo sessionFolder SessionOptionSettings.artifactsSetting |> Expect.isOk "saved"
         try
-          DirectoryConfig.prepareSession paths.GlobalDir (ProjectArtifactsProbe.claimOf ProjectArtifactsProbe.ask) [ project ] directory |> ignore
+          DirectoryConfig.prepareSession (SettingsCatalog.pathsFor paths.GlobalDir directory) (ProjectArtifactsProbe.claimOf ProjectArtifactsProbe.ask) [ project ] directory |> ignore
           let resolution = SessionOptionsRegistry.resolutionFor directory |> Option.get
           resolution.Refusals |> List.map SessionOptions.optionOf |> Expect.equal "the artifacts request was refused" [ SessionOptions.ArtifactsOption ]
           runBuild project directory

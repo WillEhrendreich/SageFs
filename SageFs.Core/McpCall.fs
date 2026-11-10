@@ -113,23 +113,26 @@ module McpCall =
     /// The number of tool names a refusal offers.
     let nearestCount : int = 3
 
-    /// The fewest single-character edits that turn one word into the other.
-    let editDistance (a: string) (b: string) : int =
+    /// Two words, and the edits asked about between them: `From` turned into `To`.
+    type WordPair = { From: string; To: string }
+
+    /// The fewest single-character edits that turn `From` into `To`.
+    let editDistance ({ From = source; To = target }: WordPair) : int =
       let last =
-        a
+        source
         |> Seq.fold
           (fun (previous: int[]) letter ->
-            let next = Array.zeroCreate (b.Length + 1)
+            let next = Array.zeroCreate (target.Length + 1)
             next.[0] <- previous.[0] + 1
-            for column in 1 .. b.Length do
+            for column in 1 .. target.Length do
               let cost =
-                match letter = b.[column - 1] with
+                match letter = target.[column - 1] with
                 | true -> 0
                 | false -> 1
               next.[column] <- min (min (previous.[column] + 1) (next.[column - 1] + 1)) (previous.[column - 1] + cost)
             next)
-          [| 0 .. b.Length |]
-      last.[b.Length]
+          [| 0 .. target.Length |]
+      last.[target.Length]
 
     /// Up to `nearestCount` of the known names that read like the one asked for: it sits inside them (or they inside it),
     /// or it is a few edits away. A name nothing is close to gets nothing, since a guess would only mislead.
@@ -143,7 +146,7 @@ module McpCall =
         name,
         match nested with
         | true -> 0
-        | false -> editDistance wanted lower)
+        | false -> editDistance { From = wanted; To = lower })
       |> List.filter (fun (_, distance) -> distance <= radius)
       |> List.sortBy (fun (name, distance) -> distance, name)
       |> List.truncate nearestCount

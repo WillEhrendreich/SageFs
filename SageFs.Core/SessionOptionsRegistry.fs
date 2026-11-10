@@ -59,8 +59,8 @@ module SessionOptionsRegistry =
 
   /// The options a session runs with. The first call for a session fixes them, from what is pending for its directory; every
   /// later call, a restart or a rebuild, returns the same value whatever has been created since.
-  let optionsOfSession (sessionId: string) (projects: string list) (directory: string) : SessionOptions.Options =
-    held.GetOrAdd(sessionId, fun _ -> { Directory = keyOf directory; Projects = projectsKey directory projects; Options = optionsFor directory }).Options
+  let optionsOfSession (sessionId: WorkerProtocol.SessionId) (projects: string list) (directory: string) : SessionOptions.Options =
+    held.GetOrAdd(WorkerProtocol.SessionId.value sessionId, fun _ -> { Directory = keyOf directory; Projects = projectsKey directory projects; Options = optionsFor directory }).Options
 
   /// What a build in this directory of these projects runs with: the live session's own options when one has them, else what is
   /// pending for the directory.
@@ -72,8 +72,8 @@ module SessionOptionsRegistry =
     | None -> optionsFor directory
 
   /// A session that is gone no longer holds options.
-  let release (sessionId: string) : unit = held.TryRemove sessionId |> ignore
+  let release (sessionId: WorkerProtocol.SessionId) : unit = held.TryRemove(WorkerProtocol.SessionId.value sessionId) |> ignore
 
   /// The environment a session's worker is started with: the one carrier of its options.
-  let workerEnvironmentOf (sessionId: string) (projects: string list) (directory: string) : (string * string) list =
+  let workerEnvironmentOf (sessionId: WorkerProtocol.SessionId) (projects: string list) (directory: string) : (string * string) list =
     SessionOptions.workerEnvironment (optionsOfSession sessionId projects directory)
