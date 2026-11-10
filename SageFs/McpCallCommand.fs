@@ -89,6 +89,10 @@ let converse (conversation: Conversation) (quick: HttpClient) (patient: HttpClie
         | Result.Ok(Result.Ok tools) ->
           match args.Target with
           | Target.ListTools -> return Outcome.ListedTools tools
+          | Target.DescribeTool name ->
+            match Arguments.findTool tools name with
+            | Result.Ok tool -> return Outcome.ToolHelped tool
+            | Result.Error _ -> return Outcome.ToolNotListed(name, ToolSpec.nearest name (tools |> List.map (fun tool -> tool.Name)))
           | Target.CallTool name ->
             let checkedCall =
               Arguments.findTool tools name
@@ -166,6 +170,11 @@ let execute
           let! outcome = run port credentials args
           return emit out err (Emission.ofOutcome credentials outcome)
         | absent ->
-          let outcome = Outcome.NotRunning(DaemonPresence.unreachableLines port absent)
+          let lines = DaemonPresence.unreachableLines port absent
+          let outcome =
+            match args.Target with
+            | Target.DescribeTool tool -> Outcome.HelpWithoutDaemon(tool, lines)
+            | Target.ListTools
+            | Target.CallTool _ -> Outcome.NotRunning lines
           return emit out err (Emission.ofOutcome credentials outcome)
   }

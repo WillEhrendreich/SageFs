@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | Done |
 | Size | S |
-| Branch and worktree | none yet |
-| Last green commit | none yet. It starts from `SageFs.Core/McpCall.fs` and `SageFs/McpCallCommand.fs` as on master. |
-| Next action | Write the RED case in "Tests": the parser sees a tool name and `--help` and asks for that tool's description, not the command's usage. |
-| Decisions made | none yet |
-| Surprises | none yet |
+| Branch and worktree | none. Worked on master. |
+| Last green commit | The commit that added `Target.DescribeTool` (`git log -S DescribeTool -- SageFs.Core/McpCall.fs`). |
+| Next action | None. The item is Built: its landmark is `Target.DescribeTool` in `SageFs.Core/McpCall.fs`. |
+| Decisions made | 2026-11-09, by the implementing agent: the parsed command gets `Target.DescribeTool of tool` (not a new `Invocation` case), so the help for a tool carries the port and token choice like any other run. `--help` alone, and `--help` beside `--list`, stay `Invocation.Help`. `--help` after a tool name ignores the arguments typed beside it. A tool name the daemon does not list gets its own outcome (`ToolNotListed`) with at most 3 nearest names (substring or a few edits away) and a pointer to `--list`; it does not reuse `ArgRefusal.UnknownTool`, which names every tool. With no daemon, `<tool> --help` prints the usage on stdout, how to start one on stderr, and exits 1 (the tool's help could not be given). |
+| Surprises | The old test `run_tests --help` expected exit 0 and the usage with no daemon. That behaviour changed on purpose and the test now uses `--help` alone for it. |
 
 ## What done looks like
 

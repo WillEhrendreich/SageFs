@@ -85,6 +85,70 @@ module McpCall =
       | [] -> sprintf "%s takes no parameters." tool.Name
       | specs -> sprintf "%s takes: %s." tool.Name (specs |> List.map describeParam |> String.concat ", ")
 
+    /// What `sagefs call <tool> --help` prints: the tool's own sentence, how to call it, one line per parameter (the
+    /// same words a refusal uses, `describeParam`) and where its full manual is.
+    let helpText (tool: ToolSpec) : string =
+      let description =
+        match tool.Description.Trim() with
+        | "" -> "(the daemon sends no description for this tool)"
+        | text -> text
+      let parameters =
+        match tool.Params with
+        | [] -> [ sprintf "  %s takes no parameters." tool.Name ]
+        | specs -> specs |> List.map (fun spec -> "  " + describeParam spec)
+      String.concat
+        "\n"
+        ([ sprintf "%s: %s" tool.Name description
+           ""
+           sprintf "usage: sagefs call %s [--<parameter> <value> ...]" tool.Name
+           sprintf "       sagefs call %s --json '{\"parameter\": value}'" tool.Name
+           ""
+           "parameters:" ]
+         @ parameters
+         @ [ ""
+             sprintf
+               "Full manual: sagefs call discover_features --tool %s (its rules and every parameter), or docs/mcp-tools.md."
+               tool.Name ])
+
+    /// The number of tool names a refusal offers.
+    let nearestCount : int = 3
+
+    /// The fewest single-character edits that turn one word into the other.
+    let editDistance (a: string) (b: string) : int =
+      let last =
+        a
+        |> Seq.fold
+          (fun (previous: int[]) letter ->
+            let next = Array.zeroCreate (b.Length + 1)
+            next.[0] <- previous.[0] + 1
+            for column in 1 .. b.Length do
+              let cost =
+                match letter = b.[column - 1] with
+                | true -> 0
+                | false -> 1
+              next.[column] <- min (min (previous.[column] + 1) (next.[column - 1] + 1)) (previous.[column - 1] + cost)
+            next)
+          [| 0 .. b.Length |]
+      last.[b.Length]
+
+    /// Up to `nearestCount` of the known names that read like the one asked for: it sits inside them (or they inside it),
+    /// or it is a few edits away. A name nothing is close to gets nothing, since a guess would only mislead.
+    let nearest (asked: string) (known: string list) : string list =
+      let wanted = asked.Trim().ToLowerInvariant()
+      let radius = max 3 (wanted.Length / 3)
+      known
+      |> List.map (fun name ->
+        let lower = name.ToLowerInvariant()
+        let nested = wanted <> "" && lower <> "" && (lower.Contains wanted || wanted.Contains lower)
+        name,
+        match nested with
+        | true -> 0
+        | false -> editDistance wanted lower)
+      |> List.filter (fun (_, distance) -> distance <= radius)
+      |> List.sortBy (fun (name, distance) -> distance, name)
+      |> List.truncate nearestCount
+      |> List.map fst
+
     /// The first line of the description, cut at `width`: the line `--list` shows beside the name.
     let oneLine (width: int) (tool: ToolSpec) : string =
       let first =
@@ -233,8 +297,10 @@ module McpCall =
       [ "usage: sagefs call --list"
         "       sagefs call <tool> [--<parameter> <value> ...]"
         "       sagefs call <tool> --json '{\"parameter\": value}'"
+        "       sagefs call <tool> --help"
         ""
         "  --list           list the daemon's tools: name and first line of the description"
+        "  --help           with a tool's name, print what that tool does and takes (needs the daemon); alone, this text"
         "  --json <object>  the tool's arguments as one JSON object (instead of --<parameter> flags)"
         "  --token-file <path>  read the member token to call as from a file ('-' reads standard input)"
         "                   the default is SAGEFS_MEMBER_TOKEN, and with none the call is anonymous"
@@ -280,6 +346,8 @@ module McpCall =
   type Target =
     | ListTools
     | CallTool of tool: string
+    /// `<tool> --help`: say what the tool does and takes, from the list the daemon sends. Nothing is called.
+    | DescribeTool of tool: string
 
   /// Which daemon: the one a port flag named, or the configured one (`--mcp-port`, `SAGEFS_MCP_PORT`, then 37749).
   [<RequireQualifiedAccess>]
@@ -458,7 +526,9 @@ module McpCall =
         |> Result.map (fun token -> Invocation.Run { Target = target; Port = port; Token = token; Payload = payload })
       let listing = List.contains Want.List gathered.Wants
       match List.contains Want.Help gathered.Wants, listing, gathered.Tools, gathered.Jsons, List.rev gathered.Flags with
-      | true, _, _, _, _ -> Result.Ok Invocation.Help
+      | true, true, _, _, _
+      | true, false, [], _, _ -> Result.Ok Invocation.Help
+      | true, false, tool :: _, _, _ -> run (Target.DescribeTool tool) Payload.NoArguments
       | false, true, tool :: _, _, _ -> Result.Error(UsageRefusal.ListAndTool tool)
       | false, true, [], _ :: _, _ -> Result.Error UsageRefusal.ListTakesNoArguments
       | false, true, [], [], _ -> run Target.ListTools Payload.NoArguments
@@ -871,6 +941,12 @@ module McpCall =
   type Outcome =
     | Replied of ToolReply
     | ListedTools of ToolSpec list
+    /// `<tool> --help`, for a tool the daemon lists.
+    | ToolHelped of ToolSpec
+    /// `<tool> --help`, for a name the daemon does not list to this caller, with the listed names nearest to it.
+    | ToolNotListed of name: string * nearest: string list
+    /// `<tool> --help` with no daemon to ask: the lines say how to start one.
+    | HelpWithoutDaemon of tool: string * lines: string list
     | NotRunning of lines: string list
     | DaemonRefused of reason: string
     | DaemonGone of reason: string
@@ -923,6 +999,30 @@ module McpCall =
       match outcome with
       | Outcome.Replied reply -> ofReply credentials reply
       | Outcome.ListedTools tools -> { Stdout = listing credentials tools; Stderr = ""; ExitCode = 0 }
+      | Outcome.ToolHelped tool -> { Stdout = ToolSpec.helpText tool; Stderr = ""; ExitCode = 0 }
+      | Outcome.ToolNotListed(name, nearest) ->
+        let close =
+          match nearest with
+          | [] -> []
+          | names -> [ sprintf "Nearest tools: %s." (String.concat ", " names) ]
+        failure (
+          withNote
+            credentials
+            (String.concat
+              "\n"
+              ([ sprintf "sagefs call: the daemon lists no tool named '%s' to this caller (it lists tools by who is asking)." name ]
+               @ close
+               @ [ "'sagefs call --list' shows every tool this caller can call." ]))
+        )
+      | Outcome.HelpWithoutDaemon(tool, lines) ->
+        { Stdout = usage
+          Stderr =
+            String.concat
+              "\n"
+              (lines
+               @ [ ""
+                   sprintf "What %s takes comes from the daemon, so its own help cannot be printed until one is running. The command's usage is on standard output." tool ])
+          ExitCode = 1 }
       | Outcome.NotRunning lines -> failure (String.concat "\n" lines)
       | Outcome.DaemonRefused reason -> failure (withNote credentials (sprintf "sagefs call: the daemon refused the request: %s" reason))
       | Outcome.DaemonGone reason -> failure (sprintf "sagefs call: the daemon stopped answering: %s" reason)

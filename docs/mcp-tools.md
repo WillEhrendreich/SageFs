@@ -201,10 +201,19 @@ process and heals a session the daemon has forgotten.
 
 ```sh
 sagefs call --list                                    # each tool and the first line of what it does
+sagefs call run_tests --help                          # what one tool does and takes, one line a parameter
 sagefs call get_session_status --session_id 1a2b3c4d
 sagefs call run_tests --pattern Foo --timeout_seconds 60
 sagefs call stop_session --json '{"session_id":"1a2b3c4d"}'
 ```
+
+`sagefs call <tool> --help` prints the tool's own sentence, then each parameter on a
+line with its type and whether it is required, read from the same input schema, and
+says where the full manual is (`sagefs call discover_features --tool <tool>`, or this
+page). A name the daemon does not list to the caller is said so, with the nearest
+tool names and a pointer to `--list`. The tool's help comes from the daemon, so with
+none running it prints the command's usage and how to start one, and exits 1.
+`sagefs call --help` alone is the command's usage.
 
 A flag is typed from the tool's own input schema (a string stays a string, a
 number a number, a boolean flag alone is `true`; `--ids='[1,2]'` is an array).

@@ -291,9 +291,53 @@ let tests =
       nothing.Err |> Expect.stringContains "and shows the usage" "usage: sagefs call --list"
       let! blank = execute DaemonPresence.NotRunning port [] "--list --token  "
       blank.Exit |> Expect.equal "blank token is a usage error" 2
-      let! help = execute DaemonPresence.NotRunning port [] "run_tests --help"
+      let! help = execute DaemonPresence.NotRunning port [] "--help"
       help.Exit |> Expect.equal "help" 0
       help.Out |> Expect.stringContains "prints the usage" "usage: sagefs call --list"
+      let! listHelp = execute DaemonPresence.NotRunning port [] "--list --help"
+      listHelp.Exit |> Expect.equal "help beside --list is the usage, with no daemon asked" 0
+    }
+
+    testTask "WHY - <tool> --help prints what the tool takes from the daemon's own schema, asks nothing to be called, and ends the session" {
+      do!
+        withDaemon (daemonAnswering (fun _ -> textResult "should not run" false)) (fun daemon ->
+          task {
+            let! run = execute (running daemon.Port) daemon.Port [] "run_tests --help"
+            run.Exit |> Expect.equal (sprintf "exit 0 (stderr: %s)" run.Err) 0
+            run.Err |> Expect.equal "nothing on stderr" ""
+            run.Out |> Expect.stringStarts "the tool's own sentence" "run_tests: Run tests in the session."
+            run.Out |> Expect.stringContains "a required parameter" "pattern (string, required)"
+            run.Out |> Expect.stringContains "an optional one" "timeout_seconds (integer)"
+            run.Out |> Expect.stringContains "a boolean" "verbose (boolean)"
+            run.Out |> Expect.stringContains "the manual" "sagefs call discover_features --tool run_tests"
+            callsOf daemon |> Expect.isEmpty "no tools/call reached the daemon"
+            daemon.Requests |> List.exists (fun seen -> seen.HttpMethod = "DELETE") |> Expect.isTrue "the session is ended"
+            let! noParameters = execute (running daemon.Port) daemon.Port [] "get_daemon_status --help"
+            noParameters.Out |> Expect.stringContains "says it takes none" "get_daemon_status takes no parameters"
+          })
+    }
+
+    testTask "WHY - <tool> --help for a name the daemon does not list says so, names the nearest tools and points at --list" {
+      do!
+        withDaemon (daemonAnswering (fun _ -> textResult "should not run" false)) (fun daemon ->
+          task {
+            let! run = execute (running daemon.Port) daemon.Port [ "SAGEFS_MEMBER_TOKEN", "sfm_x" ] "run_test --help"
+            run.Exit |> Expect.equal "exit 1" 1
+            run.Out |> Expect.equal "nothing on stdout" ""
+            run.Err |> Expect.stringContains "says so" "lists no tool named 'run_test'"
+            run.Err |> Expect.stringContains "names the nearest" "Nearest tools: run_tests."
+            run.Err |> Expect.stringContains "points at the list" "sagefs call --list"
+            callsOf daemon |> Expect.isEmpty "nothing was called"
+          })
+    }
+
+    testTask "WHY - <tool> --help with no daemon says how to start one and still prints the usage" {
+      let port = fst (TestInfrastructure.TestPorts.reservePair ())
+      let! run = execute DaemonPresence.NotRunning port [] "run_tests --help"
+      run.Exit |> Expect.equal "exit 1, the tool's help could not be given" 1
+      run.Out |> Expect.stringContains "the usage is printed" "usage: sagefs call --list"
+      run.Err |> Expect.stringContains "says so" "No daemon running"
+      run.Err |> Expect.stringContains "and what to run" "claude mcp add sagefs -- sagefs mcp"
     }
 
     test "WHY - no tool the daemon registers takes a parameter named like one of the command's own options, so a flag is never taken from a tool" {

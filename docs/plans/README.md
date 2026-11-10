@@ -155,7 +155,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [A sandboxed getter leaves no filtered thread behind](sandboxed-getters-keep-the-pool-clean.md) | M | after a getter that queues pool work in a child process, no thread but the sandbox's reads `Seccomp: 2` (done in 97252b11) |
 | [Admit heavy work by measured cost](admit-heavy-work-by-measured-cost.md) | M | a 6 GiB build is queued with numbers when 5 GiB is free |
 | [One command to set SageFs up in your agent](one-command-stdio-setup.md) | S for snippets, M with the command | every client's snippet is valid JSON and names `sagefs mcp` |
-| [Help for one tool in sagefs call](call-help-lists-parameters.md) | S | `--help` after a tool name parses to a request to describe that tool |
+| [Help for one tool in sagefs call](call-help-lists-parameters.md) | S | `--help` after a tool name parses to a request to describe that tool (done) |
 | [The daemon tidies the workspace by itself](hygiene-that-runs-itself.md) | L | a merged worktree used an hour ago is kept, one quiet for a day is not |
 
 ## Where to start for hot reload and live testing

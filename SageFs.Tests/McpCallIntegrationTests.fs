@@ -154,6 +154,36 @@ let tests =
       run.Err |> Expect.stringContains "and how to start it" "claude mcp add sagefs -- sagefs mcp"
     }
 
+    testTask "WHY - <tool> --help against a real daemon prints every parameter the tool's own registration declares, and marks the required ones" {
+      do!
+        withDaemon (fun port _ ->
+          task {
+            // The expected parameters come from the tool's registration, read by reflection, never from a literal.
+            let declared (toolName: string) : (string * bool) list =
+              let flags = Reflection.BindingFlags.Public ||| Reflection.BindingFlags.Instance ||| Reflection.BindingFlags.DeclaredOnly
+              typeof<SageFs.Server.McpTools.SageFsTools>.GetMethods flags
+              |> Array.find (fun m -> m.Name = toolName)
+              |> fun m -> m.GetParameters() |> Array.map (fun p -> p.Name, not p.IsOptional) |> List.ofArray
+            for toolName in [ "stop_session"; "get_session_status"; "create_project_session" ] do
+              let! help = callAs port None [ toolName; "--help" ]
+              help.ExitCode |> Expect.equal (sprintf "%s --help works (stderr: %s)" toolName help.Err) 0
+              help.Out |> Expect.stringStarts "the tool and its sentence come first" (toolName + ": ")
+              let lines = help.Out.Split '\n' |> List.ofArray
+              let declaredParams = declared toolName
+              declaredParams |> Expect.isNonEmpty (sprintf "%s declares parameters, so the check has something to read" toolName)
+              for name, required in declaredParams do
+                let line = lines |> List.tryFind (fun line -> line.StartsWith("  " + name + " ("))
+                match line with
+                | None -> failtestf "%s --help names no line for parameter %s:\n%s" toolName name help.Out
+                | Some found -> found.Contains ", required" |> Expect.equal (sprintf "%s.%s is marked required exactly when it is" toolName name) required
+              help.Out |> Expect.stringContains "points at the full manual" (sprintf "discover_features --tool %s" toolName)
+            let! unknown = callAs port None [ "stop_sesion"; "--help" ]
+            unknown.ExitCode |> Expect.equal "an unlisted name fails" 1
+            unknown.Err |> Expect.stringContains "names the nearest tool" "stop_session"
+            unknown.Err |> Expect.stringContains "and points at the list" "sagefs call --list"
+          })
+    }
+
     testTask "WHY - SageFs --help lists the call command" {
       let! help = runSagefs [] [] [ "--help" ]
       help.Out |> Expect.stringContains "the usage line" "SageFs call --list"

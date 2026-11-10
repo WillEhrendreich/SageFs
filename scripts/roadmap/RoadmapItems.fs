@@ -331,9 +331,9 @@ let items : Item list =
       "Only a claim's holder can release it. A member that goes silent keeps its `Held` claims, and the scope stays shut to everyone else, until its 30 minute lease lapses. An orphaned claim does not block anyone, but the conductor can only hand it to a member who is present, and otherwise it sits in the status for another 30 minutes. `revoke_member` cuts a token off at once, and a member without a token has nothing like it. I would give the conductor a command that clears a silent member's claim and an orphan with no one to take it, recorded with who was cleared and how long they had been silent. The fence makes it safe, since the old holder's late release is refused as stale. Whether a person's yes belongs on it, as it does for replacing a conductor, is open."
 
     item "call-help-lists-parameters" "Help for one tool in sagefs call says what it takes" Platform Next
-      NoLandmarkYet
+      (landmark "SageFs.Core/McpCall.fs" "DescribeTool")
       [ "docs/mcp-tools.md"; "docs/plans/call-help-lists-parameters.md" ]
-      "`sagefs call send_fsharp_code --help` prints the command's usage and nothing about `send_fsharp_code`, so a person runs `--list`, which shows one line per tool, then reads the docs, or calls the tool wrong and reads the refusal. The refusal already has the answer: it prints each parameter with its type and whether it is required, from the input schema the daemon sends. The help for a tool should print the same thing, with the tool's sentence and a pointer to its full manual. The parser cannot do it yet because the help case carries no tool name."
+      "`sagefs call send_fsharp_code --help` prints the tool's own sentence, one line for each parameter with its type and whether it is required (the same words a wrong call is refused with, read from the input schema the daemon sends), and where the full manual is: `discover_features` with `tool`, and `docs/mcp-tools.md`. `sagefs call --help` is still the command's usage. A name the daemon does not list is said so, with the nearest tool names and a pointer to `--list`. With no daemon running it prints the usage and how to start one, and exits 1."
 
     item "session-status-reads-write-the-registry" "One rule decides what a worker's report writes into the registry" Repl Next
       NoLandmarkYet

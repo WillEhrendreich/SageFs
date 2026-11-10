@@ -84,6 +84,41 @@ let sameJson (expected: ArgValue) (actual: JsonElement) : bool =
   | ArgValue.Flag flag -> actual.ValueKind = (match flag with true -> JsonValueKind.True | false -> JsonValueKind.False)
   | ArgValue.Raw _ -> false
 
+let allKinds : ParamKind list =
+  [ ParamKind.Words
+    ParamKind.WholeNumber
+    ParamKind.Fraction
+    ParamKind.Switch
+    ParamKind.Items
+    ParamKind.Record
+    ParamKind.Unspecified ]
+
+/// A tool's parameters p0..pN, each of any kind and each required or not.
+let genParams : Gen<ParamSpec list> =
+  gen {
+    let! kinds = Gen.listOf (Gen.elements allKinds)
+    let! needs = kinds |> List.map (fun _ -> Gen.elements [ ParamNeed.Needed; ParamNeed.Optional ]) |> Gen.sequenceToList
+    return
+      List.zip kinds needs
+      |> List.mapi (fun index (kind, need) -> { Name = sprintf "p%d" index; Kind = kind; Need = need })
+  }
+
+let genTool : Gen<ToolSpec> =
+  gen {
+    let! description = genText
+    let! specs = genParams
+    return { Name = "some_tool"; Description = description; Params = specs }
+  }
+
+/// What the help for a tool has to be: one line per parameter, the same line a refusal uses, the required ones marked.
+let helpNamesEveryParameter (tool: ToolSpec) (text: string) : bool =
+  let lines = text.Split '\n' |> List.ofArray
+  tool.Params
+  |> List.forall (fun spec ->
+    let line = "  " + ToolSpec.describeParam spec
+    let marked = line.Contains ", required"
+    List.contains line lines && marked = (spec.Need = ParamNeed.Needed))
+
 let genReply : Gen<ToolReply> =
   gen {
     let! isError = Gen.elements [ true; false ]
@@ -131,6 +166,18 @@ let tests =
           (Result.Ok(Invocation.Run { Target = Target.CallTool "stop_session"; Port = PortChoice.Configured; Token = TokenChoice.FromEnvironment; Payload = Payload.JsonObject "{\"session_id\":\"abc\"}" }))
         parsed "--help" |> Expect.equal "long" (Result.Ok Invocation.Help)
         parsed "-h" |> Expect.equal "short" (Result.Ok Invocation.Help)
+        parsed "--list --help" |> Expect.equal "help with --list is the usage" (Result.Ok Invocation.Help)
+        parsed "--list run_tests --help" |> Expect.equal "and still the usage when a tool is named beside --list" (Result.Ok Invocation.Help)
+      }
+
+      test "WHY - help after a tool's name asks about that tool, wherever the flag stands and whatever else is typed" {
+        let describing (port: PortChoice) : Result<Invocation, UsageRefusal> =
+          Result.Ok(Invocation.Run { Target = Target.DescribeTool "run_tests"; Port = port; Token = TokenChoice.FromEnvironment; Payload = Payload.NoArguments })
+        parsed "run_tests --help" |> Expect.equal "after the name" (describing PortChoice.Configured)
+        parsed "run_tests -h" |> Expect.equal "short" (describing PortChoice.Configured)
+        parsed "--help run_tests" |> Expect.equal "before the name" (describing PortChoice.Configured)
+        parsed "run_tests --pattern Foo --help --port 38001"
+        |> Expect.equal "the arguments typed beside it are not sent, and the port is kept" (describing (PortChoice.Named 38001))
       }
 
       test "WHY - each mistake is its own named refusal, and every refusal says something" {
@@ -285,6 +332,74 @@ let tests =
           known |> Expect.equal "the listed names" [ "run_tests"; "get_daemon_status" ]
           ArgRefusal.describe refusal |> Expect.stringContains "names them" "run_tests, get_daemon_status"
         | other -> failtestf "should be refused: %A" other
+      }
+    ]
+
+    testList "help for one tool" [
+      test "WHY - the help is the tool's sentence, one line a parameter with its type and whether it is required, and where the manual is" {
+        let text = ToolSpec.helpText runTests
+        text |> Expect.stringStarts "the tool and its own sentence come first" "run_tests: Run tests in the session."
+        text |> Expect.stringContains "the usage for this tool" "usage: sagefs call run_tests"
+        text |> Expect.stringContains "a required parameter" "\n  pattern (string, required)\n"
+        text |> Expect.stringContains "an optional one, typed through its null" "\n  timeout_seconds (integer)\n"
+        text |> Expect.stringContains "the full manual by tool" "sagefs call discover_features --tool run_tests"
+        text |> Expect.stringContains "and the reference page" "docs/mcp-tools.md"
+        text.Contains "usage: sagefs call --list" |> Expect.isFalse "the command's own usage block is absent"
+      }
+
+      test "WHY - a tool with no parameters says so, and a tool with no description says that" {
+        let status = tools |> List.find (fun tool -> tool.Name = "get_daemon_status")
+        ToolSpec.helpText status |> Expect.stringContains "no parameters" "takes no parameters"
+        ToolSpec.helpText { status with Description = "  " } |> Expect.stringContains "no description" "sends no description"
+      }
+
+      testPropertyWithConfig propConfig "WHY - for any schema the help names every parameter on its own line and marks exactly the required ones" (
+        Prop.forAll (Arb.fromGen genTool) (fun tool -> helpNamesEveryParameter tool (ToolSpec.helpText tool))
+      )
+
+      test "WHY - the property has teeth: the command's usage, or a name with no marks, does not pass it" {
+        helpNamesEveryParameter runTests usage |> Expect.isFalse "the usage names no parameter"
+        let unmarked = ToolSpec.helpText runTests |> fun text -> text.Replace(", required", "")
+        helpNamesEveryParameter runTests unmarked |> Expect.isFalse "a required parameter shown as optional fails"
+      }
+
+      test "WHY - the usage says a tool takes --help too, and --help alone is still the command's usage" {
+        usage |> Expect.stringContains "the usage points at it" "sagefs call <tool> --help"
+      }
+
+      test "WHY - a name the daemon does not list is named back with the nearest tools, and --list is where the rest are" {
+        let known = [ "send_fsharp_code"; "check_fsharp_code"; "run_tests"; "stop_session"; "get_session_status"; "list_sessions" ]
+        ToolSpec.nearest "send_fsharp" known |> Expect.equal "a prefix finds the tool" [ "send_fsharp_code" ]
+        ToolSpec.nearest "run_test" known |> Expect.equal "a missing letter" [ "run_tests" ]
+        ToolSpec.nearest "sned_fsharp_code" known |> List.head |> Expect.equal "a swapped letter" "send_fsharp_code"
+        ToolSpec.nearest "zzzzzzzzzzzz" known |> Expect.isEmpty "nothing close is not guessed at"
+        let text = (Emission.ofOutcome asMember (Outcome.ToolNotListed("sned_fsharp_code", ToolSpec.nearest "sned_fsharp_code" known))).Stderr
+        text |> Expect.stringContains "says what was asked" "lists no tool named 'sned_fsharp_code'"
+        text |> Expect.stringContains "names the nearest" "send_fsharp_code"
+        text |> Expect.stringContains "points at the list" "sagefs call --list"
+        let noneClose = (Emission.ofOutcome asMember (Outcome.ToolNotListed("zzzzzzzzzzzz", []))).Stderr
+        noneClose |> Expect.stringContains "still points at the list" "sagefs call --list"
+        noneClose.Contains "Nearest" |> Expect.isFalse "and claims no near match"
+      }
+
+      testPropertyWithConfig propConfig "WHY - the nearest tools are always a few of the daemon's own names, never an invention" (
+        Prop.forAll (Arb.fromGen (Gen.zip genText (Gen.listOf genText))) (fun (asked, known) ->
+          let found = ToolSpec.nearest asked known
+          found.Length <= ToolSpec.nearestCount && found |> List.forall (fun name -> List.contains name known))
+      )
+
+      test "WHY - tool help is an answer on stdout with exit 0, and without a daemon it still prints the usage and how to start one" {
+        let helped = Emission.ofOutcome anonymous (Outcome.ToolHelped runTests)
+        helped.ExitCode |> Expect.equal "answered" 0
+        helped.Stderr |> Expect.equal "nothing on stderr" ""
+        helped.Stdout |> Expect.equal "the help text" (ToolSpec.helpText runTests)
+        let lines = DaemonPresence.unreachableLines 37749 DaemonPresence.NotRunning
+        let without = Emission.ofOutcome anonymous (Outcome.HelpWithoutDaemon("run_tests", lines))
+        without.ExitCode |> Expect.equal "the tool's own help needs the daemon, so it fails" 1
+        without.Stdout |> Expect.stringContains "the usage is still printed" "usage: sagefs call --list"
+        without.Stderr |> Expect.stringContains "says what is missing" "No daemon running"
+        without.Stderr |> Expect.stringContains "and what to run" "claude mcp add sagefs -- sagefs mcp"
+        without.Stderr |> Expect.stringContains "and that the tool's help needs it" "run_tests"
       }
     ]
 
