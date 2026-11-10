@@ -1794,7 +1794,7 @@ refused as `ClearRefused(HolderActive(holder, silentFor, clearableAfter))`, a re
 `| clearable: ...` and by the simulation, so they cannot disagree about "silent".
 
 The tool is `release_claim`, with no new tool and no new parameter, so the tool list gets no heavier (its two parameter sentences
-were shortened by more than the sentence grew). The conductor naming a claim that is not its own is a clear: `Cohort.releaseOrClear`
+were shortened by as many characters as the tool's sentence grew, and the catalog weighs what it did). The conductor naming a claim that is not its own is a clear: `Cohort.releaseOrClear`
 picks the command from the state, and `decide` still judges it. A call under a member token never clears. `reassign_claim` was not
 extended because it has no fence, and a clear through it would have skipped the compare-and-swap.
 
