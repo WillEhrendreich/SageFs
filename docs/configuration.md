@@ -77,6 +77,22 @@ because a loopback bind and a token policy are what stand between SageFs, which 
 changing them from a page the daemon serves points the trust the wrong way. A token's row says only whether it is
 set, never its value.
 
+## Where the dashboard's panels sit
+
+The Panels menu in the dashboard header moves the hot reload, live testing, session context, friction, agent team and workspace
+hygiene panels between the sidebar and a dock under the output, reorders them, closes them and reopens them. Every button on
+it is an ordinary button, so a move needs no dragging. The output and the Sessions list are not on the menu and cannot move.
+Each workflow (REPL, hot reload, live testing, and no session in view) keeps its own layout, and "Reset this layout" and "Reset
+all layouts" put them back.
+
+A layout is saved in the same `settings.json` as the rows above, one key per workflow, `dashboard.layout.repl`,
+`dashboard.layout.hotreload`, `dashboard.layout.livetesting` and `dashboard.layout.nosession`. The value reads like
+`sidebar=hot-reload,live-testing;dock=cohort;closed=hygiene`. A layout equal to the default is not stored, so a key is there
+only while you have moved something. They are not rows on the Settings page, because the menu is the way to change them. If you
+edit the text by hand, a name that is not a panel is left out and a panel you did not place goes to its default place, and the
+menu says so. Text that cannot be read at all shows the default layout, with the reason on the menu, until the next edit
+replaces it.
+
 ## Session options: garbage collector, environment and artifacts folder
 
 Three options are set per directory and read when a session is created there. Each has a row in the "Session" group of

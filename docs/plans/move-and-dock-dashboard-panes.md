@@ -8,13 +8,36 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
-| Size | L |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: moving a pane leaves every pane placed exactly once. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Status | In progress (step 3 of 8 is next; steps 1, 2 and 4 to 7 are done for the six sidebar panels). Slice 1 built 2026-11-10: the six sidebar panels move between the sidebar and a dock region under the output, reorder, close, reopen and reset, per workflow, from a Panels menu in the header, saved in the settings layer file. The live bindings dock, the app output pane, per-pane header menus and drag and drop are not built (see "What is left"). |
+| Size | L (slice 1 is about a third of it) |
+| Branch and worktree | none: committed on master |
+| Last green commit | e70b4aa0 (the slice's own test lists and the browser matrix pass on it) |
+| Next action | Make the live bindings dock and the app output movable panes. They need their own wrap rules first: `.live-dock` is a direct flex child of `.main-area` (its `order: -1` at phone width and its `height: var(--dock-max-height)` depend on it), so the first step is a RED browser cell that puts it in `.sidebar-inner` at 200 to 600 px and reads `layoutProblems`. |
+| Decisions made | The layout lives in the global settings layer file, not a new `layouts.json` (below). Buttons come first and live in one menu; drag and drop stays optional. The output and the Sessions list are pinned. Per-workflow defaults are all today's order for now (open question for Will below). |
+| Surprises | `.live-dock` cannot be wrapped without breaking its CSS, which cut the slice: the bindings dock is not a pane yet. Datastar's `Ds.preserveAttr "open"` keeps the menu open across the morph, so no signal was needed. The render skip guard compared the snapshot alone, so a layout edit with an unchanged snapshot would have been skipped: the layout view is now part of what the guard compares. |
+
+## Slice 1, as built
+
+What exists, and where it differs from the design below. The design section is left as it was written, so the differences are listed here.
+
+- Pure model: `SageFs.Core/PaneLayout.fs` (in Core, not `SageFs/`, so the settings layers can use it). Six `PanelId`s (`PaneId` was taken by the deprecated terminal UI; hot reload, live testing, session context, friction, agent team, workspace hygiene), two `PaneRegion`s (sidebar, dock), four `LayoutWorkflow`s (REPL, hot reload, live testing, no session). `PaneLayout` is three lists, and `PaneLayout.apply` is total: a move to a region, move up, move down, close, reopen and reset. `LayoutBook.writesFor` turns an edit into the writes it makes against the saved layer (a layout equal to its default is cleared, not stored; an edit that changes nothing writes nothing). Edits and saved text have one spelling each (`BookEdit.token`, `PaneLayout.render`) and refuse with a named `LayoutRefusal`.
+- Persistence: `SageFs.Core/PaneLayoutStore.fs`, through `SettingsStore` on the global layer file, keys `dashboard.layout.repl`, `.hotreload`, `.livetesting`, `.nosession`. This replaces the design's `layouts.json`: the layer store already has the atomic write, the lock and the `.corrupt` copy, and a layout is one more key. They are not catalog descriptors (no row on the Settings page), because a descriptor needs a new `SettingValue` case and a row of `sidebar=a,b;dock=c` text is a worse editor than the menu. The store remembers what it read until the file's stamp changes, so a push costs one stat.
+- Render: `renderMainContentIn (view: PaneLayoutView) snap` in `DashboardFragments.fs`; `renderMainContent snap` is the same with the default view, so none of the tests that build a snapshot by hand had to change. There is no `Layout` field on `DashboardSnapshot` for that reason. Panels are drawn bare, with no wrapper element, so the default page is the page that was always drawn (the sidebar CSS selects `.sidebar-inner > .panel-hidden-reason`). The dock region, `#pane-dock`, is drawn only when a panel is in it.
+- Controls: one Panels menu (`SageFs/PaneMenuView.fs`), a `<details>` in the header whose body is fixed to the viewport. One row per panel with To dock or To sidebar, Up, Down and Close, a Reopen button for a closed one, a note for a panel that has only a reason line or nothing to report, and Reset this layout and Reset all layouts (disabled when they would change nothing). Every button has an accessible name of its own. The design put a menu on each pane header; the panels are already-drawn nodes from six different renderers, so slice 1 has the one menu.
+- Wiring: `POST /dashboard/layout?e=<workflow>/<edit>` (`createPaneLayoutEditHandler` in `Dashboard.fs`). The edit names its workflow, the one the menu was drawn for, so a click cannot land on a workflow the person switched to a moment later. The handler saves and calls `infra.TriggerStateChange`, so every open page is pushed the new layout in the same morph. The render skip guard now compares `(snapshot, layout view)`.
+- Not an API change: the route is a `/dashboard` UI route, `apiVersion` stays 4, and no MCP tool or parameter was added.
+
+Proof: `PaneLayoutTests` (properties over generated edit sequences, mutants, the store on real temporary directories), `PaneMenuViewTests` (the page drawn from a layout), `PaneLayoutSimDstTests` (three tabs, a crashed reset, a corrupt file, a restart, and a twin that saves a stale whole book), and `DashboardPaneLayoutBrowserTests` (headless Chromium, 375, 768 and 1400 px: four layouts, and the moves by click and by key, a reload, a reset).
+
+## What is left
+
+- The live bindings dock and the app output pane as movable panes (needs the wrap rules described under "Next action").
+- A menu on each pane's own header, so a panel can be moved from where you are looking at it.
+- Drag and drop (step 8), with Datastar event attributes.
+- The "measure first" questions: whether a moved panel keeps its scroll position and its open `<details>` (the open state is a signal, so it does; scroll position is unmeasured), and how much of the 6 KB inline-JS budget is left (slice 1 added none).
+- A daemon journey with a real daemon: move a panel, reload, restart the daemon on the same data directory, switch workflow, reset. The browser matrix runs the real handler logic and a real store, but not the daemon's route plumbing.
+- The command palette entries (`command-palette-and-one-timeline` depends on this).
+- Whether each workflow should start with a different layout (live testing first in a live testing session, for instance). Today all four defaults are the order the sidebar always had.
 
 ## What done looks like
 
