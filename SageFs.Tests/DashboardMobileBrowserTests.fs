@@ -180,13 +180,14 @@ let tests =
     testTask "[Integration] Mobile: the header's cells keep their text on one line inside the bar, not wrapped out of it" {
       do! onAPhone (fun page -> task {
         // The bar is one row high (--tabline-h). A cell whose text wraps to a second line spills out of the bar and is
-        // clipped, so "0 evals" read as a cut-off "0" over "evals".
+        // clipped, so "0 evals" read as a cut-off "0" over "evals". Only what is drawn counts: the closed Panels menu's body
+        // keeps its box size inside a closed <details> (content-visibility hidden), and a popup nobody sees clips nothing.
         let! clipped =
           page.EvaluateAsync<string>(
             """() => {
               var bar = document.querySelector('.app-header');
               return Array.from(bar.querySelectorAll('*'))
-                .filter(el => el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0 && getComputedStyle(el).overflowY !== 'visible')
+                .filter(el => el.checkVisibility() && el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0 && getComputedStyle(el).overflowY !== 'visible')
                 .map(el => el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0] + ' "' + el.innerText.replace(/\s+/g, ' ').slice(0, 24) + '" ' + el.scrollHeight + ' tall in ' + el.clientHeight)
                 .join(' | ');
             }""")
