@@ -74,8 +74,12 @@ let private assertProven (outcome: JS.Promise<ProofOutcome>) : JS.Promise<unit> 
 
 // ── Debugging a test through a real debug adapter ────────────────────────
 //
-// NEVER RUN YET (written 2026-11-07 on a machine with no netcoredbg). It compiles and is wired in, and until it has run it is
-// a hypothesis. It runs the real `sagefs.debugTest` command in this extension host with a `coreclr` debug adapter that
+// RAN ONCE, 2026-11-10, with netcoredbg 3.2.0-1092 and the shim: the extension host starts with the shim loaded, enabling live
+// testing is proven, and then this case stops at "the daemon has no discovered test to debug in this session". The proof's daemon
+// runs with SAGEFS_HOT_RELOAD=true (the hot-reload commands below need it), and with hot reload on, discovery on the FromCSharp
+// sample answers `ready_zero_tests` (the same cause the `--integration-lt` runner names for turning hot reload off), so there is no
+// row to debug. The sequence after that point has not run. A fixture whose session has tests and hot reload off is what it needs.
+// It runs the real `sagefs.debugTest` command in this extension host with a `coreclr` debug adapter that
 // `test-electron/coreclr-shim` contributes (it execs netcoredbg as a DAP server), and watches the daemon, not the screen:
 // the extension pauses live testing while it holds the test and resumes it once the debug session ends, so seeing the
 // pause and then the resume is the extension's whole hold, attach, release, detach sequence. Then the test's row must carry
@@ -115,6 +119,23 @@ let private awaitPause (wanted: LivePauseState) (maxAttempts: int) : JS.Promise<
     return! poll maxAttempts
   }
 
+/// The rows the daemon serves for the session, once there is at least one. Enabling live testing is answered before discovery has
+/// filled the rows (the first run of this case read them at once and found none), so the rows are asked for until they come.
+let private awaitEntries (maxAttempts: int) : JS.Promise<EntryResponse array> =
+  promise {
+    let rec poll attemptsLeft =
+      promise {
+        let! current = getEntries (mcpPort ()) (sessionId ())
+        match Array.isEmpty current, attemptsLeft with
+        | false, _ -> return current
+        | true, 0 -> return current
+        | true, _ ->
+          do! sleep 500
+          return! poll (attemptsLeft - 1)
+      }
+    return! poll maxAttempts
+  }
+
 let private debugTestSequence () : JS.Promise<unit> =
   promise {
     match debuggerShim () with
@@ -123,7 +144,7 @@ let private debugTestSequence () : JS.Promise<unit> =
       | true -> failwithf "prerequisite missing: no netcoredbg for the debug adapter shim. To fix: %s" installAdvice
       | false -> printfn "SKIPPED the debug case: no netcoredbg on this machine (%s)" installAdvice
     | Some _ ->
-      let! before = getEntries (mcpPort ()) (sessionId ())
+      let! before = awaitEntries 120
       match Array.tryHead before with
       | None -> failwith "the daemon has no discovered test to debug in this session"
       | Some entry ->

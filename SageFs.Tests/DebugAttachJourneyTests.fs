@@ -145,6 +145,8 @@ let attachAndStop (command: string) (pid: int) : Task<AttachedDebugger * string>
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     psi.UseShellExecute <- false
+    // netcoredbg writes its command history, `.netcoredbg_hist`, into its working directory: the temp area, not the checkout.
+    psi.WorkingDirectory <- Path.GetTempPath()
     SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start psi
     let output = DebuggerOutput()
