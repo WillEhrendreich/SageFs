@@ -70,9 +70,63 @@ let private untilReady (client: McpClient) (sessionId: string) : Task<unit> =
       | _ -> ()
   }
 
+let private mentions (needle: string) (text: string) : bool = text.Contains needle
+
+/// Waits on the daemon's own answer until the session's last rebuild is no longer InProgress. get_session_status parks on the
+/// session's readiness, which includes the rebuild, so each call returns as soon as the rebuild settles and a rebuild that
+/// never settles runs out the bound instead of hanging the test.
+let private untilRebuildSettled (client: McpClient) (sessionId: string) : Task<string> =
+  task {
+    let deadline = DateTime.UtcNow + TestTimeouts.sessionBackAfterRestart
+    let mutable settled = None
+    while settled.IsNone do
+      let! status = call client "get_session_status" [ "session_id", box sessionId; "wait_seconds", box TestTimeouts.sessionStatusLongWaitSeconds ]
+      match status.Contains "\"outcome\":\"InProgress\"", DateTime.UtcNow > deadline with
+      | false, _ -> settled <- Some status
+      | true, true -> failtestf "session %s still reads a rebuild in progress after %O (#186): %s" sessionId TestTimeouts.sessionBackAfterRestart status
+      | true, false -> ()
+    return settled.Value
+  }
+
+let private newSessionIn (client: McpClient) (folder: string) : Task<string> =
+  task {
+    let! created = call client "create_bare_session" [ "working_directory", box folder ]
+    let m = Regex.Match(created, "[0-9a-f]{8}")
+    match m.Success with
+    | true -> return m.Value
+    | false -> return failtestf "create_bare_session did not name a session: %s" created
+  }
+
+/// #186 through a real daemon: a rebuilding hard reset ends, with or without a startup profile, and with a profile that fails.
+let private rebuildCase (name: string) (profile: string option) (expectOutcome: string) =
+  testTask name {
+    let! proc, port = SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith []
+    let folder = Path.Combine(Path.GetTempPath(), "sagefs-test-rebuild-settles", Guid.NewGuid().ToString "N")
+    Directory.CreateDirectory(Path.Combine(folder, ".SageFs")) |> ignore
+    match profile with
+    | Some source -> File.WriteAllText(Path.Combine(folder, ".SageFs", "init.fsx"), source)
+    | None -> ()
+    try
+      use! client = SageFs.Tests.CohortMcpToolsIntegrationTests.connect port
+      let! sessionId = newSessionIn client folder
+      let! first = call client "get_session_status" [ "session_id", box sessionId; "wait_seconds", box TestTimeouts.sessionStatusLongWaitSeconds ]
+      first |> mentions "\"lastRestart\":null" |> Expect.isTrue (sprintf "no restart is recorded before the reset: %s" first)
+      let! answer = call client "hard_reset_fsi_session" [ "session_id", box sessionId; "rebuild", box true ]
+      let! status = untilRebuildSettled client sessionId
+      status |> mentions (sprintf "\"outcome\":\"%s\"" expectOutcome) |> Expect.isTrue (sprintf "the rebuild ended %s (reset said %s): %s" expectOutcome answer status)
+      status |> mentions "\"state\":\"Rebuilding\"" |> Expect.isFalse (sprintf "the source is no longer Rebuilding: %s" status)
+    finally
+      SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+      try Directory.Delete(folder, true) with _ -> ()
+  }
+
 [<Tests>]
 let tests =
   Integration.hostList "Hard reset of a session with a startup profile" [
+
+    rebuildCase "WHY - a rebuilding reset of a session with a startup profile ends Succeeded, as it does without one (#186)" (Some "let value = 1 + 1") "Succeeded"
+    rebuildCase "WHY - a rebuilding reset of a session without a startup profile ends Succeeded (#186 control)" None "Succeeded"
+    rebuildCase "WHY - a rebuilding reset whose startup profile fails to compile still ends, with the build's own outcome (#186 case C)" (Some "let value = Missing.thing ()") "Succeeded"
 
     testTask "WHY - a profile that binds a fixed port binds it after every hard reset, because the old host is gone before the new one loads it" {
       let! proc, port = SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith []

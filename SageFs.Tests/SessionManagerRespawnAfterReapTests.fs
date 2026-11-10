@@ -285,6 +285,46 @@ let respawnAfterReapTests =
           }))
     }
 
+    testTask "WHY — a rebuilding reset whose replacement then fails to start leaves the session Faulted with the build's outcome, never InProgress (#186)" {
+      let rig = mkRig true (fun call -> call = 2)
+      do! withProject true (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSession harness root
+            makeReady harness info
+            hardReset harness info.Id (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker) |> Result.isOk |> Expect.isTrue "the reset is accepted"
+            rig.LetOldWorkersLeave ()
+            do! within "the failed start" (rig.Started 2)
+            let! _ = workersGone harness info.Id
+            let session = managed harness info.Id
+            session.Info.Status |> isFaulted |> Expect.isTrue "the session is Faulted"
+            match session.Info.Rebuild with
+            | LastRebuild.Latest (RebuildOutcome.Succeeded _) -> ()
+            | other -> failtestf "the build had finished, expected Succeeded, got %A" other
+          }))
+    }
+
+    testTask "WHY — a rebuilding reset whose startup profile then faults the new worker keeps the build's Succeeded and does not read Rebuilding (#186 case C)" {
+      let rig = mkRig true (fun _ -> false)
+      do! withProject true (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSession harness root
+            makeReady harness info
+            hardReset harness info.Id (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker) |> Result.isOk |> Expect.isTrue "the reset is accepted"
+            rig.LetOldWorkersLeave ()
+            do! within "the replacement to start" (rig.Started 2)
+            let! _ = workersGone harness info.Id
+            let pid = SessionLifecycleStatus.workerPid (managed harness info.Id).Info.Status |> Option.defaultWith (fun () -> failtest "expected the replacement's pid")
+            harness.Mailbox.Post(SessionCommand.WorkerReportedFaulted(info.Id, pid, "init.fsx(1,13): error FS0039: The value or constructor 'Missing' is not defined"))
+            let session = managed harness info.Id
+            session.Info.Status |> isFaulted |> Expect.isTrue "the session is Faulted with the profile's error"
+            match session.Info.Rebuild with
+            | LastRebuild.Latest (RebuildOutcome.Succeeded _) -> ()
+            | other -> failtestf "the build had finished, expected Succeeded, got %A" other
+          }))
+    }
+
     testTask "WHY — a second hard reset while the replacement is parked is refused, so one reset cannot start two workers" {
       let rig = mkRig true (fun _ -> false)
       do! withProject true (fun root ->
