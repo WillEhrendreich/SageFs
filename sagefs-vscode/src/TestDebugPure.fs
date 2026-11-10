@@ -39,6 +39,8 @@ type DebugAnswerView = {
 type DebugStatus =
   | Held
   | StillRunning
+  /// The test host is alive and did not answer: something has stopped it. The ticket is still valid.
+  | HostNotAnswering
   | Attached
   | NoDebuggerWithin
   | ReleasedWithoutDebugger
@@ -59,6 +61,7 @@ let statusOfWire (wire: string) : DebugStatus =
   match wire with
   | "held" -> DebugStatus.Held
   | "still_running" -> DebugStatus.StillRunning
+  | "host_not_answering" -> DebugStatus.HostNotAnswering
   | "attached" -> DebugStatus.Attached
   | "no_debugger_within" -> DebugStatus.NoDebuggerWithin
   | "released_without_debugger" -> DebugStatus.ReleasedWithoutDebugger
@@ -184,6 +187,7 @@ let beginStep (view: DebugAnswerView) : BeginStep =
   | DebugStatus.BadRequest -> reason Severity.Error
   // A continue-only status answering a begin, or one this client does not know: still the daemon's own words.
   | DebugStatus.StillRunning
+  | DebugStatus.HostNotAnswering
   | DebugStatus.Attached
   | DebugStatus.NoDebuggerWithin
   | DebugStatus.ReleasedWithoutDebugger
@@ -205,6 +209,9 @@ let attachFailedNotice (view: DebugAnswerView) : Notice =
 type ContinueStep =
   /// The test is still running under the debugger: ask again.
   | KeepWaiting
+  /// The test host did not answer: it is stopped, by this debug session at a breakpoint or by something else. Say what the
+  /// daemon says (once), and ask again for as long as the debug session lives, since the ticket is still valid.
+  | HostSilent of Notice
   /// The test finished under the debugger: say how, and detach.
   | Finished of Notice
   /// The test did not run, or the host went away: say why, and detach.
@@ -219,6 +226,7 @@ let private durationText (ms: float) : string =
 let continueStep (testName: string) (view: DebugAnswerView) : ContinueStep =
   match statusOfWire view.Status with
   | DebugStatus.StillRunning -> ContinueStep.KeepWaiting
+  | DebugStatus.HostNotAnswering -> ContinueStep.HostSilent(warning view.Message)
   | DebugStatus.Attached ->
     match view.Outcome with
     | "passed" -> ContinueStep.Finished(info (sprintf "%s passed under the debugger%s." testName (durationText view.DurationMs)))
@@ -362,6 +370,7 @@ let afterTest (view: DebugAnswerView) : AfterTest =
   match statusOfWire view.Status with
   | DebugStatus.Attached -> AfterTest.GoOn
   | DebugStatus.StillRunning
+  | DebugStatus.HostNotAnswering
   | DebugStatus.Held
   | DebugStatus.NoDebuggerWithin
   | DebugStatus.ReleasedWithoutDebugger

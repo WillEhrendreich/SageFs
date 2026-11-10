@@ -770,7 +770,9 @@ let debugTest (testId: string) (sessionId: string) (c: Client) =
   postDebug "/api/live-testing/debug" (TestDebugPure.holdBody testId sessionId) 30000 c
 
 /// Release the held test (the debugger is attached) and wait for it to finish. The daemon waits up to 20 seconds and answers
-/// "still running" if the test is still going, so a test stopped on a breakpoint is asked about again and again.
+/// "still running" if the test is still going, so a test stopped on a breakpoint is asked about again and again. A host that
+/// a breakpoint or an inspector has stopped answers nothing, so the daemon says "host not answering" after 5 more seconds
+/// (a 504), which stays inside this bound, and the same ticket is asked about again.
 let debugContinue (ticket: string) (sessionId: string) (c: Client) =
   postDebug "/api/live-testing/debug/continue" (TestDebugPure.continueBody ticket sessionId) 60000 c
 

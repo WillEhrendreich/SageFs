@@ -79,8 +79,11 @@ type private Waited =
   /// The debug session ended while the test was still running.
   | SessionEndedFirst
 
-/// Release the test and wait for it, asking again for as long as it runs under the debugger.
-let rec private waitForTest (c: Client.Client) (sessionId: string) (view: DebugAnswerView) (state: SessionState ref) : JS.Promise<Waited> =
+/// Release the test and wait for it, asking again for as long as it runs under the debugger. A host that did not answer is
+/// stopped (this debugger at a breakpoint, or something else holding it): the daemon's words are shown once, the ask goes on
+/// while the debug session lives, and when the session is gone the wait ends with those words, since nothing of ours is then
+/// holding the host. `saidSilent` is whether they were shown already.
+let rec private waitForTest (c: Client.Client) (sessionId: string) (view: DebugAnswerView) (state: SessionState ref) (saidSilent: bool) : JS.Promise<Waited> =
   promise {
     let! answer = Client.debugContinue view.Ticket sessionId c
     match answer with
@@ -91,7 +94,16 @@ let rec private waitForTest (c: Client.Client) (sessionId: string) (view: DebugA
         match state.Value with
         | SessionState.Ended -> return Waited.SessionEndedFirst
         | SessionState.NotStarted
-        | SessionState.Started _ -> return! waitForTest c sessionId view state
+        | SessionState.Started _ -> return! waitForTest c sessionId view state saidSilent
+      | ContinueStep.HostSilent notice ->
+        match state.Value with
+        | SessionState.Ended -> return Waited.Answer progress
+        | SessionState.NotStarted
+        | SessionState.Started _ ->
+          match saidSilent with
+          | false -> say notice
+          | true -> ()
+          return! waitForTest c sessionId view state true
       | ContinueStep.Finished _
       | ContinueStep.Abandon _ -> return Waited.Answer progress
   }
@@ -127,7 +139,7 @@ let private holdAndAttachAll (c: Client.Client) (sessionId: string) (ids: string
     /// Release the held test and take what comes back. Returns whether the batch goes on.
     let release (view: DebugAnswerView) : JS.Promise<bool> =
       promise {
-        let! waited = waitForTest c sessionId view state
+        let! waited = waitForTest c sessionId view state false
         match waited with
         | Waited.Unreachable detail ->
           say (unreachableNotice detail)
@@ -143,7 +155,8 @@ let private holdAndAttachAll (c: Client.Client) (sessionId: string) (ids: string
             | 1 -> say notice
             | _ -> ()
             return afterTest answer = AfterTest.GoOn
-          | ContinueStep.Abandon notice ->
+          | ContinueStep.Abandon notice
+          | ContinueStep.HostSilent notice ->
             say notice
             return false
           | ContinueStep.KeepWaiting -> return false

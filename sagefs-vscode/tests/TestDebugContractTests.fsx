@@ -204,12 +204,21 @@ let tests =
           | ContinueStep.Abandon notice -> notice.Text |> Expect.equal (sprintf "%s: the daemon's words" status) view.Message
           | other -> failtestf "%s should end the wait, got %A" status other
 
-      testCase "WHY - no status ends the wait silently: every one but still_running either finishes or abandons" <| fun _ ->
-        for status in daemonStatuses |> List.filter (fun s -> s <> "still_running") do
+      testCase "WHY - no status ends the wait silently: every one but still_running and host_not_answering either finishes or abandons" <| fun _ ->
+        for status in daemonStatuses |> List.filter (fun s -> s <> "still_running" && s <> "host_not_answering") do
           match continueStep "t" { withStatus status with Outcome = "passed" } with
           | ContinueStep.KeepWaiting -> failtestf "%s must not keep waiting" status
+          | ContinueStep.HostSilent _ -> failtestf "%s is not a silent host" status
           | ContinueStep.Finished _
           | ContinueStep.Abandon _ -> ()
+
+      testCase "WHY - a host that did not answer is told in the daemon's words, as a warning, and the ask goes on" <| fun _ ->
+        match continueStep "t" (withStatus "host_not_answering") with
+        | ContinueStep.HostSilent notice ->
+          notice.Text |> Expect.equal "the daemon's own words" view.Message
+          notice.Severity |> Expect.equal "a warning, not a failure" Severity.Warning
+        | other -> failtestf "expected HostSilent, got %A" other
+        afterTest (withStatus "host_not_answering") |> Expect.equal "a silent host does not let a batch go on" AfterTest.StopBatch
 
       testCase "WHY - a session that ended under a running test says the test carries on, and none of this uses an em dash" <| fun _ ->
         (sessionEndedNotice "suite adds").Text |> Expect.stringContains "says it finishes" "finishes it"
