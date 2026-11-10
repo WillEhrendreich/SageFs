@@ -28,7 +28,8 @@ let tree () : Test =
   testSequenced (
     testList
       "Live testing against the FromCSharp sample"
-      [ LiveTestingJourneyTests.journeyTests
+      [ DebugAttachJourneyTests.breakpointJourneyTests
+        LiveTestingJourneyTests.journeyTests
         LiveTestingBrowserTests.tests
         LiveTestingLatencyTests.latencyTests
         DebugRowJourneyTests.journeyTests

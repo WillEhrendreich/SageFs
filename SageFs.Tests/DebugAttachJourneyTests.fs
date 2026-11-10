@@ -231,6 +231,20 @@ let release (http: HttpClient) (sid: string) (ticket: string) : Task<int * strin
     }
   ask (int (Math.Ceiling(SageFs.Timeouts.debugHold.TotalSeconds / SageFs.Timeouts.debugContinuePark.TotalSeconds)))
 
+/// End a hold a case left open, so a case that failed does not make every case after it answer `hold_already_open` until the
+/// daemon's hold window passes. With the debugger gone the host waits its grace for one and answers `released_without_debugger`;
+/// a hold that already ended answers at once. A release that cannot be answered is not this case's failure to report.
+let private endHold (http: HttpClient) (sid: string) (ticket: string) : Task<unit> =
+  task {
+    try
+      let! _ = release http sid ticket
+      ()
+    with
+    | :? AssertException
+    | :? TaskCanceledException
+    | :? HttpRequestException -> ()
+  }
+
 /// Run `body` with a debugger attached to the host the daemon holds `name` in, let the host go on, and detach whatever happens.
 let withAttachedHold
   (command: string)
@@ -244,7 +258,12 @@ let withAttachedHold
     (number held "pid", 0) |> Expect.isGreaterThan "the daemon names a real process, not zero"
     text held "access" |> Expect.equal "the OS lets a debugger attach" "open"
     let! debugger, _ = attachAndStop command (number held "pid")
-    return! ensuring (fun () -> detach debugger :> Task) (fun () -> body held debugger)
+    let cleanup () : Task =
+      task {
+        do! detach debugger
+        do! endHold http sid (text held "ticket")
+      }
+    return! ensuring cleanup (fun () -> body held debugger)
   }
 
 /// Hold a real test in the real host, attach a real debugger to the process the daemon names, let the host go on, release the
@@ -257,20 +276,17 @@ let private fullAttach () : Task<unit> =
       use http = client ()
       let! sid = sessionId http
       sid |> Expect.notEqual "the daemon has a session" ""
-      let! held = holdTest http sid "add infers int"
-      let pid = number held "pid"
-      (pid, 0) |> Expect.isGreaterThan "a real process, not zero"
-      text held "access" |> Expect.equal "the OS lets a debugger attach" "open"
-      let alive =
-        try
-          use p = Process.GetProcessById pid
-          not p.HasExited
-        with _ -> false
-      alive |> Expect.isTrue "the process the daemon named is running"
-      let! debugger, stopped = attachAndStop command pid
       do!
-        ensuring (fun () -> detach debugger :> Task) (fun () ->
+        withAttachedHold command http sid "add infers int" (fun held debugger ->
           task {
+            let pid = number held "pid"
+            let alive =
+              try
+                use p = Process.GetProcessById pid
+                not p.HasExited
+              with _ -> false
+            alive |> Expect.isTrue "the process the daemon named is running"
+            let stopped = debugger.Output.History |> List.filter (startsWith "stopped, reason:") |> String.concat " | "
             stopped
             |> Expect.stringContains
               (sprintf "the debugger stopped every thread of the process the daemon named (pid %d). It said: %s" pid stopped)
@@ -287,6 +303,10 @@ let private fullAttach () : Task<unit> =
 /// A test held at a breakpoint in the host stops the host. The release then has no host to answer it: the daemon says so within
 /// its ceiling (`host_not_answering`, HTTP 504), names the debugger that holds the host, and keeps the ticket valid, so the same
 /// ticket released after the debugger goes on gives the test's verdict.
+///
+/// The test has to run from compiled code for a breakpoint in it to bind: code an eval defined has no pdb, and the hold says so
+/// with `symbols: eval`. The journeys that edit Hello.fs leave the tests evaluated for the rest of the session, so this case is
+/// FIRST in the tier's tree (`LiveTestingShards.tree`), on the session as the runner made it, and it fails when the hold says `eval`.
 let private breakpointHoldsTheHost () : Task<unit> =
   task {
     match managedDebuggerOrNone "the breakpoint case" with
@@ -296,9 +316,10 @@ let private breakpointHoldsTheHost () : Task<unit> =
       use silentHttp = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.debugSilentHostRequest)
       let! sid = sessionId http
       let addLine = lineOf greenAdd
-      do!
-        withAttachedHold command http sid affectedTest (fun held debugger ->
+      do! withAttachedHold command http sid affectedTest (fun held debugger ->
           task {
+            text held "symbols"
+            |> Expect.equal "the test runs from compiled code, so a breakpoint in it can bind" "compiled"
             send debugger (sprintf "break %s:%d" (helloPath ()) addLine)
             // Bound at once (no "pending"): the debugger found the assembly's symbols. The instrumented copy the session runs
             // used to name a pdb that did not exist, and the breakpoint stayed pending for ever.
@@ -309,7 +330,8 @@ let private breakpointHoldsTheHost () : Task<unit> =
             let breakpointNumber = bound.Trim().Split(' ').[1]
             do! resume debugger
             let! status, body = postOrFail silentHttp "/api/live-testing/debug/continue" {| ticket = text held "ticket"; sessionId = sid |} "the release of a test held at a breakpoint"
-            status |> Expect.equal (sprintf "the release of a host the debugger stopped is a 504 (%s)" body) 504
+            let lastSaid = debugger.Output.History |> List.rev |> List.truncate 12 |> List.rev |> String.concat " | "
+            status |> Expect.equal (sprintf "the release of a host the debugger stopped is a 504 (%s). The breakpoint was: %s. The debugger's last lines: %s" body bound lastSaid) 504
             text body "status" |> Expect.equal "the daemon says the host is not answering" "host_not_answering"
             text body "message" |> Expect.stringContains "the answer names the debugger that holds the host" "netcoredbg"
             let! _ = debugger.Output.Await "the stop at the breakpoint" (startsWith "stopped, reason: breakpoint") TestTimeouts.patience
@@ -355,31 +377,29 @@ let private ticketSurvivesConfirmingBuild (holds: SessionHolds) () : Task<unit> 
           status |> Expect.equal (sprintf "the REPL took the value (%s)" body) 200
         | SessionHolds.OnlyTheHeldTest -> ()
         let! workerBefore = workerPidOf http
-        let! held = holdTest http sid affectedTest
-        drain feed
-        note feed "wrote an edit to disk that compiles: the eval runs the tests, a real build confirms them"
-        File.WriteAllText(helloPath (), original.Replace(greenAdd, greenAdd + " + 0"))
-        let! _ =
-          expectFrame feed "the real build confirming the edit"
-            (fun f -> provenanceIn affectedTest f = "VerifiedByBuild") TestTimeouts.buildConfirmation
-        let! workerAfter = workerPidOf http
-        workerAfter |> Expect.equal "the build confirmed in a throwaway worker and the session's own worker was left alone" workerBefore
-        let pid = number held "pid"
-        let alive =
-          try
-            use p = Process.GetProcessById pid
-            not p.HasExited
-          with _ -> false
-        alive |> Expect.isTrue (sprintf "the host the test is held in (pid %d) is still running" pid)
-        let! debugger, _ = attachAndStop command pid
-        do!
-          ensuring (fun () -> detach debugger :> Task) (fun () ->
-            task {
-              do! resume debugger
-              let! status, body = release http sid (text held "ticket")
-              status |> Expect.equal (sprintf "the ticket held across the build still releases (%s)" body) 200
-              text body "status" |> Expect.equal "the test ran under the debugger" "attached"
-            })
+        // The debugger is attached and running through the build, as it is for a person who leaves a test held while they edit.
+        do! withAttachedHold command http sid affectedTest (fun held debugger ->
+          task {
+            do! resume debugger
+            drain feed
+            note feed "wrote an edit to disk that compiles: the eval runs the tests, a real build confirms them"
+            File.WriteAllText(helloPath (), original.Replace(greenAdd, greenAdd + " + 0"))
+            let! _ =
+              expectFrame feed "the real build confirming the edit"
+                (fun f -> provenanceIn affectedTest f = "VerifiedByBuild") TestTimeouts.buildConfirmation
+            let! workerAfter = workerPidOf http
+            workerAfter |> Expect.equal "the build confirmed in a throwaway worker and the session's own worker was left alone" workerBefore
+            let pid = number held "pid"
+            let alive =
+              try
+                use p = Process.GetProcessById pid
+                not p.HasExited
+              with _ -> false
+            alive |> Expect.isTrue (sprintf "the host the test is held in (pid %d) is still running" pid)
+            let! status, body = release http sid (text held "ticket")
+            status |> Expect.equal (sprintf "the ticket held across the build still releases (%s)" body) 200
+            text body "status" |> Expect.equal "the test ran under the debugger" "attached"
+          })
         match holds with
         | SessionHolds.AHandBoundValue ->
           let! status, body =
@@ -399,11 +419,16 @@ let debuggerKindTests =
         DebuggerKind.releaseStatus Inspector |> Expect.equal "an inspector's release ends without a debugger" "released_without_debugger"
         DebuggerKind.releaseStatus ManagedDebugger |> Expect.equal "a managed debugger's release runs the test" "attached" ]
 
+/// First in the tier's tree: it needs the tests to run from compiled code (see `breakpointHoldsTheHost`).
+let breakpointJourneyTests =
+  testList
+    "LT debug breakpoint: a test held at a breakpoint stops the host"
+    [ Integration.dedicatedCaseTask "--integration-lt" "LT debug: a test held at a breakpoint makes the release say the host is not answering, and the ticket still works after the debugger goes on" breakpointHoldsTheHost ]
+
 let journeyTests =
   testList
     "LT debug: a debugger attaches to the process the daemon holds a test in"
     [ Integration.dedicatedCaseTask "--integration-lt" "LT debug: a real debugger stops the held host, lets it go, and the release says the test ran under it" fullAttach
-      Integration.dedicatedCaseTask "--integration-lt" "LT debug: a test held at a breakpoint makes the release say the host is not answering, and the ticket still works after the debugger goes on" breakpointHoldsTheHost
       // In this order: the hand-bound value stays in the session's REPL, so the case that holds nothing else runs before it.
       Integration.dedicatedCaseTask "--integration-lt" "LT debug: a test held across a confirming build is not lost when the held test is all the session holds" (ticketSurvivesConfirmingBuild SessionHolds.OnlyTheHeldTest)
       Integration.dedicatedCaseTask "--integration-lt" "LT debug: a test held across a confirming build is not lost when the session holds a hand-bound value" (ticketSurvivesConfirmingBuild SessionHolds.AHandBoundValue) ]
