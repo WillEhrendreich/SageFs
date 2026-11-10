@@ -620,6 +620,7 @@ module WorkerProtocol =
       | WorkerMessage.RunTests _
       | WorkerMessage.GetTestDiscovery _
       | WorkerMessage.GetInstrumentationMaps _
+      | WorkerMessage.GetHostProcess _
       | WorkerMessage.RunApp _
       | WorkerMessage.StopApp _
       | WorkerMessage.AwaitAppChange _
