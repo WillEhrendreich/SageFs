@@ -74,12 +74,9 @@ let private assertProven (outcome: JS.Promise<ProofOutcome>) : JS.Promise<unit> 
 
 // ── Debugging a test through a real debug adapter ────────────────────────
 //
-// RAN ONCE, 2026-11-10, with netcoredbg 3.2.0-1092 and the shim: the extension host starts with the shim loaded, enabling live
-// testing is proven, and then this case stops at "the daemon has no discovered test to debug in this session". The proof's daemon
-// runs with SAGEFS_HOT_RELOAD=true (the hot-reload commands below need it), and with hot reload on, discovery on the FromCSharp
-// sample answers `ready_zero_tests` (the same cause the `--integration-lt` runner names for turning hot reload off), so there is no
-// row to debug. The sequence after that point has not run. A fixture whose session has tests and hot reload off is what it needs.
-// It runs the real `sagefs.debugTest` command in this extension host with a `coreclr` debug adapter that
+// It runs on its own fixture (`VscodeCommandProofTests.fs`, `ProofCase.Debug`): a daemon with hot reload off and a plain session.
+// With hot reload on, discovery on the FromCSharp sample answers `ready_zero_tests` (the same cause the `--integration-lt` runner
+// names for turning hot reload off), and the commands proof's hot-reload session had no row to debug. It runs the real `sagefs.debugTest` command in this extension host with a `coreclr` debug adapter that
 // `test-electron/coreclr-shim` contributes (it execs netcoredbg as a DAP server), and watches the daemon, not the screen:
 // the extension pauses live testing while it holds the test and resumes it once the debug session ends, so seeing the
 // pause and then the resume is the extension's whole hold, attach, release, detach sequence. Then the test's row must carry
@@ -163,13 +160,35 @@ let private debugTestSequence () : JS.Promise<unit> =
         match row with
         | Row(("Passed" | "Failed"), ("Compiled" | "Evaluated")) -> ()
         | other -> failwithf "after debugging %s its row should hold a verdict and a provenance, and holds %A" name other
+        // The rows had verdicts before the debug run, so a verdict alone proves little. A debug verdict records no duration
+        // (the host's clock ran through every breakpoint), and a normal run's verdict has one: zero says the row is the debug run's.
+        let duration =
+          after
+          |> Array.tryFind (fun e -> e.DisplayName = name)
+          |> Option.bind (fun e ->
+            match box e.Status.Fields with
+            | null -> None
+            | fields -> (fields :?> obj array) |> Array.tryHead |> Option.map string)
+        match duration with
+        | Some "00:00:00" -> ()
+        | other -> failwithf "after debugging %s its row should carry no duration (00:00:00), the mark of a debug verdict, and carries %A" name other
   }
 
-let run () : JS.Promise<unit> =
+/// The debug proof: its daemon has hot reload off and a plain session, so the sample's 11 tests are discovered (the commands
+/// proof's hot-reload session discovers none).
+let private runDebugProof () : JS.Promise<unit> =
   promise {
     let liveTesting () = getLiveTestingState (mcpPort ())
     do! proveCommandReachesState EnableLiveTesting liveTesting ((=) Enabled) "Enabled" 20 |> assertProven
     do! debugTestSequence ()
+    do! proveCommandReachesState DisableLiveTesting liveTesting ((=) Disabled) "Disabled" 20 |> assertProven
+  }
+
+/// The commands proof: its daemon has hot reload on and a HotReload session.
+let private runCommandsProof () : JS.Promise<unit> =
+  promise {
+    let liveTesting () = getLiveTestingState (mcpPort ())
+    do! proveCommandReachesState EnableLiveTesting liveTesting ((=) Enabled) "Enabled" 20 |> assertProven
     do! proveCommandReachesState DisableLiveTesting liveTesting ((=) Disabled) "Disabled" 20 |> assertProven
 
     let hotReload () = getHotReloadWatchState (dashboardPort ()) (sessionId ())
@@ -180,3 +199,9 @@ let run () : JS.Promise<unit> =
     do! proveCommandReachesState HotReloadWatchAll hotReload isSomeFilesWatched "SomeFilesWatched (at least 1)" 20 |> assertProven
     do! proveCommandReachesState HotReloadUnwatchAll hotReload ((=) NoFilesWatched) "NoFilesWatched" 20 |> assertProven
   }
+
+/// Which proof this extension host runs: the .NET runner names it in `SAGEFS_TE_CASE` (`debug` or `commands`).
+let run () : JS.Promise<unit> =
+  match NodeProcess.getEnv "SAGEFS_TE_CASE" with
+  | "debug" -> runDebugProof ()
+  | _ -> runCommandsProof ()

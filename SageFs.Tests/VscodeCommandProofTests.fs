@@ -275,7 +275,34 @@ type private Fixture = {
   SessionId: string
 }
 
-let private startDaemonWithWebLiveSession () : Fixture =
+/// The two proofs that run inside a real extension host. They need daemons that differ in one setting, so each has its own.
+/// The command proof drives the hot-reload commands and so runs a hot-reload session on a daemon with hot reload on. With hot
+/// reload on, discovery on the FromCSharp sample answers `ready_zero_tests` (the `--integration-lt` runner names the same cause), so
+/// the debug proof, which needs tests to debug, runs a plain session on a daemon with hot reload off (11 tests).
+[<RequireQualifiedAccess>]
+type private ProofCase =
+  | Commands
+  | Debug
+
+module private ProofCase =
+  let hotReloadSetting (proof: ProofCase) : string =
+    match proof with
+    | ProofCase.Commands -> "true"
+    | ProofCase.Debug -> "false"
+
+  /// The workflow the proof's session is created with, when it asks for one.
+  let workflow (proof: ProofCase) : string option =
+    match proof with
+    | ProofCase.Commands -> Some "HotReload"
+    | ProofCase.Debug -> None
+
+  /// What the extension-host suite reads (`SAGEFS_TE_CASE`) to know which of the two it is running.
+  let wire (proof: ProofCase) : string =
+    match proof with
+    | ProofCase.Commands -> "commands"
+    | ProofCase.Debug -> "debug"
+
+let private startDaemonWithWebLiveSession (proof: ProofCase) : Fixture =
   // TestPorts.reservePair scans only this tier's assigned
   // SAGEFS_TEST_PORT_RANGE when one is set, so a concurrently-running tier's
   // daemon can never win the reserve-then-bind race for this pair.
@@ -295,7 +322,7 @@ let private startDaemonWithWebLiveSession () : Fixture =
   psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
-  psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
+  psi.Environment["SAGEFS_HOT_RELOAD"] <- ProofCase.hotReloadSetting proof
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
@@ -318,10 +345,16 @@ let private startDaemonWithWebLiveSession () : Fixture =
   | true -> ()
 
   let payload =
-    JsonSerializer.Serialize(
-      {| projects = [| sampleProject |]
-         workingDirectory = sampleDir
-         workflow = "HotReload" |})
+    match ProofCase.workflow proof with
+    | Some workflow ->
+      JsonSerializer.Serialize(
+        {| projects = [| sampleProject |]
+           workingDirectory = sampleDir
+           workflow = workflow |})
+    | None ->
+      JsonSerializer.Serialize(
+        {| projects = [| sampleProject |]
+           workingDirectory = sampleDir |})
   use content = new StringContent(payload, Encoding.UTF8, "application/json")
   let createStatus = client.PostAsync("/api/sessions/create", content).GetAwaiter().GetResult()
   match createStatus.IsSuccessStatusCode with
@@ -381,7 +414,7 @@ let private stopFixture (f: Fixture) =
   try Directory.Delete(f.DataDir, true) with _ -> ()
   try Directory.Delete(f.UserDataDir, true) with _ -> ()
 
-let private runProofSuite (f: Fixture) : Task<int * string> = task {
+let private runProofSuite (proof: ProofCase) (f: Fixture) : Task<int * string> = task {
   let psi = ProcessStartInfo()
   let useVirtualDisplay = needsVirtualDisplay ()
   let! virtualDisplay =
@@ -417,11 +450,12 @@ let private runProofSuite (f: Fixture) : Task<int * string> = task {
   match VscodeExtensionTests.VscodeFixture.codeExePath with
   | Some codePath -> psi.Environment["SAGEFS_TE_VSCODE_PATH"] <- codePath
   | None -> ()
-  // The debug case in the suite needs a real debug adapter: the shim extension (netcoredbg as a coreclr adapter), offered
-  // only when netcoredbg is on this machine. Without it the case says so, or fails when SAGEFS_REQUIRE_DEBUGGER=1.
-  match findOnPath [ "netcoredbg" ] with
-  | Some _ -> psi.Environment["SAGEFS_TE_DEBUGGER_SHIM"] <- Path.Combine(vscodeExtensionDir, "test-electron", "coreclr-shim")
-  | None -> ()
+  psi.Environment["SAGEFS_TE_CASE"] <- ProofCase.wire proof
+  // The debug proof needs a real debug adapter: the shim extension (netcoredbg as a coreclr adapter). The test that runs it
+  // checks for netcoredbg first, so the shim is always offered here.
+  match proof with
+  | ProofCase.Debug -> psi.Environment["SAGEFS_TE_DEBUGGER_SHIM"] <- Path.Combine(vscodeExtensionDir, "test-electron", "coreclr-shim")
+  | ProofCase.Commands -> ()
   match virtualDisplay with
   | Some (_, display) ->
     // Point this child at our private X server, and remove the Wayland
@@ -473,32 +507,55 @@ let private missingToolsReason =
         "%s not on PATH — this environment cannot build or run the VS Code command proof. Install it, then run `npm ci` followed by `npm run compile` and `npm run compile:test-electron` in sagefs-vscode (or just re-run --integration-host, which self-provisions all three)."
         missing)
 
+let private debugProofTestName =
+  "WHY — debugging a test from VS Code, through the real sagefs.debugTest command and a real debug adapter (netcoredbg as coreclr), pauses live testing while the test is held, runs it under the debugger, and leaves its verdict and provenance on the daemon's row"
+
+/// The debug proof needs netcoredbg for its debug adapter. A machine without it fails with the install command when
+/// SAGEFS_REQUIRE_DEBUGGER=1 (the gate sets it), and otherwise says so and stops before launching a VS Code.
+let private debuggerPrerequisite () : bool =
+  match findOnPath [ "netcoredbg" ], Environment.GetEnvironmentVariable "SAGEFS_REQUIRE_DEBUGGER" = "1" with
+  | Some _, _ -> true
+  | None, true ->
+    failtest "prerequisite missing: no netcoredbg for the debug adapter shim. Fix: install netcoredbg (https://github.com/Samsung/netcoredbg/releases) and put it on PATH"
+  | None, false ->
+    printfn "SKIPPED the VS Code debug proof: no netcoredbg on this machine (install netcoredbg and put it on PATH)"
+    false
+
+/// Run one proof in a real extension host, on a daemon and a session made for it.
+let private runProof (proof: ProofCase) (label: string) : Task<unit> =
+  task {
+    // A host tier that cannot build or run this proof is red, never green: the reason names what is missing.
+    match missingToolsReason with
+    | Some reason -> failtest reason
+    | None -> ()
+
+    // Unlike the old CDP fixture (VscodeExtensionTests.VscodeFixture), this
+    // mechanism does not require a pre-existing local VS Code: if
+    // VSCODE_PATH names one it is reused (see codeExePath below), and
+    // otherwise @vscode/test-electron downloads and caches its own copy —
+    // proven working locally against a fresh download.
+    ensureFableArtifacts ()
+
+    let fixture = startDaemonWithWebLiveSession proof
+    try
+      let! exitCode, output = runProofSuite proof fixture
+      match exitCode with
+      | 0 -> ()
+      | _ ->
+        failwithf
+          "%s failed (exit %d):\n%s"
+          label exitCode output
+    finally
+      stopFixture fixture
+  }
+
 [<Tests>]
 let vscodeCommandProofTests =
-  let proofTest =
-    testTask proofTestName {
-      // A host tier that cannot build or run this proof is red, never green: the reason names what is missing.
-      match missingToolsReason with
-      | Some reason -> failtest reason
-      | None -> ()
-
-      // Unlike the old CDP fixture (VscodeExtensionTests.VscodeFixture), this
-      // mechanism does not require a pre-existing local VS Code: if
-      // VSCODE_PATH names one it is reused (see codeExePath below), and
-      // otherwise @vscode/test-electron downloads and caches its own copy —
-      // proven working locally against a fresh download.
-      ensureFableArtifacts ()
-
-      let fixture = startDaemonWithWebLiveSession ()
-      try
-        let! exitCode, output = runProofSuite fixture
-        match exitCode with
-        | 0 -> ()
-        | _ ->
-          failwithf
-            "VS Code command proof suite failed (exit %d):\n%s"
-            exitCode output
-      finally
-        stopFixture fixture
+  let proofTest = testTask proofTestName { do! runProof ProofCase.Commands "VS Code command proof suite" }
+  let debugProofTest =
+    testTask debugProofTestName {
+      match debuggerPrerequisite () with
+      | true -> do! runProof ProofCase.Debug "VS Code debug proof suite"
+      | false -> ()
     }
-  Integration.hostList "VS Code command proof" [ proofTest ]
+  Integration.hostList "VS Code command proof" [ proofTest; debugProofTest ]

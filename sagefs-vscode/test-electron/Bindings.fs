@@ -85,6 +85,8 @@ let getLivePause (mcpPort: string) (sessionId: string) : JS.Promise<LivePauseSta
 /// A union case as it is on the wire: `{ Case: "Passed", ... }`.
 type CaseResponse =
   abstract Case: string
+  /// The case's fields, when it has any: a `Passed` status carries the run's duration as its first field. Absent otherwise.
+  abstract Fields: obj array
 
 /// One row of `GET /api/live-testing/entries?session=`. `TestId` is a union on the wire, so it stays an `obj` here and is
 /// read by `ExtensionHostSuite`. `Provenance` is absent on a row that has none.
