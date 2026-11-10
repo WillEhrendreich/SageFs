@@ -111,9 +111,21 @@ module DotnetTrace =
       | false -> [ Path.Combine(search.Home, ".dotnet", "tools", file) ]
     onPath @ globalTools
 
-  /// The last few lines the tool printed, bounded, for a refusal that has to say what the tool said.
-  let tailOf (lines: string list) : string =
-    let joined = lines |> List.rev |> List.truncate 6 |> List.rev |> String.concat " | "
+  let isStackLine (line: string) : bool = line.StartsWith " " && line.TrimStart().StartsWith("at ", StringComparison.Ordinal)
+
+  /// What the tool said, bounded, for a refusal that has to say what failed. From the first line that reports an error, the
+  /// message (up to three lines) and then two lines of the stack, so a reader sees what failed before where. A tool that printed
+  /// no error says its last few lines.
+  let saidBy (lines: string list) : string =
+    let reported = lines |> List.skipWhile (fun l -> not (l.Contains "[ERROR]" || l.Contains "Exception"))
+    let parts =
+      match reported with
+      | [] -> lines |> List.filter (fun l -> not (isStackLine l) && l.Trim() <> "") |> List.rev |> List.truncate 4 |> List.rev
+      | _ ->
+        let message = reported |> List.filter (fun l -> not (isStackLine l) && l.Trim() <> "") |> List.truncate 3
+        let stack = reported |> List.filter isStackLine |> List.truncate 2 |> List.map (fun l -> l.Trim())
+        message @ stack
+    let joined = String.concat " | " parts
     match joined.Length > 400 with
     | true -> joined.Substring(0, 400) + "..."
     | false -> joined
@@ -221,7 +233,7 @@ module DotnetTraceCollector =
       match hasExited proc with
       | true ->
         removeTrace request
-        return Result.Error(ProfileFailure.HostGone(sprintf "the recorder ended on its own, which it does when the process it records ends. It said: %s" (DotnetTrace.tailOf running.Lines)))
+        return Result.Error(ProfileFailure.HostGone(sprintf "the recorder ended on its own, which it does when the process it records ends. It said: %s" (DotnetTrace.saidBy running.Lines)))
       | false ->
         terminate proc.Id
         let! stopped = waitFor running.Exited Timeouts.profileRecorderWait
@@ -237,9 +249,16 @@ module DotnetTraceCollector =
             match result with
             | Result.Ok text -> Result.Ok text
             | Result.Error(ProfileFailure.TraceUnreadable detail) ->
-              Result.Error(ProfileFailure.TraceUnreadable(sprintf "%s. The recorder said: %s" detail (DotnetTrace.tailOf running.Lines)))
+              Result.Error(ProfileFailure.TraceUnreadable(sprintf "%s. The recorder said: %s" detail (DotnetTrace.saidBy running.Lines)))
             | Result.Error other -> Result.Error other
     }
+
+  /// Put an end to a recorder that did not attach: a recorder that has already ended has said all it will, so wait for the end of
+  /// its output (no line of its message is missed), and one that is still running is killed.
+  let settle (proc: Process) : unit =
+    match hasExited proc with
+    | true -> Guarded.call ignore (fun () -> proc.WaitForExit())
+    | false -> Guarded.call ignore (fun () -> proc.Kill true)
 
   /// Start the recorder at `path` on `request.HostPid`, and answer once it says its output is open.
   let beginAt (path: string) (request: RecordingRequest) : Async<Result<ActiveRecording, ProfileFailure>> =
@@ -251,9 +270,10 @@ module DotnetTraceCollector =
         match attached, running.Attached.IsCompleted with
         | true, true -> return Result.Ok { Finish = fun () -> finish running request }
         | _ ->
-          Guarded.call ignore (fun () -> running.Process.Kill true)
+          // A recorder that has ended has said all it will: wait for the end of its output, so no line of the message is missed.
+          settle running.Process
           removeTrace request
-          return Result.Error(ProfileFailure.CouldNotAttach(sprintf "the recorder did not report an open session. It said: %s" (DotnetTrace.tailOf running.Lines)))
+          return Result.Error(ProfileFailure.CouldNotAttach(sprintf "the recorder did not report an open session. It said: %s" (DotnetTrace.saidBy running.Lines)))
     }
 
   /// Start a recording of `request.HostPid` with the installed tool.
@@ -262,7 +282,11 @@ module DotnetTraceCollector =
       match OperatingSystem.IsWindows(), locate () with
       | true, _ -> return Result.Error(ProfileFailure.NotRecordable "stopping the recorder needs a POSIX signal, which this build sends on Linux and macOS only")
       | false, None -> return Result.Error(ProfileFailure.ToolMissing(DotnetTrace.toolName, DotnetTrace.installCommand))
-      | false, Some path -> return! beginAt path request
+      | false, Some path ->
+        // A host whose temp directory is too long for its socket cannot be attached to: say that before starting the tool.
+        match DiagnosticsSocket.refusalFor request.HostPid with
+        | Some refusal -> return Result.Error refusal
+        | None -> return! beginAt path request
     }
 
   let create () : TraceCollector = { Begin = beginRecording }

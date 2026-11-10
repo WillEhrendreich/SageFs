@@ -647,7 +647,9 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
     // that runs the USER's own code, so it is the seam that matters most for an
     // external agent: a fault-injection or determinism shim reaches the code
     // under test here, not just the worker that supervises it.
-    applyToWithForwarding psi (HostAdaptation.additionalDepsEnvironment depsFile overrides @ options.Environment)
+    // The host's diagnostics socket lives in its TMPDIR and a Unix socket path holds 107 characters, so a long TMPDIR is spelled
+    // through a short link to the same directory, or the profile tool cannot find the socket (`SageFs.Features.DiagnosticsSocket`).
+    applyToWithForwarding psi (HostAdaptation.additionalDepsEnvironment depsFile overrides @ SageFs.Features.DiagnosticsSocket.hostEnvironment () @ options.Environment)
     let fail (proc: Process) (error: StartError) : Result<FsiHostSession, StartError> =
       (try proc.Kill true with _ -> ())
       deleteArgsFile ()

@@ -173,6 +173,6 @@ let traceTests =
 
       testCase "WHY - what the tool said is bounded before it goes into a refusal" <| fun _ ->
         let long = [ for i in 1 .. 50 -> String('x', 200) ]
-        (DotnetTrace.tailOf long).Length |> fun n -> (n <= 403) |> Expect.isTrue "bounded"
+        (DotnetTrace.saidBy long).Length |> fun n -> (n <= 403) |> Expect.isTrue "bounded"
     ]
   ]

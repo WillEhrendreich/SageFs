@@ -56,6 +56,18 @@ let private inSession (body: McpClient -> string -> Task<unit>) : Task<unit> =
       do! body client sid
     })
 
+/// Like `inSession`, with `environment` on the daemon (and so on its worker and the session's host).
+let private inSessionWith (environment: (string * string) list) (body: McpClient -> string -> Task<unit>) : Task<unit> =
+  task {
+    let! daemon, port = SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith environment
+    try
+      use! client = SageFs.Tests.CohortMcpToolsIntegrationTests.connect port
+      let! sid = readySession client
+      do! body client sid
+    finally
+      SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon daemon
+  }
+
 let private hotLoop =
   "let rec hotFib n = if n < 2 then n else hotFib (n - 1) + hotFib (n - 2);;\nlet total = [ for _ in 1 .. 40 -> hotFib 32 ] |> List.sum;;\nprintfn \"total=%d\" total;;"
 
@@ -86,6 +98,26 @@ let tests =
             reply |> Expect.stringContains "what was not counted is said" "Not counted above"
             reply.Length |> fun n -> (n <= 7000) |> Expect.isTrue "the reply stays bounded"
           })
+    }
+
+    testTask "profile still attaches when the daemon's TMPDIR is too long for the host's diagnostics socket" {
+      // 70 characters of directory name under the usual temp: more than the 63 a socket path leaves room for (found in the release
+      // gate, whose tier directories are 85). The host's TMPDIR is spelled through a short link, so its socket keeps its name.
+      let longTmp = Path.Combine(Path.GetTempPath(), "sagefs-profile-longtmp", Guid.NewGuid().ToString "N", String('t', 70))
+      Directory.CreateDirectory longTmp |> ignore
+      try
+        do!
+          inSessionWith [ "TMPDIR", longTmp ] (fun client sid ->
+            task {
+              let! reply = callTool client "profile" [ "agentName", box "profile-it"; "code", box hotLoop; "session_id", box sid ]
+              reply |> Expect.stringContains "the profile was made, not refused" "--- profile (cpu) ---"
+              (firstRowUnder "Methods by self time" reply |> Option.defaultValue "")
+              |> Expect.stringContains "and it names the hot function" "hotFib"
+            })
+      finally
+        Directory.Delete(Path.GetDirectoryName longTmp |> Path.GetDirectoryName, true)
+        // The link the host's TMPDIR went through now points at nothing; it is a file name to delete, in /tmp where it was made.
+        File.Delete("/tmp/" + SageFs.Features.DiagnosticsSocket.linkName longTmp)
     }
 
     testTask "profile mode=alloc names the known allocating type first, and the function that allocated it" {

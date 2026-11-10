@@ -399,6 +399,7 @@
         <Compile Include="Features\ProfileReport.fs" />
         <Compile Include="Features\ProfileTrace.fs" />
         <Compile Include="Features\ProfileNetTrace.fs" />
+        <Compile Include="Features\DiagnosticsSocket.fs" />
         <Compile Include="Features\ProfileRecorder.fs" />
         <!-- check_project's effects: the MSBuild process, the build of a stale referenced project, the overlay files and
              the same ParseAndCheckProject call the two checks above make. The decisions are ProjectCheckCore's. -->

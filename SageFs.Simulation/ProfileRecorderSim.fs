@@ -97,6 +97,7 @@ module ProfileRecorderSim =
     | ProfileFailure.StopTimedOut _ -> "StopTimedOut"
     | ProfileFailure.TraceUnreadable _ -> "TraceUnreadable"
     | ProfileFailure.NoSamples -> "NoSamples"
+    | ProfileFailure.SocketPathTooLong _ -> "SocketPathTooLong"
     | ProfileFailure.TraceTooLarge _ -> "TraceTooLarge"
 
   /// A trace of the shape the real tool writes: 30 ms of managed CPU in one method, 500 ms in native code.

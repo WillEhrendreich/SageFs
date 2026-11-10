@@ -63,6 +63,7 @@
         <Compile Include="ProfileReportTests.fs" />
         <Compile Include="ProfileTraceTests.fs" />
         <Compile Include="ProfileNetTraceTests.fs" />
+        <Compile Include="DiagnosticsSocketTests.fs" />
         <Compile Include="ReferenceCacheRetentionTests.fs" />
         <Compile Include="CompletionAnswerTests.fs" />
         <Compile Include="ReplFreshnessSurfaceTests.fs" />

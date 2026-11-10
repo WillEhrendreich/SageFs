@@ -191,6 +191,7 @@ let reportTests =
             ProfileFailure.StopTimedOut SageFs.Timeouts.profileRecorderWait
             ProfileFailure.TraceUnreadable "d"
             ProfileFailure.NoSamples
+            ProfileFailure.SocketPathTooLong("/long", 63)
             ProfileFailure.TraceTooLarge(10L, 5L) ]
         for failure in all do
           let text = ProfileFailure.describe failure

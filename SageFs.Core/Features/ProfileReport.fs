@@ -21,6 +21,9 @@ type ProfileFailure =
   | ToolMissing of tool: string * installCommand: string
   /// The tool started and could not attach to the host process.
   | CouldNotAttach of detail: string
+  /// The host's temp directory is too long for its diagnostics socket, so the runtime cut the socket's name short and no tool
+  /// can find it. `longest` is the most characters a directory may have.
+  | SocketPathTooLong of tmp: string * longest: int
   /// The host process ended while it was being recorded.
   | HostGone of detail: string
   /// The tool did not finish writing the trace in the time allowed.
@@ -62,6 +65,11 @@ module ProfileFailure =
       sprintf "profile: %s is not installed on the machine that runs the daemon. Run `%s` and ask again. Your code did not run." tool installCommand
     | ProfileFailure.CouldNotAttach detail ->
       sprintf "profile: the recorder could not attach to the session's host (%s). Your code did not run. Check get_session_status, then ask again." detail
+    | ProfileFailure.SocketPathTooLong(tmp, longest) ->
+      sprintf
+        "profile: the session's host keeps its temp directory at '%s', which is too long for its diagnostics socket (a socket path is limited to 107 characters, so the directory may have at most %d). Start the daemon with TMPDIR set to a shorter directory, create the session again, and ask again. Your code did not run."
+        tmp
+        longest
     | ProfileFailure.HostGone detail ->
       sprintf "profile: the session's host ended while it was recorded (%s). Call get_session_status, then hard_reset_fsi_session if the session is faulted." detail
     | ProfileFailure.StopTimedOut waited ->
