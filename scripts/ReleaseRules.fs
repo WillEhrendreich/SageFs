@@ -365,6 +365,27 @@ let syncCheckoutSteps (sha: string) : CheckoutSync =
   { Checkout = [ "checkout"; "--detach"; "-q"; "-f"; sha ]
     Tidy = [ [ "reset"; "--hard"; "-q" ]; [ "clean"; "-fdq" ] ] }
 
+/// Extra environment for the gate's pipeline process and what it starts, and for nothing else: `SAGEFS_PIPELINE_ENV` holds
+/// `NAME=value` entries separated by semicolons (a value may hold an equals sign). It exists so a diagnostic such as a
+/// preloaded descriptor canary can ride one gate run without reaching the daemon that `install-local` restarts from the same
+/// shell. A name is an upper-case identifier, and an entry that is not `NAME=value` is refused by name, so a typo cannot run an
+/// unmeasured gate that looks like a measured one.
+let parsePipelineEnvironment (text: string) : Result<(string * string) list, string> =
+  let validName = Regex(@"^[A-Z_][A-Z0-9_]*$")
+  let entry (raw: string) : Result<string * string, string> =
+    match raw.IndexOf '=' with
+    | at when at > 0 && validName.IsMatch(raw.Substring(0, at)) -> Ok(raw.Substring(0, at), raw.Substring(at + 1))
+    | _ -> Error(sprintf "SAGEFS_PIPELINE_ENV entry '%s' is not NAME=value with an upper-case NAME" raw)
+  text.Split([| ';' |], StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries)
+  |> Array.toList
+  |> List.fold
+    (fun acc raw ->
+      match acc, entry raw with
+      | Ok parsed, Ok one -> Ok(parsed @ [ one ])
+      | (Error _ as failed), _ -> failed
+      | Ok _, Error message -> Error message)
+    (Ok [])
+
 /// The three-line record that says who a checkout is for (repo, pid, when), which the reaper reads.
 let ownerRecord (repo: string) (pid: int) (isoNow: string) : string =
   sprintf "%s\n%d\n%s\n" repo pid isoNow

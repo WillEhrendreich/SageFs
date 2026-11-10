@@ -567,4 +567,32 @@ let syncTests =
       sync.Tidy |> List.map List.head |> Expect.equal "then it resets and cleans" [ "reset"; "clean" ]
   ]
 
+[<Tests>]
+let pipelineEnvironmentTests =
+  testList "gate pipeline environment" [
+
+    testCase "WHY — nothing set means nothing added, so an ordinary gate run is the run it always was" <| fun _ ->
+      parsePipelineEnvironment "" |> Expect.equal "empty text adds nothing" (Result.Ok [])
+      parsePipelineEnvironment "  " |> Expect.equal "blank text adds nothing" (Result.Ok [])
+
+    testCase "WHY — entries are NAME=value separated by semicolons, and a value may hold an equals sign" <| fun _ ->
+      parsePipelineEnvironment "LD_PRELOAD=/home/x/fdshim.so;FDSHIM_LOG=/home/x/gate.log;FLAGS=a=b"
+      |> Expect.equal "three entries, the third keeps its own equals sign"
+        (Result.Ok [ "LD_PRELOAD", "/home/x/fdshim.so"; "FDSHIM_LOG", "/home/x/gate.log"; "FLAGS", "a=b" ])
+
+    testCase "WHY — an entry that is not a variable name and a value is refused by name, because a typo must not silently run an unmeasured gate" <| fun _ ->
+      match parsePipelineEnvironment "GOOD=1;lower=2" with
+      | Result.Error message -> message |> Expect.stringContains "the refusal names the entry" "lower=2"
+      | Result.Ok parsed -> failtestf "expected a refusal, got %A" parsed
+      match parsePipelineEnvironment "NOEQUALS" with
+      | Result.Error message -> message |> Expect.stringContains "the refusal names the entry" "NOEQUALS"
+      | Result.Ok parsed -> failtestf "expected a refusal, got %A" parsed
+
+    testProperty "WHY — whatever is rendered as NAME=value;NAME=value reads back as the same list" <| fun (seed: int) ->
+      let names = [ "A"; "LD_PRELOAD"; "X1"; "_Y" ]
+      let entries = names |> List.mapi (fun i n -> n, sprintf "v%d=%d" i (abs seed % 1000))
+      let text = entries |> List.map (fun (n, v) -> n + "=" + v) |> String.concat ";"
+      parsePipelineEnvironment text = Result.Ok entries
+  ]
+
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant wiringTests |> ignore

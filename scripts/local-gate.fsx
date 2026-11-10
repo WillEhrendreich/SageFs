@@ -385,6 +385,13 @@ let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.Pa
   // seconds balance the sharded host tier (TierPlan.assign).
   psi.Environment["SAGEFS_TIER_HISTORY"] <- tierHistoryPath
   psi.Environment["SAGEFS_SUITE_HISTORY"] <- suiteHistoryPath
+  // A diagnostic that must reach the tiers and nothing else (a preloaded descriptor canary, say): the extra environment
+  // is applied here, to the pipeline's process, so the daemon `install-local` restarts from this shell never sees it.
+  match ReleaseRules.parsePipelineEnvironment (Environment.GetEnvironmentVariable "SAGEFS_PIPELINE_ENV" |> Option.ofObj |> Option.defaultValue "") with
+  | Result.Ok extra ->
+    for name, value in extra do
+      psi.Environment[name] <- value
+  | Result.Error message -> failwith message
   use writer = new StreamWriter(log, false, UTF8Encoding(false), AutoFlush = true)
   let gate = obj ()
   let onLine (raw: string) =
