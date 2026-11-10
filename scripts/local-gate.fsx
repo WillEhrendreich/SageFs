@@ -348,12 +348,11 @@ let prepareCheckout (sha: string) : string =
   run "git" [ "-C"; repo; "worktree"; "prune" ] repo helperTimeout |> ignore
   if not (Directory.Exists(Path.Combine(wt, ".git")) || File.Exists(Path.Combine(wt, ".git"))) then
     mustGit repo [ "-C"; repo; "worktree"; "add"; "--detach"; wt; sha; "-q" ] |> ignore
-  let sync = ReleaseRules.syncCheckoutSteps sha
-  mustGit wt sync.Checkout |> ignore
+  mustGit wt [ "checkout"; "--detach"; "-q"; sha ] |> ignore
   // Failures here were never fatal: a reset or clean that cannot finish leaves the checkout dirty, and the
   // pipeline's own stages say so.
-  for step in sync.Tidy do
-    run "git" step wt gitTimeout |> ignore
+  run "git" [ "reset"; "--hard"; "-q" ] wt gitTimeout |> ignore
+  run "git" [ "clean"; "-fdq" ] wt gitTimeout |> ignore
   wt
 
 /// Runs the pipeline in the checkout with its output merged into one stream: all of it to the log, and the

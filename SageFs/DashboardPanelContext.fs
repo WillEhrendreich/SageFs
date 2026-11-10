@@ -17,6 +17,8 @@ module DashboardRoutes =
   let [<Literal>] LiveTestingDisable = "/dashboard/live-testing/disable"
   /// The cohort panel's Seat button: `?member=<member id>`.
   let [<Literal>] CohortSeat = "/dashboard/cohort/seat"
+  /// The Panels menu's buttons: `?e=<workflow>/<edit>` (`BookEdit.token`).
+  let [<Literal>] PaneLayoutEdit = "/dashboard/layout"
 
 /// Every panel that follows the viewer's context.
 [<RequireQualifiedAccess>]

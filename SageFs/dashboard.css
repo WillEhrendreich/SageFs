@@ -1385,14 +1385,16 @@ h2 {
    cohort is running") are a list of what is not in use here, and each used to be a dashed box of its own: three of them took
    about 40% of the column and answered none of the questions a person came with. As a quiet list they say the same thing in a
    quarter of the room. The dock's collapsed bars share the class and keep their dashed look. */
-.sidebar-inner > .panel-hidden-reason {
+.sidebar-inner > .panel-hidden-reason,
+.pane-dock > .panel-hidden-reason {
   padding: 0 4px;
   border: none;
   margin-block: -0.35rem;
 }
 
 /* Each is a disclosure now ("▶ Hot reload: off"), so the triangle says it opens and the name says it is off: no bullet stands in front. */
-.sidebar-inner > .panel-hidden-reason::before {
+.sidebar-inner > .panel-hidden-reason::before,
+.pane-dock > .panel-hidden-reason::before {
   content: none;
 }
 
@@ -5927,5 +5929,169 @@ body {
   .live-dock .live-view-panel {
     max-height: none;
     flex: 0 0 auto;
+  }
+}
+
+/* ── Panels menu and the dock region (PaneMenuView.fs) ────────────────────────────────────────────────────────────────────────
+   The menu is a native <details> in the header. Its body is fixed to the viewport like the Evaluate box, so the header's own
+   overflow can never clip it and no width can push it off the screen: it is at most the viewport wide and at most the viewport
+   high less the header, and it scrolls inside that. Every size is rem, em or a percentage, and every colour is a theme token. */
+.pane-menu {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.pane-menu > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  list-style: none;
+  white-space: nowrap;
+  font-size: 0.857rem;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+}
+
+.pane-menu[open] > summary {
+  background: var(--fg-blue);
+  color: var(--bg-default);
+}
+
+.pane-menu-glyph {
+  font-size: 1.286rem;
+  line-height: 1;
+}
+
+/* The word goes where the header has no room for it: the glyph and the accessible name stay. */
+@media (width < 48.062em) {
+  .pane-menu-word {
+    display: none;
+  }
+}
+
+.pane-menu-body {
+  position: fixed;
+  z-index: 60;
+  top: var(--tabline-h);
+  right: 0;
+  width: min(32rem, 100%);
+  max-height: calc(100vh - var(--tabline-h));
+  overflow-y: auto;
+  padding: 0.75rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-focus);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pane-menu-title {
+  font-weight: 700;
+  color: var(--fg-blue);
+}
+
+.pane-menu-help,
+.pane-menu-empty {
+  font-size: 0.857rem;
+}
+
+.pane-menu-health {
+  font-size: 0.857rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-warn);
+  color: var(--fg-default);
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.pane-menu-heading {
+  font-size: 0.857rem;
+  font-weight: 700;
+  color: var(--fg-default);
+  border-bottom: 1px solid var(--border-normal);
+  padding-bottom: 0.15rem;
+}
+
+.pane-menu-list {
+  list-style: none;
+}
+
+.pane-menu-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--bg-selection);
+}
+
+.pane-menu-name {
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pane-menu-note {
+  flex: 1 1 10rem;
+  min-width: 0;
+  font-size: 0.857rem;
+  overflow-wrap: anywhere;
+}
+
+.pane-menu-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.pane-menu-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.pane-menu-btn:disabled,
+.pane-menu-btn:disabled:hover {
+  background: var(--bg-selection);
+  color: var(--fg-dim);
+  cursor: not-allowed;
+}
+
+.pane-menu-btn:focus-visible,
+.pane-menu-toggle:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* The dock region under the output: the panels the person moved here, in the order they chose. It keeps a ceiling of its own and
+   scrolls inside it, so a tall panel cannot take the transcript away. The stacked layout below has one scroll for the whole page,
+   so there the panels simply follow the output in order. */
+.pane-dock {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(30vh, 22rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border-normal);
+  background: var(--bg-panel);
+}
+
+.pane-dock > * {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+@media (width < 48.062em) {
+  .pane-dock {
+    max-height: none;
+    overflow-y: visible;
   }
 }

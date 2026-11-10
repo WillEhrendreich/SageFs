@@ -2436,7 +2436,18 @@ let renderSessionsStripMarker (view: SessionInView) : XmlNode =
 /// Implements "immediate mode HTML" — the server renders the complete page from
 /// state, sends one morph, and Datastar diffs the DOM.
 /// See: "The Tao of Datastar" — https://data-star.dev/essays/tao_of_datastar
-let renderMainContent (snap: DashboardSnapshot) : XmlNode =
+let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnapshot) : XmlNode =
+  // The node each movable panel is drawn as. One exhaustive match, so a new pane cannot be added without saying what draws it.
+  let paneNode (pane: PanelId) : XmlNode =
+    match pane with
+    | PanelId.HotReload -> snap.HotReloadPanel
+    | PanelId.LiveTesting -> snap.LiveTestingPanel
+    | PanelId.SessionContext -> snap.SessionContextPanel
+    | PanelId.Friction -> snap.FrictionPanel
+    | PanelId.AgentTeam -> snap.CohortPanel
+    | PanelId.Hygiene -> snap.HygienePanel
+  let nodesIn (region: PaneRegion) : XmlNode list =
+    PaneLayout.panes region view.Layout |> List.map paneNode
   let connectionNode =
     // Connected-clients count (browsers, agents and terminals). Lives in
     // the Sessions panel header (not floating above the panel body).
@@ -2509,6 +2520,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       Elem.div [ Attr.class' "tabline-right"; Attr.style "display:flex;align-items:center;height:100%;margin-left:auto;" ] [
         // The "more session info" toggle lives on the Sessions panel header now,
         // not up here by app-level settings — see the sidebar-header below.
+        // The Panels menu: where each movable panel sits and the buttons that move it (PaneMenuView).
+        PaneMenuView.render view
         Elem.a
           [ Attr.class' "expand-toggle-btn"
             // The session in view goes along, so "this repo" on the Settings page is that session's directory.
@@ -2604,6 +2617,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           )
         ] []
         snap.BindingsPanel
+        // The dock region: the panels the person moved here, under the output. Nothing when none is.
+        PaneMenuView.renderDock (nodesIn PaneRegion.Dock)
       ]
       // Resize handle between main area and sidebar
       Elem.div [ Attr.class' "resize-handle"; Attr.id DomIds.SidebarResize ] []
@@ -2641,18 +2656,18 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           Elem.div [ Attr.class' "panel" ] [
             snap.SessionsPanel
           ]
-          // Dynamic sidebar panels (hot reload, live testing, session context). PanelVisibility.decide has
-          // already dropped the ones that are not relevant. The bindings are in the dock.
-          snap.HotReloadPanel
-          snap.LiveTestingPanel
-          snap.SessionContextPanel
-          snap.FrictionPanel
-          snap.CohortPanel
-          snap.HygienePanel
+          // The movable panels placed in the sidebar, in the layout's order (hot reload, live testing, session context, friction,
+          // cohort, hygiene by default). PanelVisibility.decide has already dropped the ones that are not relevant. The bindings
+          // are in the dock.
+          yield! nodesIn PaneRegion.Sidebar
         ]
       ]
     ]
   ]
+
+/// The page as it was drawn before panels could move: every panel in its default place.
+let renderMainContent (snap: DashboardSnapshot) : XmlNode =
+  renderMainContentIn PaneMenuView.PaneLayoutView.today snap
 
 
 /// Decides whether a theme push is needed after a state change.

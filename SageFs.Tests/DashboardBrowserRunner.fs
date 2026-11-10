@@ -190,7 +190,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
             cliArgs
             |> Array.filter (fun a -> a <> "--integration-browser")
           let result =
-            SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-browser" browserArgv (testList "browser journeys" [ DashboardBrowserTests.tests; LiveBindingsBrowserTests.tests; OutputPanelLayoutBrowserTests.tests; DashboardStreamResilienceBrowserTests.tests; DashboardMobileBrowserTests.tests; DashboardPanelContextBrowserTests.tests; DashboardSessionSwitchOutputBrowserTests.tests; DashboardLiveBindingsDockBrowserTests.tests; DashboardLiveBindingsTweakBrowserTests.tests; LiveBindingsFreshnessBrowserTests.tests; LiveBindingsSinceGreenBrowserTests.tests; NewSessionDialogBrowserTests.tests; HygieneBrowserTests.tests; DashboardSettingsBrowserTests.tests; ReplFreshnessDashboardTests.browserTests ])
+            SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-browser" browserArgv (testList "browser journeys" [ DashboardBrowserTests.tests; LiveBindingsBrowserTests.tests; OutputPanelLayoutBrowserTests.tests; DashboardStreamResilienceBrowserTests.tests; DashboardMobileBrowserTests.tests; DashboardPanelContextBrowserTests.tests; DashboardPaneLayoutBrowserTests.tests; DashboardSessionSwitchOutputBrowserTests.tests; DashboardLiveBindingsDockBrowserTests.tests; DashboardLiveBindingsTweakBrowserTests.tests; LiveBindingsFreshnessBrowserTests.tests; LiveBindingsSinceGreenBrowserTests.tests; NewSessionDialogBrowserTests.tests; HygieneBrowserTests.tests; DashboardSettingsBrowserTests.tests; ReplFreshnessDashboardTests.browserTests ])
           exitWith result
   with ex ->
     eprintfn "Browser runner: %s" (ex.ToString())

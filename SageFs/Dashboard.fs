@@ -1053,6 +1053,23 @@ let private panelFactsFor
       | None -> 0
       | Some sid -> (FailureNarrativesPanelView.fromNarratives (q.GetFailureNarratives sid)).TotalFailureCount }
 
+/// Where the movable panels sit, for every page of this daemon: the saved layouts of its data directory (`PaneLayoutStore`). Read on
+/// every push (one stat while the file is unchanged), edited by the Panels menu's route, which then pushes every open page.
+let paneLayouts = lazy (PaneLayoutStore.Store DaemonState.SageFsDir)
+
+/// The layout a page is drawn with: the viewed session's workflow picks it, and the same facts that decided each panel's presence
+/// say what each placed panel has to say on the menu.
+let paneLayoutViewFor
+  (q: DashboardQueries)
+  (viewed: WorkerProtocol.SessionId option)
+  (facts: PanelFacts)
+  : PaneMenuView.PaneLayoutView =
+  let workflow =
+    match viewed with
+    | None -> LayoutWorkflow.NoSession
+    | Some sid -> PaneLayoutStore.ofSessionWorkflow (q.GetSessionWorkflow sid)
+  PaneMenuView.PaneLayoutView.ofRead workflow (paneLayouts.Value.Read()) facts
+
 /// The Live Bindings view this session shows: its workflow's axes, resolved across the global settings and the app's own
 /// `.SageFs/settings.json` (the session's working directory is "this app"). A session with no working directory has only the
 /// global layer.
@@ -1606,7 +1623,9 @@ let createStreamHandler
     // See SnapshotRenderGuard above for why this is safe alongside the
     // byte-compare (`lastPushedMain`) guard, which stays as a cheap,
     // independent safety net right before the send.
-    let mutable renderMemory : SnapshotRenderGuard.RenderMemory<DashboardSnapshot> = SnapshotRenderGuard.RenderMemory.initial
+    // The panel layout is part of what a tick draws, so it is part of what the guard compares: a layout edit with an unchanged
+    // snapshot must still render.
+    let mutable renderMemory : SnapshotRenderGuard.RenderMemory<DashboardSnapshot * PaneMenuView.PaneLayoutView> = SnapshotRenderGuard.RenderMemory.initial
     // Worker-data cache: the three worker HTTP fetches (eval stats, hot-reload
     // state, warmup context) are the dominant per-push cost. In poll mode
     // (StateChanged = None) pushState fires every second; reusing the last
@@ -1726,17 +1745,19 @@ let createStreamHandler
         // ever made one — defaults to Recent for a tab that hasn't.
         let previousSort = previousSessionSortByClient.Find(clientId, PreviousSessionSort.Recent)
         let! snapRaw = buildNoSessionSnapshotWithSessionsSorted q infra liveSessions previousSort
+        let facts = panelFactsFor q infra None clientId
         let snap =
           applyCohortViewing infra currentCohortViewingSeq snapRaw
-          |> PanelVisibility.apply (panelFactsFor q infra None clientId)
+          |> PanelVisibility.apply facts
           |> DashboardNewSession.apply clientId
-        match SnapshotRenderGuard.decide renderMemory snap with
+        let layoutView = paneLayoutViewFor q None facts
+        match SnapshotRenderGuard.decide renderMemory (snap, layoutView) with
         | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
         | SnapshotRenderGuard.Decision.Render newMemory ->
           renderMemory <- newMemory
           // Render once: the node built here is reused for the patch below
           // instead of calling renderMainContent a second time.
-          let mainNode = renderMainContent snap
+          let mainNode = renderMainContentIn layoutView snap
           let mainHtml = renderNode mainNode
           match mainHtml = lastPushedMain with
           | true -> () // no-change tick — nothing to send
@@ -1763,10 +1784,12 @@ let createStreamHandler
             FrictionOptIn = frictionOptInFor clientId
             Look = pageLookOf clientId }
       let snapRaw, newSessionId, newThemeName = built.Snapshot, built.SessionId, built.ThemeName
+      let facts = panelFactsFor q infra (Some newSessionId) clientId
       let snap =
         applyCohortViewing infra currentCohortViewingSeq snapRaw
-        |> PanelVisibility.apply (panelFactsFor q infra (Some newSessionId) clientId)
+        |> PanelVisibility.apply facts
         |> DashboardNewSession.apply clientId
+      let layoutView = paneLayoutViewFor q (Some newSessionId) facts
       match cached with
       | None ->
         // This push performed the expensive fetches — record them so the next
@@ -1807,7 +1830,7 @@ let createStreamHandler
       // Render only when the snapshot actually changed for THIS connection
       // (SnapshotRenderGuard): renderMainContent/renderNode never run for a
       // tick whose content is identical to what was last rendered here.
-      match SnapshotRenderGuard.decide renderMemory snap with
+      match SnapshotRenderGuard.decide renderMemory (snap, layoutView) with
       | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
       | SnapshotRenderGuard.Decision.Render newMemory ->
         renderMemory <- newMemory
@@ -1815,7 +1838,7 @@ let createStreamHandler
         // ticks with no state movement) send zero payload bytes. The node
         // built here is reused for the patch below instead of calling
         // renderMainContent a second time.
-        let mainNode = renderMainContent snap
+        let mainNode = renderMainContentIn layoutView snap
         let mainHtml = renderNode mainNode
         match mainHtml = lastPushedMain with
         | true -> () // no-change tick — nothing to send
@@ -2059,12 +2082,13 @@ let createEvalHandler
           let snapRaw = built.Snapshot
           // Same panel visibility the stream uses, so this morph and the next
           // stream push agree on which panels exist.
+          let facts = panelFactsFor q infra (Some sessionId) (clientIdFromSignals doc)
           let snap =
-            PanelVisibility.apply (panelFactsFor q infra (Some sessionId) (clientIdFromSignals doc)) snapRaw
+            PanelVisibility.apply facts snapRaw
             |> DashboardNewSession.apply (clientIdFromSignals doc)
           // DIAGNOSTIC: log output panel HTML to verify content is present.
           // Render once — the node built here is reused for the patch below.
-          let mainNode = renderMainContent snap
+          let mainNode = renderMainContentIn (paneLayoutViewFor q (Some sessionId) facts) snap
           let mainHtml = renderNode mainNode
           Log.info "[eval-POST] mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
           do! ssePatchNode ctx mainNode
@@ -3689,6 +3713,27 @@ let replaceRequestVerdict
 /// refuses another site, and the click that sent the request asked the person first. A process that can read the dashboard can
 /// read a ticket out of it, so this route is no stronger than the dashboard's other open routes; what it refuses is a blind,
 /// replayed or stale request. What happened, and why not when it did not, is said on the page.
+/// The Panels menu's route: one edit of the saved panel layouts (`?e=<workflow>/<edit>`, `BookEdit.token`). The edit is decided by
+/// `LayoutBook.writesFor` against the file as it is now, saved through the settings layer store, and then every open page is pushed,
+/// so each one draws the new layout in the same morph that carries everything else. The route draws nothing of its own. A request
+/// that is not an edit, or a save that fails, is said to the person who clicked.
+let createPaneLayoutEditHandler (infra: DashboardInfra) : HttpHandler =
+  fun ctx -> task {
+    Response.sseStartResponse ctx |> ignore
+    let text =
+      match ctx.Request.Query.TryGetValue "e" with
+      | true, values when values.Count > 0 -> string values.[0]
+      | _ -> ""
+    match BookEdit.parse text with
+    | Result.Error refusal ->
+      do! ActionResult.patch ctx (ActionOutcome.Failure(sprintf "Panels: %s." (LayoutRefusal.describe refusal)))
+    | Result.Ok edit ->
+      match paneLayouts.Value.Edit edit with
+      | Result.Ok() -> infra.TriggerStateChange()
+      | Result.Error why ->
+        do! ActionResult.patch ctx (ActionOutcome.Failure(sprintf "The panel layout could not be saved: %s" (ConfigError.describe why)))
+  }
+
 let createCohortSeatHandler (infra: DashboardInfra) : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -3742,8 +3787,9 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
     let noSessionPage () =
       task {
         let! snapRaw = buildNoSessionSnapshot q infra
-        let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw |> DashboardNewSession.apply clientId
-        return renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
+        let facts = panelFactsFor q infra None clientId
+        let snap = PanelVisibility.apply facts snapRaw |> DashboardNewSession.apply clientId
+        return renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContentIn (paneLayoutViewFor q None facts) snap)
       }
     try
       let! sessions = q.GetAllSessions ()
@@ -3762,8 +3808,9 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
               FrictionOptIn = frictionOptInFor clientId
               Look = PageState.PageLook.onAll }
         let snapRaw, resolvedId = built.Snapshot, built.SessionId
-        let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw |> DashboardNewSession.apply clientId
-        return renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
+        let facts = panelFactsFor q infra (Some resolvedId) clientId
+        let snap = PanelVisibility.apply facts snapRaw |> DashboardNewSession.apply clientId
+        return renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContentIn (paneLayoutViewFor q (Some resolvedId) facts) snap)
       | None ->
         return! noSessionPage ()
     with _ ->
@@ -4025,6 +4072,7 @@ let createEndpoints
     yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
     yield post "/dashboard/cohort/scrub" (createCohortScrubHandler infra)
     yield post "/dashboard/cohort/seat" (createCohortSeatHandler infra)
+    yield post "/dashboard/layout" (createPaneLayoutEditHandler infra)
     // The route scan reads these as literals; `DashboardRoutes` holds the same strings for the buttons that post to them, and a
     // test (`DashboardPanelVisibilityTests`) fails when the two disagree.
     yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)

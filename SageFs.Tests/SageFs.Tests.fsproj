@@ -978,6 +978,7 @@
         <Compile Include="HotReloadParityTests.fs" />
         <Compile Include="RunAppDeltaHarness.fs" />
         <Compile Include="RunAppDeltaTests.fs" />
+        <Compile Include="PaneLayoutSimDstTests.fs" />
         <Compile Include="HostConcurrencyTests.fs" />
         <Compile Include="RealFSharpDeltaTests.fs" />
         <Compile Include="HotReloadDebuggerTests.fs" />
@@ -1008,6 +1009,10 @@
         <Compile Include="ErrorNumberClassificationTests.fs" />
         <Compile Include="CohortPropertyTests.fs" />
         <Compile Include="EvalLatencyTraceTests.fs" />
+        <!-- Movable panels: the pure layout and its store, the page drawn from a layout, then the browser matrix (before the runner, which lists it). -->
+        <Compile Include="PaneLayoutTests.fs" />
+        <Compile Include="PaneMenuViewTests.fs" />
+        <Compile Include="DashboardPaneLayoutBrowserTests.fs" />
         <Compile Include="SessionManagerBuildSemaphoreTests.fs" />
         <Compile Include="WorkerForceKillTests.fs" />
         <Compile Include="CohortTestProjectionTests.fs" />

@@ -355,16 +355,6 @@ let checkoutName (repoPath: string) : string =
   let hash = SHA1.HashData(Encoding.UTF8.GetBytes repoPath)
   "checkout-" + (Convert.ToHexString hash).ToLowerInvariant().Substring(0, 8)
 
-/// The git commands that bring the gate's persistent checkout to a commit. The checkout is the gate's own and nobody's
-/// work lives in it, so the checkout is forced: a plain one refused when the index had lost files its HEAD still had
-/// (the plan files showed as staged deletions and untracked at once) and the gate died before it ran anything. The tidy
-/// steps follow it and may fail without stopping the run; the checkout may not.
-type CheckoutSync = { Checkout: string list; Tidy: string list list }
-
-let syncCheckoutSteps (sha: string) : CheckoutSync =
-  { Checkout = [ "checkout"; "--detach"; "-q"; "-f"; sha ]
-    Tidy = [ [ "reset"; "--hard"; "-q" ]; [ "clean"; "-fdq" ] ] }
-
 /// The three-line record that says who a checkout is for (repo, pid, when), which the reaper reads.
 let ownerRecord (repo: string) (pid: int) (isoNow: string) : string =
   sprintf "%s\n%d\n%s\n" repo pid isoNow

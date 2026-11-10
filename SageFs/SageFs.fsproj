@@ -131,6 +131,8 @@
         <Compile Include="EvaluatePopover.fs" />
         <Compile Include="NewSessionDialog.fs" />
         <Compile Include="NewSessionDiscovery.fs" />
+        <!-- The Panels menu and the dock region for moved panels: markup over a PaneLayoutView, before DashboardFragments, which places the panels it names. -->
+        <Compile Include="PaneMenuView.fs" />
     <Compile Include="DashboardFragments.fs" />
     <!-- After DashboardFragments (textEnc/testid) and DockPanes (the decision it draws). -->
     <Compile Include="AppOutputView.fs" />
