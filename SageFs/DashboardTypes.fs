@@ -1703,6 +1703,10 @@ type DashboardInfra = {
   /// route that calls it runs only for a request that came from this page in a browser; the answer is a sentence for the
   /// person, success or refusal alike.
   SeatConductor: string -> Threading.Tasks.Task<Result<string, string>>
+  /// Replace the holder of the bound conductor seat (the second name, as `get_cohort_status` prints it) with the member named
+  /// first. Called under the same conditions as `SeatConductor`, for a Replace button's click with the ticket issued for that
+  /// pair. A holder that is no longer the holder is refused with the seat as it stands.
+  ReplaceConductor: string -> string -> Threading.Tasks.Task<Result<string, string>>
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.

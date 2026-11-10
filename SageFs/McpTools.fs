@@ -2843,27 +2843,30 @@ OUTPUT: Confirmation naming the new conductor, or a refusal: not conductor, vaca
         |> withEchoOutcome ctx "delegate_conductor"
 
     [<McpServerTool>]
-    [<Description("""Ask for an EMPTY conductor seat to be filled. The daemon asks the PERSON at your client (MCP elicitation), naming the repository, the member and why the seat is empty; only an explicit yes seats anyone. A decline, silence or a client that cannot be asked is refused and nothing changes. Not callable under a member token.
+    [<Description("""Ask for an EMPTY conductor seat to be filled, or a silent holder replaced. The daemon asks the PERSON at your client (MCP elicitation), naming the repository, the member and the seat; only an explicit yes changes it. A decline, silence or a client that cannot be asked is refused and nothing changes. Not callable under a member token.
 
-WHEN TO USE: get_cohort_status says the seat is vacant and work needs a conductor. toMember defaults to you.
+WHEN TO USE: get_cohort_status says the seat is vacant or its holder is silent. toMember defaults to you; replaces names the holder.
 
-OUTPUT: who is the conductor now, or the refusal and the other routes ('sagefs cohort seat', the dashboard's Seat button).""")>]
+OUTPUT: who is the conductor now, or the refusal and the other routes.""")>]
     member _.seat_conductor(
         [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The member to seat, as get_cohort_status prints it; defaults to you.")>]
         [<Optional; DefaultParameterValue("")>]
         toMember: string,
+        [<Description("The holder to replace, as get_cohort_status prints it. Blank fills an empty seat.")>]
+        [<Optional; DefaultParameterValue("")>]
+        replaces: string,
         [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
-        logger.LogDebug("MCP-TOOL: seat_conductor called by {AgentName}, to={ToMember}", agentName, toMember)
+        logger.LogDebug("MCP-TOOL: seat_conductor called by {AgentName}, to={ToMember}, replaces={Replaces}", agentName, toMember, replaces)
         task {
           let wd =
             if System.String.IsNullOrWhiteSpace working_directory then None
             else Some working_directory
-          let! result = SageFs.McpSeating.run ctx agentName toMember wd
+          let! result = SageFs.McpSeating.run ctx agentName toMember replaces wd
           return
             match result with
             | Ok text -> text, None

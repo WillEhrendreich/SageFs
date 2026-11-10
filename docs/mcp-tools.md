@@ -686,7 +686,7 @@ daemon's own cohort instead of the one the call acts in. If you see that text, t
 | `release_claim` | Release a claim you hold. The presented fence must match the current one. |
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
 | `delegate_conductor` | Conductor-only: hand the conductor seat to another **present** member. Only a sitting conductor can issue it, so it cannot fill an empty seat. Refused with the roster of present members when the target is not here, when it is yourself, and when it acts under a member token (no token may call the conductor's tools, so the seat would be stranded). |
-| `seat_conductor` | Ask for an **empty** conductor seat to be filled. The daemon asks the person at your client through MCP elicitation, naming the repository, who is asking, who would sit and in what role, who held the seat and why it is empty, and seats nobody without an explicit yes. `toMember` names the member (default: you). A decline, a dismissal, silence, a failed question and a client that offers no elicitation all refuse and change nothing, and the refusal names `sagefs cohort seat` and the dashboard's Seat button. A seated Implementer calls it; it is never callable under a member token, and a member under a token is never the one seated. |
+| `seat_conductor` | Ask for an **empty** conductor seat to be filled, or for a holder whose connection is gone to be replaced. The daemon asks the person at your client through MCP elicitation, naming the repository, who is asking, who would sit and in what role, and either who held the seat and why it is empty or, with `replaces`, who holds it and how long it has been silent, and changes the seat only on an explicit yes. `toMember` names the member (default: you). `replaces` names the holder, as `get_cohort_status` prints it, and is refused (with the actual holder named, and nobody asked) when that member does not hold the seat; blank fills an empty seat. A decline, a dismissal, silence, a failed question and a client that offers no elicitation all refuse and change nothing, and the refusal names `sagefs cohort seat` and the dashboard's Seat and Replace buttons. A seated Implementer calls it; it is never callable under a member token, and a member under a token is never the one seated. |
 | `request_landing` | Queue a landing: your commits are rebased onto the integration head, verified against affected tests, and fast-forwarded in. Landings are strictly serial (one FIFO queue). |
 | `withdraw_landing` | Take back a landing **you** requested, in any state short of landed or already withdrawn (a vetoed one included). Nobody else can withdraw it, the conductor included. |
 | `veto_landing` | Object to a **live** landing (queued, rebasing or verifying) with a reason. It is blocked, awaiting the conductor, and leaves the queue so it holds nobody behind it. Allowed for a seated Implementer, Verifier or the conductor; refused for an Observer, for someone who never joined and for a member who left. A landing that landed, was withdrawn, is blocked for another reason or is already vetoed is refused, and the first veto and its reason stand. |
@@ -715,7 +715,8 @@ explores every command against every landing and target, with a twin for each ru
   nothing in the tool surface fills one: delegating needs a conductor to do it, and nobody gets promoted by a
   timer. A person seats one with `sagefs cohort seat <member id>` (see "Seat a conductor" below). A seat that is held
   by a conductor whose connection is gone is replaced by a person too, with `sagefs cohort seat <member id> --replace
-  <holder id>` (see "Replace a conductor whose connection is gone" below). No tool does either.
+  <holder id>`, or by a seated member who asks with `seat_conductor` and `replaces` and a person who says yes (see
+  "Replace a conductor whose connection is gone" below). No tool does either without that yes.
 - **One conductor at a time.** The seat is a single binding. A delegation moves it from the caller to a present
   member in one step and the caller is an ordinary member after. A target who isn't present gets refused with
   the list of members who are. A member acting under a token can't take the seat, because no token may call
@@ -882,9 +883,26 @@ seat <member id> --replace X`), and so does the dashboard's cohort panel. A hold
 and the refusal says it renewed its lease lately, so a live conductor is not replaced by habit.
 
 It is the same route and the same operator credential: `POST /api/cohort/seat` takes an optional `"replace": "mcp:m-..."`
-in the body. No MCP tool builds a `ReplaceConductor` and no member token reaches the route. The credential is a file the
-operating-system user can read, so a process running as that user can replace a conductor; replacing one by asking the
-person at a client is the `seat-replace-by-asking` item.
+in the body. No member token reaches the route. The credential is a file the operating-system user can read, so a process
+running as that user can replace a conductor.
+
+Two more ways to replace one need no shell, and both put the question to a person first.
+
+By asking, in the tool. A seated member calls `seat_conductor` with `replaces` set to the holder's member id. The daemon asks
+the person at that member's client the same question as for an empty seat, and names the holder and how long it has been
+silent (or says it renewed its lease a few minutes ago, so a live conductor is not replaced by habit). Only an accept with the
+box ticked changes the seat, and the command is `ReplaceConductor`, built from a `SeatApproval` that carries the holder the
+person was shown. Only `SeatingFlow.ask` makes an approval, so no agent can replace a conductor on its own say-so. The cohort's
+own compare-and-swap on the holder still applies when the command commits: a seat that changed hands while the person read the
+question is refused, and the refusal names the new holder. A `replaces` that is not the holder, an empty seat, the holder
+replacing itself, a caller under a token and a target under a token are refused before anybody is asked.
+
+By clicking, on the dashboard. When the holder is silent, the cohort panel shows a Replace button for each present member who
+is neither the holder nor under a token ("Replace mcp:m-aaaa with mcp:m-bbbb"), after a native confirmation that names the
+holder and how long it has been silent. The click posts to `/dashboard/cohort/seat` with `replace=<holder>` and a one-use
+ticket the page was rendered with, issued for that pair of holder and member. A ticket for another pair, for a Seat button, a
+used one, an expired one and a request without the browser's `Sec-Fetch-Site: same-origin` header are refused, as for Seat.
+The same limit holds: the dashboard has no credential, so a process that can load the page can read a ticket out of it.
 
 **Route.** Every token names the one place it may act, and you say where with
 exactly one of two parameters:

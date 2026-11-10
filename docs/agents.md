@@ -211,7 +211,8 @@ stream closed, so the client showed the server as disconnected until someone rel
   keeps the seat until its lease lapses, 30 minutes after it went silent. You do not have to wait: `sagefs cohort seat
   <member id> --replace <holder id>` on the machine that runs the daemon puts a present member in the seat, and the
   holder becomes an ordinary member. `get_cohort_status` and the dashboard say when the holder is silent and print the
-  command. No MCP tool does it, so an agent cannot unseat a conductor. See "Replace a conductor whose connection is gone" in
+  command. A seated member can also call `seat_conductor` with `replaces` set to the holder; the person at its client is asked,
+  and only their yes unseats the conductor, so an agent cannot do it on its own say-so. See "Replace a conductor whose connection is gone" in
   [mcp-tools.md](mcp-tools.md#cohort-and-multi-agent-coordination).
 - The bridge waits for the old daemon's replacement for up to a minute on a fast machine (`Timeouts.stdioBridgeReconnectWait`,
   longer on a slower one). After that it starts a daemon itself, the way it does when it finds none at

@@ -3622,6 +3622,8 @@ module FetchSite =
 [<RequireQualifiedAccess>]
 type SeatRequestRefusal =
   | NoMemberNamed
+  /// A replacement named no holder.
+  | NoHolderNamed
   | NotFromABrowser
   | Ticket of SeatNonces.NonceRefusal
 
@@ -3631,6 +3633,7 @@ module SeatRequestRefusal =
     let tail = "Reload the page and click Seat again, or run 'sagefs cohort seat' from a shell."
     match refusal with
     | SeatRequestRefusal.NoMemberNamed -> "Nothing was done: no member was named."
+    | SeatRequestRefusal.NoHolderNamed -> "Nothing was done: no holder was named, so there is nobody to replace."
     | SeatRequestRefusal.NotFromABrowser ->
       sprintf "Nothing was done: the conductor seat is filled by clicking Seat on this page. %s" tail
     | SeatRequestRefusal.Ticket why ->
@@ -3654,6 +3657,21 @@ let seatRequestVerdict
   | false, FetchSite.Unrecognized _
   | false, FetchSite.NotSent -> Result.Error SeatRequestRefusal.NotFromABrowser
 
+/// What the Seat route lets through for a REPLACEMENT: a member and a holder named, the browser's header, and a ticket this
+/// daemon issued for that pair's Replace button, unused and unexpired. A ticket for another pair, or for a Seat button, is
+/// refused.
+let replaceRequestVerdict
+  (tickets: SeatNonces.Store)
+  (site: FetchSite)
+  (memberName: string)
+  (holderName: string)
+  (nonce: string)
+  : Result<unit, SeatRequestRefusal> =
+  match System.String.IsNullOrWhiteSpace memberName, System.String.IsNullOrWhiteSpace holderName with
+  | true, _ -> Result.Error SeatRequestRefusal.NoMemberNamed
+  | false, true -> Result.Error SeatRequestRefusal.NoHolderNamed
+  | false, false -> seatRequestVerdict tickets site (SeatNonces.replaceSubject holderName memberName) nonce
+
 /// `POST /dashboard/cohort/seat?member=<id>&nonce=<ticket>`: the cohort panel's Seat button. Runs for a request that passes
 /// `seatRequestVerdict`: the ticket the page was rendered with, spent once. The origin guard in front of every route already
 /// refuses another site, and the click that sent the request asked the person first. A process that can read the dashboard can
@@ -3671,10 +3689,19 @@ let createCohortSeatHandler (infra: DashboardInfra) : HttpHandler =
       | true, values when values.Count > 0 -> (string values.[0]).Trim()
       | _ -> ""
     let name = queryValue "member"
-    match seatRequestVerdict SeatNonces.shared (FetchSite.ofHeader secFetchSite) name (queryValue "nonce") with
+    let site = FetchSite.ofHeader secFetchSite
+    // `replace=<holder>` makes the click a REPLACEMENT: its ticket was issued for the pair, and the seat must still be
+    // that holder's when the command commits. Without it the click fills an empty seat.
+    let verdict, act =
+      match ctx.Request.Query.ContainsKey "replace" with
+      | true ->
+        let holder = queryValue "replace"
+        replaceRequestVerdict SeatNonces.shared site name holder (queryValue "nonce"), (fun () -> infra.ReplaceConductor name holder)
+      | false -> seatRequestVerdict SeatNonces.shared site name (queryValue "nonce"), (fun () -> infra.SeatConductor name)
+    match verdict with
     | Result.Error refusal -> do! ActionResult.patch ctx (ActionOutcome.Failure(SeatRequestRefusal.describe refusal))
     | Result.Ok() ->
-      let! outcome = infra.SeatConductor name
+      let! outcome = act ()
       do! ActionResult.patch ctx (match outcome with Ok text -> ActionOutcome.Success text | Error text -> ActionOutcome.Failure text)
   }
 

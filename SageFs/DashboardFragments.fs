@@ -3188,12 +3188,13 @@ let private cohortLandingStateLabel (state: SageFs.Cohort.LandingState<MemberTab
 /// never a `Map` walk.
 ///
 /// `silence` is the standing of the conductor seat's holder, which a frame cannot say (it carries no lease): a holder
-/// that went silent is named in the seat line with the command that replaces it (text only; a button for it comes with
-/// the `seat-replace-by-asking` item, which takes the replace mode and the person's yes). `now` is the clock the silence
-/// is measured against.
+/// that went silent is named in the seat line with the command that replaces it, and each present member who could take the
+/// seat gets a Replace button whose ticket is issued for that pair of holder and member. `now` is the clock the silence is
+/// measured against.
 ///
-/// `seatTicket` gives the one-use ticket a member's Seat button carries (`SeatNonces.Store.Issue`). It is a parameter so
-/// this stays a render over its inputs: the caller decides which store the tickets come from.
+/// `seatTicket` gives the one-use ticket a button carries (`SeatNonces.Store.Issue`): for a Seat button the member's name,
+/// for a Replace button `SeatNonces.replaceSubject holder member`. It is a parameter so this stays a render over its inputs:
+/// the caller decides which store the tickets come from.
 let rec renderCohortPanelCore
   (seatTicket: string -> string)
   (silence: Features.CohortStatusText.HolderSilence)
@@ -3285,6 +3286,44 @@ let rec renderCohortPanelCore
             let holderId = MemberTable.MemberId.display holder
             Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
               textEnc (sprintf "Conductor %s is %s. A person can replace it: %s" holderId (Features.CohortStatusText.HolderSilence.text now silence) (Features.CohortStatusText.replaceCommandText "<member id>" holderId))
+            ]
+            // One Replace button per present member who is neither the holder nor under a token (the cohort refuses both).
+            // Its ticket is issued for the pair, so the click replaces exactly the holder this page shows, and the cohort
+            // checks the seat is still that holder's when the command commits. The click asks first, naming the holder.
+            let silentText = Features.CohortStatusText.HolderSilence.text now silence
+            let inHolderScript = holderId.Replace("\\", "\\\\").Replace("'", "\\'")
+            Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
+              for i in 0 .. frame.MemberIds.Length - 1 do
+                match frame.MemberSeat.[i], frame.MemberIds.[i] with
+                | SageFs.Cohort.SeatState.Present, (MemberTable.MemberId.Capability _) -> ()
+                | SageFs.Cohort.SeatState.Present, who when who <> holder ->
+                  let name = MemberTable.MemberId.display who
+                  let inScript = name.Replace("\\", "\\\\").Replace("'", "\\'")
+                  let ticket = seatTicket (SeatNonces.replaceSubject holderId name)
+                  Elem.button
+                    [ Attr.class' "eval-btn"
+                      Attr.style "font-size: 0.857rem; flex: 0 1 auto; overflow-wrap: anywhere;"
+                      testid "cohort-replace"
+                      Attr.create "data-member" name
+                      Attr.create "data-holder" holderId
+                      Ds.onEvent
+                        ("click",
+                         sprintf
+                           "if(confirm('Replace conductor %s (%s) with %s? The conductor mints member tokens, configures the integration and reassigns claims. %s stays a member and keeps its claims.')){%s}"
+                           inHolderScript
+                           (silentText.Replace("\\", "\\\\").Replace("'", "\\'"))
+                           inScript
+                           inHolderScript
+                           (Ds.post
+                             (sprintf
+                               "%s?member=%s&replace=%s&nonce=%s"
+                               DashboardRoutes.CohortSeat
+                               (System.Uri.EscapeDataString name)
+                               (System.Uri.EscapeDataString holderId)
+                               (System.Uri.EscapeDataString ticket)))) ]
+                    [ textEnc (sprintf "Replace %s with %s" holderId name) ]
+                | SageFs.Cohort.SeatState.Present, _
+                | SageFs.Cohort.SeatState.Departed _, _ -> ()
             ]
           | Features.CohortStatusText.HolderSilence.NotSilent -> ()
         | SageFs.Cohort.ConductorBinding.NeverBound -> ()

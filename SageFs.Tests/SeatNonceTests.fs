@@ -197,3 +197,66 @@ let renderTests =
       html |> Expect.stringContains "the post names the member" "member=bob"
       html |> Expect.stringContains "and carries the ticket issued for that member, escaped" "nonce=T%2Fbob"
   ]
+
+[<Tests>]
+let replaceTicketTests =
+  testList "Replace tickets: one use, for one pair of holder and member" [
+
+    testCase "WHY - a ticket for one pair does not replace another pair, and the attempt spends it" <| fun _ ->
+      let c = fresh ()
+      let ticket = c.Store.Issue(replaceSubject "alice" "bob")
+      c.Store.Redeem(ticket, replaceSubject "alice" "carol") |> refusalOf |> Expect.equal "another member" (Some NonceRefusal.ForAnotherMember)
+      c.Store.Redeem(ticket, replaceSubject "alice" "bob") |> refusalOf |> Expect.equal "and the guess cost the ticket" (Some NonceRefusal.NotIssuedOrUsed)
+
+    testCase "WHY - a ticket for the same member under another holder does not replace that holder" <| fun _ ->
+      let c = fresh ()
+      let ticket = c.Store.Issue(replaceSubject "alice" "bob")
+      c.Store.Redeem(ticket, replaceSubject "vera" "bob") |> refusalOf |> Expect.equal "the holder is part of the pair" (Some NonceRefusal.ForAnotherMember)
+
+    testCase "WHY - a Seat ticket does not replace anyone, and a Replace ticket does not seat anyone" <| fun _ ->
+      let c = fresh ()
+      let seat = c.Store.Issue "bob"
+      c.Store.Redeem(seat, replaceSubject "alice" "bob") |> refusalOf |> Expect.equal "a seat ticket is not a replace ticket" (Some NonceRefusal.ForAnotherMember)
+      let replace = c.Store.Issue(replaceSubject "alice" "bob")
+      c.Store.Redeem(replace, "bob") |> refusalOf |> Expect.equal "a replace ticket is not a seat ticket" (Some NonceRefusal.ForAnotherMember)
+
+    testProperty "WHY - two different pairs never share a subject, whatever characters the names hold" <| fun (a: string, b: string, c: string, d: string) ->
+      let one = (string a, string b)
+      let other = (string c, string d)
+      (replaceSubject (fst one) (snd one) = replaceSubject (fst other) (snd other)) = (one = other)
+
+    testCase "WHY - a name holding the separator cannot make one pair look like another" <| fun _ ->
+      replaceSubject "a|b" "c" |> Expect.notEqual "split in another place" (replaceSubject "a" "b|c")
+      replaceSubject "a" "b" |> Expect.notEqual "and a seat's own subject" "a"
+
+    testCase "WHY - the right header and no ticket is refused for a replacement too" <| fun _ ->
+      let c = fresh ()
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.SameOrigin "bob" "alice" ""
+      |> Expect.equal "refused for want of a ticket" (Result.Error(Dashboard.SeatRequestRefusal.Ticket NonceRefusal.Missing))
+
+    testCase "WHY - a good ticket for the pair, with the browser's header, is let through once" <| fun _ ->
+      let c = fresh ()
+      let ticket = c.Store.Issue(replaceSubject "alice" "bob")
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.SameOrigin "bob" "alice" ticket |> Expect.equal "the page's own request" (Result.Ok())
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.SameOrigin "bob" "alice" ticket
+      |> Expect.equal "replayed" (Result.Error(Dashboard.SeatRequestRefusal.Ticket NonceRefusal.NotIssuedOrUsed))
+
+    testCase "WHY - a ticket for another pair is refused for this one" <| fun _ ->
+      let c = fresh ()
+      let ticket = c.Store.Issue(replaceSubject "alice" "carol")
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.SameOrigin "bob" "alice" ticket
+      |> Expect.equal "refused" (Result.Error(Dashboard.SeatRequestRefusal.Ticket NonceRefusal.ForAnotherMember))
+
+    testCase "WHY - a good ticket without the header is refused, and keeps the ticket for the page that has it" <| fun _ ->
+      let c = fresh ()
+      let ticket = c.Store.Issue(replaceSubject "alice" "bob")
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.NotSent "bob" "alice" ticket
+      |> Expect.equal "not the page's own request" (Result.Error Dashboard.SeatRequestRefusal.NotFromABrowser)
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.SameOrigin "bob" "alice" ticket |> Expect.equal "the page's own request" (Result.Ok())
+
+    testCase "WHY - no member or no holder named is refused first, with a sentence that says nothing was done" <| fun _ ->
+      let c = fresh ()
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.SameOrigin " " "alice" "x" |> Expect.equal "no member" (Result.Error Dashboard.SeatRequestRefusal.NoMemberNamed)
+      Dashboard.replaceRequestVerdict c.Store Dashboard.FetchSite.SameOrigin "bob" " " "x" |> Expect.equal "no holder" (Result.Error Dashboard.SeatRequestRefusal.NoHolderNamed)
+      Dashboard.SeatRequestRefusal.describe Dashboard.SeatRequestRefusal.NoHolderNamed |> Expect.stringContains "says nothing was done" "Nothing was done"
+  ]

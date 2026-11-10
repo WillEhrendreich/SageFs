@@ -5105,6 +5105,7 @@ let run
     ReadCohortLedger = fun () -> cohortLedgerPort.ReadAll cohortOwner.Scope
     ReadTrunk = trunkFollower.Read
     SeatConductor = SageFs.CohortSeatRoute.seatFromDashboard cohortOwner
+    ReplaceConductor = SageFs.CohortSeatRoute.replaceFromDashboard cohortOwner
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
         let! proxy = sessionOps.GetProxy sessionId

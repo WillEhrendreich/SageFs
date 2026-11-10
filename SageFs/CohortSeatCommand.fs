@@ -220,6 +220,27 @@ module CohortSeatRoute =
         | Error err -> return Error(SageFsError.describeForAgent (CohortErrorMapping.toSageFsError err))
     }
 
+  /// The dashboard's Replace button: `holderName` loses the seat to `targetName`, as the command line's `--replace` does
+  /// (`commandForReplace`, then `Cohort.decide`, which refuses a holder that is no longer the holder with the seat as it
+  /// stands). The caller has already decided the request came from a person at the page, with a ticket for this pair.
+  let replaceFromDashboard
+    (owner: Features.CohortOwner.Handle)
+    (targetName: string)
+    (holderName: string)
+    : System.Threading.Tasks.Task<Result<string, string>> =
+    task {
+      let frame = owner.ReadFrame()
+      match commandForReplace frame frame.Scope targetName holderName with
+      | Error err -> return Error(SageFsError.describeForAgent err)
+      | Ok command ->
+        let! committed = owner.Commit command
+        match committed with
+        | Ok(events, _) ->
+          let reply = seatedReply (owner.ReadFrame()) events
+          return Ok(sprintf "%s is the conductor now (%s). %s stays a member, with its claims untouched." reply.Seated reply.Ended reply.Replaced)
+        | Error err -> return Error(SageFsError.describeForAgent (CohortErrorMapping.toSageFsError err))
+    }
+
 /// `sagefs cohort seat [<member id>] [--dir <checkout>]`: look at a cohort's conductor seat, or fill an empty one.
 /// With no member id it lists who is present and where the seat stands. With one it seats that member, which only
 /// works while the seat is empty (the conductor left, or went silent). It reads `operator.token` from the data

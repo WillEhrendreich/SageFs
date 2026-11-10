@@ -37,6 +37,12 @@ module SeatNonces =
       | NonceRefusal.ForAnotherMember -> "the ticket was issued for another member's Seat button."
       | NonceRefusal.Expired -> "the ticket has expired; the page was open too long."
 
+  /// What a Replace button's ticket is issued for: the pair of the holder it replaces and the member who would sit. The holder's
+  /// length leads, so no two different pairs make the same text whatever characters the names hold, and the prefix keeps it
+  /// apart from a Seat button's subject (the member's own name).
+  let replaceSubject (holder: string) (target: string) : string =
+    sprintf "replace:%d:%s%s" holder.Length holder target
+
   /// One issued ticket: whose button it is for, when it was issued, when it stops being good, and its place in the order
   /// they were issued (the oldest goes first when the store is full).
   type Ticket = { Member: string; Issued: DateTime; Expires: DateTime; Order: int64 }

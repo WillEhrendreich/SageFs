@@ -14,8 +14,14 @@ open SageFs.SeatingFlow
 /// What it proves: the seat changes hands only when the person said an explicit yes to a question that was put to them, nobody
 /// is asked about a seating the cohort would refuse, and a member under a token neither asks nor is seated.
 ///
+/// It also asks to REPLACE the holder of a bound seat (`AskToReplace`), and while the person reads that question the holder may
+/// hand the seat to someone else. What it proves there: a bound seat changes hands only on a yes and only from the holder the
+/// person was shown, so an answer that comes back over a seat that changed hands moves nothing.
+///
 /// `Real` is the product. `SkipsTheQuestionTwin` seats on the plan alone (the tool as an agent-callable shortcut) and
 /// `IgnoresTheAnswerTwin` asks and then seats whatever came back: the invariants must fail against both.
+/// `ReplacesWhoeverHoldsNowTwin` takes the yes and then replaces whoever holds the seat when the answer comes: it must break
+/// the holder-shown invariant.
 module SeatingSim =
 
   /// What the person at the client does when asked.
@@ -38,18 +44,31 @@ module SeatingSim =
     | Lapse
     /// `caller` (a member index, or -1 for a member under a token) asks for `target` to be seated, and the person replies.
     | Ask of caller: int * target: int * reply: Reply
+    /// `caller` asks for `target` to replace `holder` (a member index, `currentHolder` for whoever holds the seat when the
+    /// question is put, or -1 for a member under a token). While the person reads the question the seat's holder, when
+    /// there is one, hands it to member `intervening` (when given), so the answer comes back over a seat that changed hands.
+    | AskToReplace of caller: int * target: int * holder: int * reply: Reply * intervening: int option
 
   [<RequireQualifiedAccess>]
   type Behavior =
     | Real
     | SkipsTheQuestionTwin
     | IgnoresTheAnswerTwin
+    /// Asks and takes a yes, then replaces whoever holds the seat WHEN THE ANSWER COMES and not the holder the person was
+    /// shown. The compare-and-swap on the holder is what the real flow keeps.
+    | ReplacesWhoeverHoldsNowTwin
 
-  /// What one `Ask` did, for the invariants.
+  /// What one `Ask` or `AskToReplace` did, for the invariants.
   type Attempt =
     { Caller: MemberId
       Target: MemberId
+      /// The cohort when the question was planned.
       Before: CohortState<MemberId>
+      /// The cohort when the answer came and the command was committed: `Before` unless the seat changed hands while the
+      /// person read the question.
+      AtCommit: CohortState<MemberId>
+      /// The holder the person was shown, for a replacement. None for a seating of an empty seat.
+      Shown: MemberId option
       /// How many times the person was asked during this event.
       Asked: int
       Reply: Reply
@@ -93,10 +112,35 @@ module SeatingSim =
     | Reply.Broken -> Answer.CouldNotBeAsked "the transport closed"
     | Reply.NotThere -> Answer.CouldNotBeAsked "not there"
 
-  let private attempt (behavior: Behavior) (state: State) (callerIndex: int) (targetIndex: int) (reply: Reply) : State =
+  /// The member index that means "whoever holds the seat when the question is put".
+  [<Literal>]
+  let currentHolder = -2
+
+  /// What the caller asks for: an empty seat filled, or the holder it names replaced.
+  [<RequireQualifiedAccess>]
+  type private Request =
+    | Fill
+    | Replace of holder: MemberId
+
+  let private attempt
+    (behavior: Behavior)
+    (state: State)
+    (callerIndex: int)
+    (targetIndex: int)
+    (request: Request)
+    (reply: Reply)
+    (intervening: int option)
+    : State =
     let caller = memberOf callerIndex
     let target = memberOf targetIndex
     let asked = ref 0
+    // The cohort as it is at any moment: the question is put against `state.Cohort`, and the holder may hand the seat on while
+    // the person reads it.
+    let current = ref state.Cohort
+    let whileReading () =
+      match intervening, current.Value.Conductor with
+      | Some index, ConductorBinding.Bound holder -> current.Value <- decideOrKeep state.Clock current.Value (CohortCommand.DelegateConductor(holder, memberOf index, machine))
+      | _ -> ()
     let person : Person =
       { Elicitation =
           (match reply with
@@ -110,27 +154,58 @@ module SeatingSim =
         Ask =
           fun _ _ ->
             asked.Value <- asked.Value + 1
+            whileReading ()
             Task.FromResult(answerOf reply) }
     let commit (command: CohortCommand<MemberId>) =
-      match decide state.Clock entropy state.Cohort command with
+      match decide state.Clock entropy current.Value command with
       | Result.Ok(next, _, _) -> next, true
-      | Result.Error _ -> state.Cohort, false
+      | Result.Error _ -> current.Value, false
+    let planned =
+      match request with
+      | Request.Fill -> SeatingFlow.plan state.Clock state.Cohort machine caller target
+      | Request.Replace holder -> SeatingFlow.planReplace state.Clock state.Cohort machine caller target holder
+    let shown =
+      match request with
+      | Request.Fill -> None
+      | Request.Replace holder -> Some holder
+    let skipsTheQuestion (p: Plan) : CohortCommand<MemberId> =
+      match p.Mode with
+      | Mode.Fill -> CohortCommand.SeatConductor(p.Target, p.Scope)
+      | Mode.Replace(holder, _) -> CohortCommand.ReplaceConductor(holder, p.Target, p.Scope)
+    let asks (p: Plan) = (SeatingFlow.ask person "seat them?" p).GetAwaiter().GetResult()
     let cohort, seated =
-      match SeatingFlow.plan state.Clock state.Cohort machine caller target with
+      match planned with
       | Result.Error _ -> state.Cohort, false
-      | Result.Ok planned ->
+      | Result.Ok p ->
         match behavior with
         | Behavior.Real ->
-          match (SeatingFlow.ask person "seat them?" planned).GetAwaiter().GetResult() with
+          match asks p with
           | Result.Ok approval -> commit (SeatingFlow.commandOf approval)
-          | Result.Error _ -> state.Cohort, false
-        | Behavior.SkipsTheQuestionTwin -> commit (CohortCommand.SeatConductor(planned.Target, planned.Scope))
+          | Result.Error _ -> current.Value, false
+        | Behavior.SkipsTheQuestionTwin -> commit (skipsTheQuestion p)
         | Behavior.IgnoresTheAnswerTwin ->
-          (SeatingFlow.ask person "seat them?" planned).GetAwaiter().GetResult() |> ignore
-          commit (CohortCommand.SeatConductor(planned.Target, planned.Scope))
+          asks p |> ignore
+          commit (skipsTheQuestion p)
+        | Behavior.ReplacesWhoeverHoldsNowTwin ->
+          match asks p with
+          | Result.Ok _ ->
+            match p.Mode, current.Value.Conductor with
+            | Mode.Replace _, ConductorBinding.Bound now -> commit (CohortCommand.ReplaceConductor(now, p.Target, p.Scope))
+            | Mode.Replace _, (ConductorBinding.Vacant _ | ConductorBinding.NeverBound)
+            | Mode.Fill, _ -> commit (skipsTheQuestion p)
+          | Result.Error _ -> current.Value, false
     { state with
         Cohort = cohort
-        Attempt = Some { Caller = caller; Target = target; Before = state.Cohort; Asked = asked.Value; Reply = reply; Seated = seated } }
+        Attempt =
+          Some
+            { Caller = caller
+              Target = target
+              Before = state.Cohort
+              AtCommit = current.Value
+              Shown = shown
+              Asked = asked.Value
+              Reply = reply
+              Seated = seated } }
 
   let private apply (behavior: Behavior) (state: State) (event: SimEvent) : State =
     let stepped = { state with Attempt = None; Step = state.Step + 1 }
@@ -141,7 +216,14 @@ module SeatingSim =
     | SimEvent.Lapse ->
       let clock = stepped.Clock + Cohort.leaseWindow + Cohort.leaseWindow
       { stepped with Clock = clock; Cohort = decideOrKeep clock stepped.Cohort (CohortCommand.Tick machine) }
-    | SimEvent.Ask(caller, target, reply) -> attempt behavior stepped caller target reply
+    | SimEvent.Ask(caller, target, reply) -> attempt behavior stepped caller target Request.Fill reply None
+    | SimEvent.AskToReplace(caller, target, holder, reply, intervening) ->
+      let named =
+        match holder, stepped.Cohort.Conductor with
+        | h, ConductorBinding.Bound sitting when h = currentHolder -> sitting
+        | h, (ConductorBinding.Vacant _ | ConductorBinding.NeverBound) when h = currentHolder -> memberOf 0
+        | h, _ -> memberOf h
+      attempt behavior stepped caller target (Request.Replace named) reply intervening
 
   /// Fold the events; the state after each one.
   let run (behavior: Behavior) (events: SimEvent list) : State list =
@@ -155,10 +237,22 @@ module SeatingSim =
   let scenarioOf (seed: int) (steps: int) : SimEvent list =
     let rnd = Random(seed)
     let pick () = match rnd.Next 8 with 0 -> -1 | _ -> rnd.Next members
+    // Half the answers are a yes, so a replacement is reached often enough to be a property of the run and not of luck.
+    let replyFor () = match rnd.Next 2 with 0 -> Reply.Yes | _ -> replies.[rnd.Next replies.Length]
     [ for _ in 1 .. steps do
-        match rnd.Next 10 with
+        match rnd.Next 16 with
         // One member in eight is the one under a token, whether it joins, leaves, asks or is named.
-        | 0 | 1 -> yield SimEvent.Join(pick ())
-        | 2 | 3 -> yield SimEvent.Leave(pick ())
-        | 4 -> yield SimEvent.Lapse
-        | _ -> yield SimEvent.Ask(pick (), pick (), replies.[rnd.Next replies.Length]) ]
+        | 0 | 1 | 2 -> yield SimEvent.Join(pick ())
+        | 3 | 4 -> yield SimEvent.Leave(pick ())
+        // A lapse departs everyone who did not renew, so it is one in three of these, and the rest rejoin.
+        | 5 ->
+          match rnd.Next 3 with
+          | 0 -> yield SimEvent.Lapse
+          | _ -> yield SimEvent.Join(rnd.Next members)
+        | 6 | 7 | 8 -> yield SimEvent.Ask(pick (), pick (), replyFor ())
+        | _ ->
+          // Most replacements name the holder the seat has; one in three names a member at random, who is the holder only by
+          // chance. One in three has the holder hand the seat on while the person reads.
+          let holder = match rnd.Next 3 with 0 -> pick () | _ -> currentHolder
+          let intervening = match rnd.Next 3 with 0 -> Some(rnd.Next members) | _ -> None
+          yield SimEvent.AskToReplace(pick (), pick (), holder, replyFor (), intervening) ]

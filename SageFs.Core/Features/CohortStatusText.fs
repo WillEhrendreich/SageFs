@@ -40,14 +40,18 @@ module CohortStatusText =
     | SilentSince of since: DateTime * lapsesAt: DateTime
 
   module HolderSilence =
+    /// The standing of a holder whose lease was last renewed at `lastRenewal`, at `now`.
+    let ofRenewal (lastRenewal: DateTime) (now: DateTime) : HolderSilence =
+      match now - lastRenewal >= Timeouts.cohortHolderSilentAfter with
+      | true -> HolderSilence.SilentSince(lastRenewal, lastRenewal + Timeouts.cohortLeaseWindow)
+      | false -> HolderSilence.NotSilent
+
     /// The standing of the seat's holder at `now`. A seat that is not bound has no holder to be silent.
     let ofState (state: SageFs.Cohort.CohortState<'m>) (now: DateTime) : HolderSilence =
       match state.Conductor with
       | SageFs.Cohort.ConductorBinding.Bound holder ->
         match Map.tryFind holder state.Members with
-        | Some record when now - record.LastRenewal >= Timeouts.cohortHolderSilentAfter ->
-          HolderSilence.SilentSince(record.LastRenewal, record.LastRenewal + Timeouts.cohortLeaseWindow)
-        | Some _
+        | Some record -> ofRenewal record.LastRenewal now
         | None -> HolderSilence.NotSilent
       | SageFs.Cohort.ConductorBinding.NeverBound
       | SageFs.Cohort.ConductorBinding.Vacant _ -> HolderSilence.NotSilent

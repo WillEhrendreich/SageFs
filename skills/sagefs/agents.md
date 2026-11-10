@@ -69,6 +69,10 @@ sit, who held the seat and why it is empty. Only their explicit yes seats anyone
 - A decline, a dismissal, no answer and a client that offers no elicitation all refuse, and nothing changes. Do not ask
   again unless the person tells you to. The refusal names the other routes: `sagefs cohort seat <member id>` from a shell on
   the machine that runs the daemon, and the Seat button on the dashboard's cohort panel.
+- A seat that is held by a conductor whose connection is gone (`get_cohort_status` says the holder is silent and for how
+  long) is replaced the same way: call `seat_conductor` with `replaces` set to that holder's member id. The person is
+  asked, with the holder and its silence named, and only their explicit yes moves the seat. A holder that is not the
+  holder any more is refused with the actual holder named, and the former holder stays a member with its claims.
 - Under a member token the tool is not callable, and a member under a token is never the one seated. If you hold a token,
   the person seats a member that joined on its own connection.
 - Meanwhile do what needs no conductor: `acquire_claim`, `release_claim`, `request_landing`, `withdraw_landing`, `veto_landing`.

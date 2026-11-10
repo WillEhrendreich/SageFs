@@ -56,6 +56,13 @@ let private personWho (answer: Answer) (asked: Asked) : Person =
 let private plan (state: CohortState<MemberId>) (caller: MemberId) (target: MemberId) =
   SeatingFlow.plan epoch state machine caller target
 
+/// alice holds the seat, bob is present.
+let private heldByAlice () =
+  CohortState.empty () |> fun s -> next s (join alice) |> fun s -> next s (join bob)
+
+let private planReplace (state: CohortState<MemberId>) (caller: MemberId) (target: MemberId) (holder: MemberId) =
+  SeatingFlow.planReplace epoch state machine caller target holder
+
 let private planned (state: CohortState<MemberId>) (caller: MemberId) (target: MemberId) : Plan =
   match plan state caller target with
   | Ok p -> p
@@ -190,6 +197,103 @@ let tests =
       }
     ]
 
+    testList "replacing a silent holder: the plan applies the cohort's rules, and a yes carries the holder it was shown" [
+
+      testCase "WHY - a present member can be put forward to replace the holder, and the plan carries that holder and when it last renewed" <| fun _ ->
+        let state = heldByAlice ()
+        match planReplace state bob bob alice with
+        | Ok p ->
+          p.Mode |> Expect.equal "the plan says it replaces alice, last heard from at the join" (Mode.Replace(alice, epoch))
+          p.Seat |> Expect.equal "the seat as it stands" (ConductorBinding.Bound alice)
+          p.Target |> Expect.equal "the member who would sit" bob
+        | Error refusal -> failtestf "expected a plan, got %A" refusal
+
+      testCase "WHY - a filling plan says it fills" <| fun _ ->
+        (planned (vacantWithBob ()) bob bob).Mode |> Expect.equal "fills" Mode.Fill
+
+      testCase "WHY - a holder that is not the holder is refused, and the refusal carries who is" <| fun _ ->
+        match planReplace (heldByAlice ()) bob bob carol with
+        | Error(Refusal.CohortRefused(CohortError.ConductorHolderChanged(named, actual))) ->
+          named |> Expect.equal "the name the caller gave" carol
+          actual |> Expect.equal "the seat as it is" (ConductorBinding.Bound alice)
+        | other -> failtestf "expected ConductorHolderChanged, got %A" other
+
+      testCase "WHY - an empty seat has no holder to replace" <| fun _ ->
+        match planReplace (vacantWithBob ()) bob bob alice with
+        | Error(Refusal.CohortRefused(CohortError.ConductorHolderChanged(_, ConductorBinding.Vacant _))) -> ()
+        | other -> failtestf "expected ConductorHolderChanged over a vacant seat, got %A" other
+
+      testCase "WHY - a holder is not replaced by itself" <| fun _ ->
+        match planReplace (heldByAlice ()) alice alice alice with
+        | Error(Refusal.CohortRefused(CohortError.ReplaceByHolder who)) -> who |> Expect.equal "alice" alice
+        | other -> failtestf "expected ReplaceByHolder, got %A" other
+
+      testCase "WHY - a caller under a token never asks to replace" <| fun _ ->
+        planReplace (heldByAlice ()) cap bob alice |> Expect.equal "refused first" (Error Refusal.CallerHoldsToken)
+
+      testCase "WHY - a member under a token is never the one who takes the seat" <| fun _ ->
+        let state = next (heldByAlice ()) (CohortCommand.Join(cap, JoinableRole.Implementer, None, machine))
+        planReplace state bob cap alice |> Expect.equal "refused with the reason" (Error(Refusal.TargetHoldsToken cap))
+
+      testCase "WHY - a target who is not present is refused with the roster" <| fun _ ->
+        match planReplace (heldByAlice ()) bob carol alice with
+        | Error(Refusal.CohortRefused(CohortError.SeatTargetAbsent(target, _))) -> target |> Expect.equal "carol is not here" carol
+        | other -> failtestf "expected SeatTargetAbsent, got %A" other
+
+      testCase "WHY - a caller with no seat is refused" <| fun _ ->
+        match planReplace (heldByAlice ()) carol bob alice with
+        | Error(Refusal.CallerNotPresent caller) -> caller |> Expect.equal "carol is no member" carol
+        | other -> failtestf "expected CallerNotPresent, got %A" other
+
+      testTask "WHY - a yes to a replacement gives an approval whose command is ReplaceConductor of the holder the person was shown, and the cohort accepts it" {
+        let state = heldByAlice ()
+        let asked = Asked()
+        match planReplace state bob bob alice with
+        | Error refusal -> failtestf "expected a plan, got %A" refusal
+        | Ok p ->
+          let! outcome = askWith (personWho Answer.Yes asked) p
+          match outcome with
+          | Ok approval ->
+            SeatingFlow.commandOf approval |> Expect.equal "the command" (CohortCommand.ReplaceConductor(alice, bob, machine))
+            (next state (SeatingFlow.commandOf approval)).Conductor |> Expect.equal "bob holds the seat" (ConductorBinding.Bound bob)
+          | Error refusal -> failtestf "a yes must approve, got %A" refusal
+      }
+
+      testTask "WHY - a yes to a plan that fills still gives a plain seating, never a replacement" {
+        let! outcome = askWith (personWho Answer.Yes (Asked())) (planned (vacantWithBob ()) bob bob)
+        match outcome with
+        | Ok approval -> SeatingFlow.commandOf approval |> Expect.equal "a seating" (CohortCommand.SeatConductor(bob, machine))
+        | Error refusal -> failtestf "a yes must approve, got %A" refusal
+      }
+
+      for (what, answer, expected) in answers do
+        testTask (sprintf "WHY - %s to a replacement is a refusal, never an approval" what) {
+          match planReplace (heldByAlice ()) bob bob alice with
+          | Error refusal -> failtestf "expected a plan, got %A" refusal
+          | Ok p ->
+            let! outcome = askWith (personWho answer (Asked())) p
+            match outcome with
+            | Error refusal -> expected refusal |> Expect.isTrue (sprintf "the refusal names the case: %A" refusal)
+            | Ok _ -> failtestf "%s must not approve a replacement" what
+        }
+
+      testTask "WHY - a holder that changed between the ask and the answer is refused by the cohort, with the new holder named" {
+        let asked = Asked()
+        match planReplace (heldByAlice ()) bob bob alice with
+        | Error refusal -> failtestf "expected a plan, got %A" refusal
+        | Ok p ->
+          let! outcome = askWith (personWho Answer.Yes asked) p
+          let approval = match outcome with Ok a -> a | Error r -> failtestf "%A" r
+          // While the person was reading, alice handed the seat to carol.
+          let changed = next (next (heldByAlice ()) (join carol)) (CohortCommand.DelegateConductor(alice, carol, machine))
+          match decide epoch entropy changed (SeatingFlow.commandOf approval) with
+          | Error(CohortError.ConductorHolderChanged(named, actual)) ->
+            named |> Expect.equal "the holder the person was shown" alice
+            actual |> Expect.equal "the holder now" (ConductorBinding.Bound carol)
+          | other -> failtestf "expected ConductorHolderChanged, got %A" other
+      }
+    ]
+
     testList "an approval cannot be made any other way" [
 
       testCase "WHY - SeatApproval has no public constructor, so no caller outside the module can write one" <| fun _ ->
@@ -207,6 +311,7 @@ let tests =
       testCase "WHY - the tool's body commits only a command that came out of commandOf" <| fun _ ->
         let text = IO.File.ReadAllText(IO.Path.Combine(RepoPaths.repoPathFull [||], "SageFs", "McpSeating.fs"))
         text.Contains "CohortCommand.SeatConductor" |> Expect.isFalse "the tool file never writes the command itself"
+        text.Contains "CohortCommand.ReplaceConductor" |> Expect.isFalse "nor the replacement"
         text.Contains "commitCohort ctx (SeatingFlow.commandOf approval)" |> Expect.isTrue "it commits the approval's command"
         let commitSites = text.Split("commitCohort").Length - 1
         commitSites |> Expect.equal "and there is one commit in the file" 1

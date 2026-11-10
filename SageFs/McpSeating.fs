@@ -61,21 +61,44 @@ module McpSeating =
       failed (sprintf "The question could not be asked (%s). %s" reason nothingDone) otherRoutes
 
   /// The question the person reads: the repository, who is asking, who would sit, in what role, who held the seat and why it
-  /// is empty, and what the seat is for.
-  let questionText (plan: Plan) : string =
+  /// is empty (or, for a replacement, who holds it and how long it has been silent), and what the seat is for. `now` is the
+  /// clock the holder's silence is measured against.
+  let questionText (now: System.DateTime) (plan: Plan) : string =
     let asking =
       match plan.Caller = plan.Target with
       | true -> sprintf "%s asks to be seated" (MemberTable.MemberId.display plan.Caller)
       | false -> sprintf "%s asks to seat %s" (MemberTable.MemberId.display plan.Caller) (MemberTable.MemberId.display plan.Target)
+    let seatSentence, closing =
+      match plan.Mode with
+      | Mode.Fill -> sprintf "The seat is %s." (CohortSeatRoute.bindingText plan.Seat), "Seat them?"
+      | Mode.Replace(holder, lastRenewal) ->
+        let name = MemberTable.MemberId.display holder
+        let standing =
+          match Features.CohortStatusText.HolderSilence.ofRenewal lastRenewal now with
+          | Features.CohortStatusText.HolderSilence.SilentSince _ as silence ->
+            sprintf "%s has been %s" name (Features.CohortStatusText.HolderSilence.text now silence)
+          | Features.CohortStatusText.HolderSilence.NotSilent ->
+            sprintf "%s renewed its lease %d min ago, so it may still be connected" name (int (now - lastRenewal).TotalMinutes)
+        sprintf "The seat is held by %s, who would be replaced. %s. %s stays a member and keeps its claims." name standing name,
+        sprintf "Replace %s?" name
     sprintf
-      "%s (role %A) as the conductor of the cohort of %s. The seat is %s. The conductor mints member tokens, configures the integration and reassigns claims. Seat them?"
+      "%s (role %A) as the conductor of the cohort of %s. %s The conductor mints member tokens, configures the integration and reassigns claims. %s"
       asking
       plan.TargetRole
       (Scope.label plan.Scope)
-      (CohortSeatRoute.bindingText plan.Seat)
+      seatSentence
+      closing
 
-  /// Ask for the seat to be filled. `memberName` is a member id as `get_cohort_status` prints it; blank means the caller.
-  let run (ctx: McpContext) (agentName: string) (memberName: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+  /// Ask for the seat to be filled, or its holder replaced. `memberName` is a member id as `get_cohort_status` prints it;
+  /// blank means the caller. `replaces` names the holder to replace in the same form: blank asks to fill an empty seat, a name
+  /// asks to replace that holder, and the cohort refuses it when that member is no longer the holder.
+  let run
+    (ctx: McpContext)
+    (agentName: string)
+    (memberName: string)
+    (replaces: string)
+    (workingDirectory: string option)
+    : Task<Result<string, SageFsError>> =
     task {
       match currentCapability.Value with
       | Some _ -> return Result.Error(describe Refusal.CallerHoldsToken)
@@ -93,14 +116,19 @@ module McpSeating =
             match System.String.IsNullOrWhiteSpace memberName with
             | true -> caller
             | false -> CohortSeatRoute.resolveTarget frame (memberName.Trim())
-          match SeatingFlow.plan System.DateTime.UtcNow (owner.ReadCohortState()) scope caller target with
+          let now = System.DateTime.UtcNow
+          let planned =
+            match System.String.IsNullOrWhiteSpace replaces with
+            | true -> SeatingFlow.plan now (owner.ReadCohortState()) scope caller target
+            | false -> SeatingFlow.planReplace now (owner.ReadCohortState()) scope caller target (CohortSeatRoute.resolveTarget frame (replaces.Trim()))
+          match planned with
           | Result.Error refusal -> return Result.Error(describe refusal)
           | Result.Ok plan ->
             let person =
               match currentPerson.Value with
               | Some person -> person
               | None -> { Elicitation = Elicitation.NotOffered; Ask = fun _ _ -> Task.FromResult(Answer.CouldNotBeAsked "no client is bound to this call") }
-            match! SeatingFlow.ask person (questionText plan) plan with
+            match! SeatingFlow.ask person (questionText now plan) plan with
             | Result.Error refusal -> return Result.Error(describe refusal)
             | Result.Ok approval ->
               let! committed = commitCohort ctx (SeatingFlow.commandOf approval)

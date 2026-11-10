@@ -74,7 +74,7 @@ let tests =
     testTask "a yes seats the caller, says who was seated and what the vacancy was, and the status agrees" {
       let! ctx = vacant ()
       let questions = List<string>()
-      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" wd)
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" "" wd)
       let text = ok "seating bob" result
       text |> Expect.stringContains "names the new conductor" "bob"
       text |> Expect.stringContains "names the vacancy it ended" "alice"
@@ -88,7 +88,7 @@ let tests =
     testTask "the member to seat can be another present member than the caller" {
       let! ctx = vacant ()
       let questions = List<string>()
-      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "vera" wd)
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "vera" "" wd)
       ok "seating vera" result |> Expect.stringContains "vera is the conductor" "vera"
       let! line = conductorLine ctx
       line |> Expect.stringContains "the seat is vera's" "vera"
@@ -97,7 +97,7 @@ let tests =
     testTask "the question names the repository, who is asking, who would sit, their role, who held the seat and why it is empty" {
       let! ctx = vacant ()
       let questions = List<string>()
-      let! _ = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "vera" wd)
+      let! _ = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "vera" "" wd)
       let question = Seq.exactlyOne questions
       for part in [ "gate-scope/molina"; "bob"; "vera"; "Implementer"; "alice"; "left"; "conductor" ] do
         question |> Expect.stringContains (sprintf "the question mentions '%s'" part) part
@@ -111,7 +111,7 @@ let tests =
         "a failed question", Answer.CouldNotBeAsked "the transport closed" ] do
       testTask (sprintf "%s refuses, leaves the seat empty, and names the other routes" what) {
         let! ctx = vacant ()
-        let! result = withPerson (Some(who answer (List<string>()))) (fun () -> McpSeating.run ctx "bob" "" wd)
+        let! result = withPerson (Some(who answer (List<string>()))) (fun () -> McpSeating.run ctx "bob" "" "" wd)
         let text = refused what result
         for route in routes do
           text |> Expect.stringContains (sprintf "names '%s'" route) route
@@ -124,7 +124,7 @@ let tests =
       let! ctx = vacant ()
       let questions = List<string>()
       let person = { who Answer.Yes questions with Elicitation = Elicitation.NotOffered }
-      let! result = withPerson (Some person) (fun () -> McpSeating.run ctx "bob" "" wd)
+      let! result = withPerson (Some person) (fun () -> McpSeating.run ctx "bob" "" "" wd)
       let text = refused "a client without elicitation" result
       text |> Expect.stringContains "says why" "does not offer MCP elicitation"
       for route in routes do
@@ -136,7 +136,7 @@ let tests =
 
     testTask "a call with no client bound at all is a client that cannot be asked" {
       let! ctx = vacant ()
-      let! result = withPerson None (fun () -> McpSeating.run ctx "bob" "" wd)
+      let! result = withPerson None (fun () -> McpSeating.run ctx "bob" "" "" wd)
       refused "no client" result |> Expect.stringContains "refused for want of a person" "Nothing was done"
       let! line = conductorLine ctx
       line |> Expect.stringContains "still empty" "VACANT"
@@ -146,10 +146,10 @@ let tests =
       let! ctx = vacant ()
       let questions = List<string>()
       // A member who is not present.
-      let! absent = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "nobody-here" wd)
+      let! absent = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "nobody-here" "" wd)
       refused "an absent member" absent |> Expect.stringContains "names the roster" "bob"
       // A caller with no seat.
-      let! stranger = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "stranger" "" wd)
+      let! stranger = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "stranger" "" "" wd)
       refused "a caller with no seat" stranger |> Expect.stringContains "says to join" "join_cohort"
       questions.Count |> Expect.equal "the person was never asked" 0
     }
@@ -159,7 +159,7 @@ let tests =
       do! join ctx "alice" "Implementer" molinaRepo
       do! join ctx "bob" "Implementer" molinaRepo
       let questions = List<string>()
-      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" wd)
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" "" wd)
       refused "a held seat" result |> Expect.stringContains "names the holder" "alice"
       questions.Count |> Expect.equal "nobody was asked" 0
     }
@@ -167,12 +167,160 @@ let tests =
     testTask "asking twice cannot seat twice: the second ask finds the seat held" {
       let! ctx = vacant ()
       let questions = List<string>()
-      let! first = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" wd)
+      let! first = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" "" wd)
       ok "the first ask" first |> ignore
-      let! second = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "vera" "" wd)
+      let! second = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "vera" "" "" wd)
       refused "the second ask" second |> Expect.stringContains "names bob" "bob"
       questions.Count |> Expect.equal "only the first was a question" 1
     }
+  ]
+
+/// alice holds the seat (her connection may be gone, her lease has not lapsed); bob and vera are present Implementers.
+let private held () = task {
+  let ctx = mkContext ()
+  do! join ctx "alice" "Implementer" molinaRepo
+  do! join ctx "bob" "Implementer" molinaRepo
+  do! join ctx "vera" "Implementer" molinaRepo
+  return ctx
+}
+
+[<Tests>]
+let replaceTests =
+  testList "seat_conductor replaces: a bound seat changes hands only on a person's yes, from the holder they were shown" [
+
+    testTask "a yes replaces the named holder with the caller, says who and that the former holder stays a member, and the status agrees" {
+      let! ctx = held ()
+      let questions = List<string>()
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" "alice" wd)
+      let text = ok "replacing alice" result
+      text |> Expect.stringContains "names the new conductor" "bob"
+      text |> Expect.stringContains "names the replaced holder" "alice"
+      text |> Expect.stringContains "says which client accepted" "client at bob accepted"
+      questions.Count |> Expect.equal "the person was asked once" 1
+      let! line = conductorLine ctx
+      line |> Expect.stringContains "the seat is bob's" "bob"
+      let! status = McpCohortIntegration.getCohortStatus ctx wd
+      (ok "status" status) |> Expect.stringContains "alice is still a member, her claims untouched" "alice"
+    }
+
+    testTask "the question names the repository, who asks, who would sit, the holder, and how recently the holder was heard from" {
+      let! ctx = held ()
+      let questions = List<string>()
+      let! _ = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "vera" "alice" wd)
+      let question = Seq.exactlyOne questions
+      for part in [ "gate-scope/molina"; "bob"; "vera"; "alice"; "replace"; "conductor" ] do
+        question |> Expect.stringContains (sprintf "the question mentions '%s'" part) part
+      // The owner's clock is the test's own, so the holder reads as silent or as recent depending on it; the question says one.
+      (question.Contains "silent for" || question.Contains "renewed its lease")
+      |> Expect.isTrue "and says how recently the holder was heard from"
+    }
+
+    for (what, answer) in
+      [ "a decline", Answer.Declined
+        "a dismissal", Answer.Cancelled
+        "another action", Answer.AnsweredOther "reject"
+        "silence", Answer.NoAnswerInTime TestTimeouts.patience
+        "a failed question", Answer.CouldNotBeAsked "the transport closed" ] do
+      testTask (sprintf "%s leaves the holder in the seat and says nothing was done" what) {
+        let! ctx = held ()
+        let! result = withPerson (Some(who answer (List<string>()))) (fun () -> McpSeating.run ctx "bob" "" "alice" wd)
+        let text = refused what result
+        text |> Expect.stringContains "says nothing was done" "Nothing was done"
+        let! line = conductorLine ctx
+        line |> Expect.stringContains "alice still holds it" "alice"
+      }
+
+    testTask "a client that cannot be asked replaces nobody, and nothing is put to anyone" {
+      let! ctx = held ()
+      let questions = List<string>()
+      let person = { who Answer.Yes questions with Elicitation = Elicitation.NotOffered }
+      let! result = withPerson (Some person) (fun () -> McpSeating.run ctx "bob" "" "alice" wd)
+      refused "no elicitation" result |> Expect.stringContains "says why" "does not offer MCP elicitation"
+      questions.Count |> Expect.equal "nobody was asked" 0
+      let! line = conductorLine ctx
+      line |> Expect.stringContains "alice still holds it" "alice"
+    }
+
+    testTask "a stale holder name is refused with the actual holder named, and nobody is asked" {
+      let! ctx = held ()
+      let questions = List<string>()
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" "vera" wd)
+      let text = refused "a holder who does not hold the seat" result
+      text |> Expect.stringContains "names the actual holder" "alice"
+      questions.Count |> Expect.equal "the person was never asked" 0
+      let! line = conductorLine ctx
+      line |> Expect.stringContains "alice still holds it" "alice"
+    }
+
+    testTask "a holder that changed between the question and the answer is refused with the new holder named" {
+      let! ctx = held ()
+      let owner = (cohortOwnerFor ctx wd).Value
+      let questions = List<string>()
+      // While the person reads, alice hands the seat to vera.
+      let person =
+        { Elicitation = Elicitation.Offered
+          Ask =
+            fun question _ ->
+              questions.Add question
+              task {
+                let! handed = McpCohortTools.delegateConductor ctx "alice" "vera" wd
+                ok "alice hands the seat on" handed |> ignore
+                return Answer.Yes
+              } }
+      let! result = withPerson (Some person) (fun () -> McpSeating.run ctx "bob" "" "alice" wd)
+      let text = refused "a seat that changed hands under the question" result
+      text |> Expect.stringContains "names the holder now" "vera"
+      questions.Count |> Expect.equal "the person was asked once" 1
+      owner.ReadFrame().Conductor |> Expect.equal "vera holds the seat, and the yes moved nothing" (ConductorBinding.Bound(MemberId.Minted "vera"))
+    }
+
+    testTask "the holder cannot be replaced by itself" {
+      let! ctx = held ()
+      let questions = List<string>()
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "alice" "alice" "alice" wd)
+      refused "alice by alice" result |> Expect.stringContains "says so" "cannot replace itself"
+      questions.Count |> Expect.equal "nobody was asked" 0
+    }
+
+    testTask "an empty seat has no holder to replace: the refusal says the seat is empty, and nobody is asked" {
+      let! ctx = vacant ()
+      let questions = List<string>()
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "bob" "" "alice" wd)
+      refused "a vacant seat" result |> Expect.stringContains "says the seat is empty" "empty"
+      questions.Count |> Expect.equal "nobody was asked" 0
+    }
+
+    testTask "a caller with no seat cannot ask to replace" {
+      let! ctx = held ()
+      let questions = List<string>()
+      let! result = withPerson (Some(who Answer.Yes questions)) (fun () -> McpSeating.run ctx "stranger" "" "alice" wd)
+      refused "a stranger" result |> Expect.stringContains "says to join" "join_cohort"
+      questions.Count |> Expect.equal "nobody was asked" 0
+    }
+
+    testCase "WHY - the question for a silent holder says for how long it has been silent and when the lease lapses" <| fun _ ->
+      let epoch = DateTime(2026, 11, 9, 8, 0, 0, DateTimeKind.Utc)
+      let machine = CohortScope.Machine
+      let alice = MemberId.Minted "alice"
+      let bob = MemberId.Minted "bob"
+      let step (s: CohortState<MemberId>) (c: CohortCommand<MemberId>) =
+        match decide epoch [| 1uy |] s c with
+        | Ok(n, _, _) -> n
+        | Error e -> failtestf "%A" e
+      let state =
+        CohortState.forScope machine
+        |> fun s -> step s (CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+        |> fun s -> step s (CohortCommand.Join(bob, JoinableRole.Implementer, None, machine))
+      // Silent for as long as a lease lasts: the longest a holder can be silent and still hold the seat.
+      let now = epoch + Timeouts.cohortLeaseWindow
+      match SeatingFlow.planReplace now state machine bob bob alice with
+      | Error refusal -> failtestf "expected a plan, got %A" refusal
+      | Ok p ->
+        let text = McpSeating.questionText now p
+        text |> Expect.stringContains "names the holder" "alice"
+        text |> Expect.stringContains "says how many minutes it has been silent" (sprintf "silent for %d min" (int Timeouts.cohortLeaseWindow.TotalMinutes))
+        text |> Expect.stringContains "says when the lease lapses" "lapses at"
+        text |> Expect.stringContains "says a person replaces it" "replace"
   ]
 
 let private elicited (action: string) (confirmed: bool option) : ElicitResult =

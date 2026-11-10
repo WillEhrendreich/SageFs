@@ -17,6 +17,11 @@ open SageFs.MemberTable
 ///
 /// The rules of who may be seated are `Cohort.decide`'s (a Vacant or NeverBound seat, a present member). `plan` runs them
 /// against the cohort's state BEFORE a person is asked, so nobody is asked a question the cohort would refuse.
+///
+/// A seat whose holder's connection is gone stays bound until its lease lapses. `planReplace` is the same question for that
+/// case: the caller names the holder, the person is shown it, and the approval carries it, so the command is
+/// `ReplaceConductor` of exactly the holder the person saw. The cohort compares that holder with the seat when the command
+/// commits, so a seat that changed hands while the person read the question refuses, naming the new holder.
 module SeatingFlow =
 
   /// What the person at the client said, as the cohort needs to tell the cases apart.
@@ -59,6 +64,13 @@ module SeatingFlow =
     | NoAnswerInTime of waited: TimeSpan
     | CouldNotBeAsked of reason: string
 
+  /// What the seating does to the seat: fills an empty one, or takes a bound one from the holder the person is shown.
+  /// `lastRenewal` is when that holder's lease was last renewed, which is how long it has been silent.
+  [<RequireQualifiedAccess>]
+  type Mode =
+    | Fill
+    | Replace of holder: MemberId * lastRenewal: DateTime
+
   /// What would be done, and what the person is told about it. Holds no authority: it is a description.
   type Plan =
     { Caller: MemberId
@@ -66,10 +78,12 @@ module SeatingFlow =
       TargetRole: JoinableRole
       Scope: CohortScope
       /// The seat as it stands, and why it is empty.
-      Seat: ConductorBinding<MemberId> }
+      Seat: ConductorBinding<MemberId>
+      Mode: Mode }
 
-  /// The person's yes. Only `ask` makes one, and `commandOf` is the only function that turns it into a command.
-  type SeatApproval = private { Target: MemberId; Scope: CohortScope }
+  /// The person's yes. Only `ask` makes one, and `commandOf` is the only function that turns it into a command. `Replacing` is
+  /// the holder the person was shown, when the question was about replacing one.
+  type SeatApproval = private { Target: MemberId; Scope: CohortScope; Replacing: MemberId option }
 
   let private isToken (who: MemberId) =
     match who with
@@ -79,17 +93,25 @@ module SeatingFlow =
     | MemberId.Minted _
     | MemberId.Operator -> false
 
-  /// Check the seating against the cohort's rules, before anybody is asked. A caller under a token is refused first, then a
-  /// target under one, then a caller with no seat, and the rest is `Cohort.decide`'s own verdict on the seating (run against a
-  /// copy of the state and thrown away: nothing is committed here).
-  let plan (now: DateTime) (state: CohortState<MemberId>) (scope: CohortScope) (caller: MemberId) (target: MemberId) : Result<Plan, Refusal> =
+  /// The checks both seatings share. A caller under a token is refused first, then a target under one, then a caller with no
+  /// seat, and the rest is `Cohort.decide`'s own verdict on `command` (run against a copy of the state and thrown away:
+  /// nothing is committed here). `modeOf` reads the plan's mode off the state the verdict was reached on.
+  let planFor
+    (now: DateTime)
+    (state: CohortState<MemberId>)
+    (scope: CohortScope)
+    (caller: MemberId)
+    (target: MemberId)
+    (command: CohortCommand<MemberId>)
+    (modeOf: CohortState<MemberId> -> Mode)
+    : Result<Plan, Refusal> =
     match isToken caller, isToken target with
     | true, _ -> Result.Error Refusal.CallerHoldsToken
     | false, true -> Result.Error(Refusal.TargetHoldsToken target)
     | false, false ->
       match Map.tryFind caller state.Members with
       | Some { Presence = MemberPresence.Present } ->
-        match decide now [||] state (CohortCommand.SeatConductor(target, scope)) with
+        match decide now [||] state command with
         | Result.Error error -> Result.Error(Refusal.CohortRefused error)
         | Result.Ok _ ->
           Result.Ok
@@ -97,9 +119,34 @@ module SeatingFlow =
               Target = target
               TargetRole = state.Members.[target].Role
               Scope = scope
-              Seat = state.Conductor }
+              Seat = state.Conductor
+              Mode = modeOf state }
       | Some { Presence = MemberPresence.Departed _ }
       | None -> Result.Error(Refusal.CallerNotPresent caller)
+
+  /// Check the filling of an EMPTY seat against the cohort's rules, before anybody is asked.
+  let plan (now: DateTime) (state: CohortState<MemberId>) (scope: CohortScope) (caller: MemberId) (target: MemberId) : Result<Plan, Refusal> =
+    planFor now state scope caller target (CohortCommand.SeatConductor(target, scope)) (fun _ -> Mode.Fill)
+
+  /// Check the REPLACEMENT of `holder` against the cohort's rules, before anybody is asked: the seat must still be bound to
+  /// `holder`, and `target` must be someone else who is present. A holder that is not the holder is refused with the seat as
+  /// it stands, so the caller learns who holds it. The plan carries when the holder last renewed its lease, for the question.
+  let planReplace
+    (now: DateTime)
+    (state: CohortState<MemberId>)
+    (scope: CohortScope)
+    (caller: MemberId)
+    (target: MemberId)
+    (holder: MemberId)
+    : Result<Plan, Refusal> =
+    planFor
+      now
+      state
+      scope
+      caller
+      target
+      (CohortCommand.ReplaceConductor(holder, target, scope))
+      (fun reached -> Mode.Replace(holder, reached.Members.[holder].LastRenewal))
 
   /// Put the question to the person and turn their answer into an approval, or a refusal. A client that never offered
   /// elicitation is refused without a question. A question that throws is a refusal that keeps the cause. The one place a
@@ -117,7 +164,12 @@ module SeatingFlow =
               return Answer.CouldNotBeAsked ex.Message
           }
         match answer with
-        | Answer.Yes -> return Result.Ok { Target = plan.Target; Scope = plan.Scope }
+        | Answer.Yes ->
+          let replacing =
+            match plan.Mode with
+            | Mode.Fill -> None
+            | Mode.Replace(holder, _) -> Some holder
+          return Result.Ok { Target = plan.Target; Scope = plan.Scope; Replacing = replacing }
         | Answer.Declined -> return Result.Error Refusal.Declined
         | Answer.Cancelled -> return Result.Error Refusal.Cancelled
         | Answer.AnsweredOther action -> return Result.Error(Refusal.AnsweredOther action)
@@ -126,4 +178,7 @@ module SeatingFlow =
     }
 
   /// The command an approval stands for. The only function that takes one.
-  let commandOf (approval: SeatApproval) : CohortCommand<MemberId> = CohortCommand.SeatConductor(approval.Target, approval.Scope)
+  let commandOf (approval: SeatApproval) : CohortCommand<MemberId> =
+    match approval.Replacing with
+    | None -> CohortCommand.SeatConductor(approval.Target, approval.Scope)
+    | Some holder -> CohortCommand.ReplaceConductor(holder, approval.Target, approval.Scope)

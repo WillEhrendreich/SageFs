@@ -256,4 +256,53 @@ let tests =
       })
     }
     |> Integration.register (Integration.Dedicated "--integration-browser")
+
+    testTask "[Integration] Cohort panel: a silent conductor gets a Replace button that asks naming the holder, then posts the holder and its own ticket to the seat route" {
+      let bob = MemberId.Minted "bob"
+      let ledger =
+        ledgerAfter
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+            CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine) ]
+      let frame = frameOf ledger
+      let lastHeard = DateTime(2026, 11, 9, 8, 0, 0, DateTimeKind.Utc)
+      let silent = Features.CohortStatusText.HolderSilence.SilentSince(lastHeard, lastHeard + Timeouts.cohortLeaseWindow)
+      let now = lastHeard + Timeouts.cohortLeaseWindow
+      let panel =
+        Elem.div [] [ renderCohortPanelCore (fun subject -> "T/" + subject) silent now frame; renderCohortLanesPanel ledger ]
+      let facts = { replFacts with Cohort = PanelFacts.cohortPresence frame }
+      let snapshot = PanelVisibility.apply facts { snapshotWith off ledger with CohortPanel = panel }
+      let html = Dashboard.renderShell "0.0.0" "client-1" "abcd1234" "/work" (renderMainContent snapshot) |> renderNode
+      do! inBrowser 1400 html (fun page errors _ -> task {
+        let dialogs = List<string>()
+        page.Dialog.Add(fun dialog ->
+          lock dialogs (fun () -> dialogs.Add dialog.Message)
+          dialog.AcceptAsync() |> ignore)
+        // The panel is a collapsed <details>; the person opens it.
+        let summary = page.Locator("#cohort-panel > summary")
+        do! summary.ClickAsync()
+        let replace = page.Locator("[data-testid='cohort-replace']")
+        let! buttons = replace.CountAsync()
+        Expect.equal "one Replace button: bob replaces alice, and alice is not offered herself" 1 buttons
+        do! PlaywrightExpect.isVisibleAsync replace "the Replace button is visible"
+        let! label = replace.InnerTextAsync()
+        Expect.stringContains "the button says whom it replaces with whom" "Replace alice with bob" label
+        let! request =
+          page.RunAndWaitForRequestAsync(
+            Func<Task>(fun () -> replace.ClickAsync()),
+            Func<IRequest, bool>(fun r -> r.Method = "POST" && r.Url.Contains "/dashboard/cohort/seat"))
+        let url = Uri(request.Url)
+        Expect.equal "the click posted to the seat route" "/dashboard/cohort/seat" url.AbsolutePath
+        let query = System.Web.HttpUtility.ParseQueryString url.Query
+        Expect.equal "naming the member who takes the seat" "bob" query.["member"]
+        Expect.equal "and the holder it replaces" "alice" query.["replace"]
+        Expect.equal "with the ticket issued for that pair" ("T/" + Server.SeatNonces.replaceSubject "alice" "bob") query.["nonce"]
+        Expect.equal "after one question" 1 dialogs.Count
+        Expect.stringContains "the question names the holder" "alice" dialogs.[0]
+        Expect.stringContains "and how long it has been silent" (sprintf "silent for %d min" (int Timeouts.cohortLeaseWindow.TotalMinutes)) dialogs.[0]
+        let path = IO.Path.Combine(PlaywrightFixture.screenshotDir, "cohort-replace-button.png")
+        do! PlaywrightFixture.takeScreenshot page true path
+        Expect.isEmpty "no console error" (List.ofSeq errors)
+      })
+    }
+    |> Integration.register (Integration.Dedicated "--integration-browser")
   ]

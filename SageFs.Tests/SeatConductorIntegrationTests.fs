@@ -68,6 +68,9 @@ let private status (client: McpClient) =
 let private ask (client: McpClient) (name: string) (toMember: string) =
   callTool client "seat_conductor" [ "agentName", box name; "toMember", box toMember ]
 
+let private askReplacing (client: McpClient) (name: string) (holder: string) =
+  callTool client "seat_conductor" [ "agentName", box name; "replaces", box holder ]
+
 let private idsIn (text: string) : Set<string> = memberIdPattern.Matches text |> Seq.map (fun m -> m.Value) |> Set.ofSeq
 
 let private conductorLine (text: string) : string =
@@ -166,6 +169,49 @@ let tests =
         guessBody |> Expect.stringContains "a ticket nobody issued is refused" "not one this daemon issued"
         let! afterGuess = status carol
         conductorLine afterGuess |> Expect.stringContains "the seat is still empty" "VACANT"
+      finally
+        SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+    }
+
+    testTask "a holder whose client is gone and whose lease has not lapsed is replaced when the person ticks the box, and not before" {
+      let! proc, port = SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith []
+      try
+        let bobQuestions = List<string>()
+        let bobSays = ref "decline"
+        let! alice = SageFs.Tests.CohortMcpToolsIntegrationTests.connect port
+        use! bob = connectAnswering port (Some(bobSays, bobQuestions))
+
+        let! _ = join alice "alice"
+        let! first = status alice
+        let aliceId = idsIn first |> Seq.exactlyOne
+        let! _ = join bob "bob"
+        let! afterBob = status bob
+        let bobId = Set.difference (idsIn afterBob) (Set.singleton aliceId) |> Seq.exactlyOne
+        // alice's client disappears. Her lease is thirty minutes long, so the seat stays hers.
+        do! alice.DisposeAsync().AsTask()
+        let! held = status bob
+        conductorLine held |> Expect.stringContains "the seat is still alice's: her lease has not lapsed" aliceId
+
+        // A person who says no leaves her in the seat, and the question named her.
+        let! declined = askReplacing bob "bob" aliceId
+        declined |> Expect.stringContains "refused, and says nothing was done" "Nothing was done"
+        bobQuestions.Count |> Expect.equal "the person was asked once" 1
+        bobQuestions.[0] |> Expect.stringContains "the question names the holder" aliceId
+        bobQuestions.[0] |> Expect.stringContains "and who would sit" bobId
+        let! stillHers = status bob
+        conductorLine stillHers |> Expect.stringContains "alice still holds the seat after a no" aliceId
+
+        // A holder that does not hold the seat is refused with the real holder named, and nobody is asked.
+        let! stale = askReplacing bob "bob" bobId
+        stale |> Expect.stringContains "refused: bob does not hold it" aliceId
+        bobQuestions.Count |> Expect.equal "nobody was asked about a replacement the cohort would refuse" 1
+
+        // The person ticks the box.
+        bobSays.Value <- "accept"
+        let! replaced = askReplacing bob "bob" aliceId
+        replaced |> Expect.stringContains "bob is the conductor" "is the conductor now"
+        let! after = status bob
+        conductorLine after |> Expect.stringContains "the status agrees" bobId
       finally
         SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
     }

@@ -77,7 +77,7 @@ module ToolSummaries =
     | ToolName.ReleaseClaim -> "Release a claim you hold."
     | ToolName.ReassignClaim -> "Conductor only: give an orphaned claim to a present member."
     | ToolName.DelegateConductor -> "Conductor only: hand the conductor seat to another present member."
-    | ToolName.SeatConductor -> "Ask the person at your client to fill an empty conductor seat; only their ticked yes seats anyone."
+    | ToolName.SeatConductor -> "Ask the person at your client to fill an empty conductor seat or replace its holder; only their ticked yes acts."
     | ToolName.RequestLanding -> "Queue your commits to be rebased onto the integration head, verified and fast-forwarded in. Watch it with get_cohort_status."
     | ToolName.WithdrawLanding -> "Withdraw a landing you requested, in any state short of Landed."
     | ToolName.VetoLanding -> "Object to a live landing with a reason. It is blocked and leaves the queue."

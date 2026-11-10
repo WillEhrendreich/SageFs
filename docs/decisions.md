@@ -1720,6 +1720,21 @@ process can send it. The header is now a closed `FetchSite` set and an extra che
 that can load the page can read a ticket out of it: the ticket stops blind, replayed and stale requests, and it does not
 authenticate a person. This route is no stronger than the dashboard's other open routes, and the docs say so.
 
+Replacing a silent holder (2026-11-09). A conductor whose connection is gone keeps a bound seat until its lease lapses, and
+replacing it needed `sagefs cohort seat --replace` from a shell. `seat_conductor` now takes `replaces`, the holder, and asks the
+same person the same kind of question with the holder and how long it has been silent in it. The shape is the seating's with one
+case added: `SeatingFlow.planReplace` runs `Cohort.decide` on `ReplaceConductor` against a copy of the state (so a `replaces` that
+is not the holder, an empty seat, the holder replacing itself, an absent target and a token on either side refuse before anybody
+is asked), the plan carries the holder and when it last renewed, and the `SeatApproval` carries the holder the person was shown,
+so `commandOf` returns `ReplaceConductor(holder, target, scope)` and only for a yes. The cohort's compare-and-swap is the second
+check: it runs again at commit, so a seat that changed hands while the person read the question refuses with the new holder named
+and the yes moves nothing. `SeatingSim` models that race (the holder hands the seat on while the question is open) and holds the
+invariant that a bound seat changes hands only on a yes and only from the holder shown, against a twin that replaces whoever
+holds the seat when the answer comes. The dashboard's cohort panel shows a Replace button per present member when the holder is
+silent. Its one-use ticket is issued for the pair of holder and member (`SeatNonces.replaceSubject`), so a ticket for one pair
+replaces no other pair and a Seat ticket replaces nobody. A holder that merely renews its lease late can still be replaced, because
+the person decides: the question says how long the holder has been silent, or that it renewed lately.
+
 What it does not do. It does not make an agent unable to harm a daemon whose operator credential it can read: the credential is a
 file the operating-system user can read, so an agent with a shell can run `sagefs cohort seat`, and `/exec` and most routes take no
 credential today, so a caller that reaches the port can run code that reads the file. The `a-token-for-every-daemon-call` item is what
