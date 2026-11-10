@@ -213,9 +213,18 @@ module CoverageInstrumenter =
         | None -> ()
       m.Body.OptimizeMacros()
 
-  /// Instrument an assembly: inject tracker + probes at sequence points.
+  /// Where the instrumented copy of an assembly is written.
+  [<RequireQualifiedAccess>]
+  type InstrumentedPlace =
+    /// Beside the original, as `<name>.instrumented.dll` with `<name>.instrumented.pdb`.
+    | Beside
+    /// In this directory under the original's own file name, so the DLL's debug directory names `<name>.pdb`. A debugger
+    /// finds a module's symbols through that name, so a copy that is moved over the original has to carry the original's.
+    | UnderOwnName of directory: string
+
+  /// Instrument an assembly: inject tracker + probes at sequence points, and write the copy where `place` says.
   /// Returns (InstrumentationMap, instrumentedAssemblyPath) or error.
-  let instrumentAssembly (assemblyPath: string)
+  let instrumentAssemblyAt (place: InstrumentedPlace) (assemblyPath: string)
     : Result<InstrumentationMap * string, string> =
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let activity =
@@ -269,7 +278,9 @@ module CoverageInstrumenter =
         let name = Path.GetFileNameWithoutExtension(assemblyPath)
         let ext = Path.GetExtension(assemblyPath)
         let instrPath =
-          Path.Combine(dir, sprintf "%s.instrumented%s" name ext)
+          match place with
+          | InstrumentedPlace.Beside -> Path.Combine(dir, sprintf "%s.instrumented%s" name ext)
+          | InstrumentedPlace.UnderOwnName directory -> Path.Combine(directory, Path.GetFileName assemblyPath)
         let writerParams = WriterParameters(WriteSymbols = hasPdb)
         asm.Write(instrPath, writerParams)
         sw.Stop()
@@ -285,28 +296,46 @@ module CoverageInstrumenter =
       SageFs.Instrumentation.failSpan activity ex.Message
       Error(sprintf "Instrumentation failed: %s" ex.Message)
 
-  /// Instrument an assembly in-place by writing to temp then replacing.
+  /// Instrument an assembly and write the copy beside it as `<name>.instrumented.dll`.
+  let instrumentAssembly (assemblyPath: string)
+    : Result<InstrumentationMap * string, string> =
+    instrumentAssemblyAt InstrumentedPlace.Beside assemblyPath
+
+  /// Remove a staging directory. It is empty once both files are moved, so one that cannot be removed costs an empty folder and nothing else.
+  let private removeStaging (staging: string) : unit =
+    try Directory.Delete(staging, true) with _ -> ()
+
+  /// Instrument an assembly in-place by writing to a staging directory, then replacing.
   /// Returns InstrumentationMap or error. The original path is overwritten.
+  ///
+  /// The copy is staged under the original's own file name. Staged beside the original as `<name>.instrumented.dll`, its debug
+  /// directory named `<name>.instrumented.pdb`, which the move below renames away, so a debugger attached to the process
+  /// found no symbols for the assembly and no breakpoint in the person's code could bind.
   let instrumentAssemblyInPlace (assemblyPath: string)
     : Result<InstrumentationMap, string> =
-    instrumentAssembly assemblyPath
-    |> Result.bind (fun (map, instrPath) ->
-      match instrPath = assemblyPath with
-      | true -> Ok map
-      | false ->
-        try
-          let pdbPath = Path.ChangeExtension(assemblyPath, ".pdb")
-          let instrPdb = Path.ChangeExtension(instrPath, ".pdb")
-          File.Delete(assemblyPath)
-          File.Move(instrPath, assemblyPath)
-          match File.Exists(instrPdb) && File.Exists(pdbPath) with
-          | true ->
-            File.Delete(pdbPath)
-            File.Move(instrPdb, pdbPath)
-          | false -> ()
-          Ok map
-        with ex ->
-          Error(sprintf "Failed to replace assembly: %s" ex.Message))
+    let staging = Path.Combine(Path.GetDirectoryName(assemblyPath), sprintf ".sagefs-instrument-%s" (System.Guid.NewGuid().ToString "N"))
+    Directory.CreateDirectory staging |> ignore
+    let outcome =
+      instrumentAssemblyAt (InstrumentedPlace.UnderOwnName staging) assemblyPath
+      |> Result.bind (fun (map, instrPath) ->
+        match instrPath = assemblyPath with
+        | true -> Ok map
+        | false ->
+          try
+            let pdbPath = Path.ChangeExtension(assemblyPath, ".pdb")
+            let instrPdb = Path.ChangeExtension(instrPath, ".pdb")
+            File.Delete(assemblyPath)
+            File.Move(instrPath, assemblyPath)
+            match File.Exists(instrPdb) && File.Exists(pdbPath) with
+            | true ->
+              File.Delete(pdbPath)
+              File.Move(instrPdb, pdbPath)
+            | false -> ()
+            Ok map
+          with ex ->
+            Error(sprintf "Failed to replace assembly: %s" ex.Message))
+    removeStaging staging
+    outcome
 
   /// Collect coverage hits from an instrumented assembly via reflection.
   let collectCoverageHits

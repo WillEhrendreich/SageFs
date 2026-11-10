@@ -1,5 +1,8 @@
 module SageFs.Tests.CoverageInstrumenterTests
 
+open System.IO
+open System.Reflection.Metadata
+open System.Reflection.PortableExecutable
 open Mono.Cecil
 open Mono.Cecil.Cil
 open Expecto
@@ -153,5 +156,38 @@ let coverageInstrumenterTests =
         |> Array.sort
       lines
       |> Expect.equal "should find all 3 nesting levels" [| 1; 10; 20 |]
+    }
+
+    // A debugger finds a module's symbols through the DLL's debug directory: the pdb path it names, then a file of that name
+    // beside the DLL. The in-place instrumentation wrote the copy as `<name>.instrumented.dll`, so the directory named
+    // `<name>.instrumented.pdb`, which the move renames to `<name>.pdb`; netcoredbg attached to a host then reported "no symbols
+    // loaded" for the person's own assembly and no breakpoint in their test could bind (hand run, 2026-11-10).
+    test "WHY: an assembly instrumented in place still has symbols a debugger finds beside it" {
+      let directory = Directory.CreateTempSubdirectory("sagefs-instrument-").FullName
+      let dll = Path.Combine(directory, "Gen.dll")
+      let modDef = createAssemblyWithNestedType ()
+      modDef.Assembly.Write(dll, WriterParameters(WriteSymbols = true, SymbolWriterProvider = PortablePdbWriterProvider()))
+      let instrumented = CoverageInstrumenter.instrumentAssemblyInPlace dll
+      instrumented
+      |> Result.map (fun map -> map.TotalProbes)
+      |> Expect.equal "both sequence points were instrumented" (Result.Ok 2)
+      use image = new PEReader(File.OpenRead dll)
+      let mutable provider : MetadataReaderProvider = null
+      let mutable pdbPath : string = null
+      let found =
+        image.TryOpenAssociatedPortablePdb(
+          dll,
+          (fun path -> match File.Exists path with | true -> File.OpenRead path :> Stream | false -> null),
+          &provider,
+          &pdbPath)
+      found |> Expect.isTrue "a portable pdb is found for the instrumented DLL"
+      match provider with
+      | null -> ()
+      | opened -> opened.Dispose()
+      Path.GetFileName pdbPath |> Expect.equal "it is the pdb the original had" "Gen.pdb"
+      Directory.GetFileSystemEntries directory
+      |> Array.map Path.GetFileName
+      |> Array.sort
+      |> Expect.equal "the staging folder is gone" [| "Gen.dll"; "Gen.pdb" |]
     }
   ]
