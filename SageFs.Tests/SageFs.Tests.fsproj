@@ -214,6 +214,8 @@
         <Compile Include="LiveTestingCoverageStreamTests.fs" />
         <Compile Include="RebuildReadyWaitTests.fs" />
         <Compile Include="ElmLoopResilienceTests.fs" />
+        <Compile Include="ConfirmationVenueEffectTests.fs" />
+        <Compile Include="ConfirmWorkerOwnerTests.fs" />
         <Compile Include="ElmLoopMsgLabelTests.fs" />
         <Compile Include="ElmLoopStateMachineTests.fs" />
         <Compile Include="DashboardParsingTests.fs" />
@@ -346,6 +348,8 @@
         <Compile Include="SourceStateProbeTests.fs" />
         <Compile Include="SourceStateSimTests.fs" />
         <Compile Include="TrunkFollowSimTests.fs" />
+        <Compile Include="ConfirmThrowawaySimTests.fs" />
+        <Compile Include="ConfirmationVenueTests.fs" />
         <Compile Include="TrunkFollowTests.fs" />
         <Compile Include="TrunkFollowShellTests.fs" />
         <Compile Include="TrunkPanelTests.fs" />
@@ -739,6 +743,7 @@
         <Compile Include="SelfHostCoreOutcomeTests.fs" />
         <Compile Include="ReadyWaitManagerTests.fs" />
         <Compile Include="LeaseHolderOutcomeTests.fs" />
+        <Compile Include="ConfirmKeepsReplStateTests.fs" />
         <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />

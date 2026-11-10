@@ -700,6 +700,9 @@ let createSessionOpsWithRecovery
           HttpWorkerClient.proxyFromUrls sidStr urlMap
           |> Option.map (WorkerProtocol.SessionProxy.touching (fun () ->
             sessionManager.Post(SessionManager.SessionCommand.TouchSession sessionId)))
+          // What a hand eval or a loaded script puts into the worker is counted here, because a confirming build asks
+          // what a swap of the worker would lose.
+          |> Option.map (ConfirmWorkers.notingWorkOf snapshot sessionId)
       }
     GetSessionInfo = fun sessionId ->
       task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }
@@ -1997,8 +2000,41 @@ let createElmRuntime
     | Error err ->
       Error err
 
+  // The throwaway workers a confirming build runs its tests in when the session holds something a swap would lose. One
+  // owner for the daemon; `Venue.decide` says when it is used.
+  let confirmWorkers =
+    ConfirmWorkers.start (
+      ConfirmWorkers.productionPorts StartLedger.shared (fun sid ->
+        sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.GetSession(sid, reply))))
+    |> ConfirmWorkers.register
+  let chooseConfirmationVenue (sid: WorkerProtocol.SessionId) (file: string) : Async<Venue> =
+    async {
+      let! managed = sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.GetSession(sid, reply))
+      match managed with
+      // A session that is gone holds nothing; the swap then answers with the reason it cannot run.
+      | None -> return Venue.SwapInPlace SwapReason.NothingWouldBeLost
+      | Some session ->
+        let held =
+          match WorkerProtocol.SessionLifecycleStatus.workerPid session.Info.Status with
+          | Some pid -> ConfirmWorkers.handWork.HeldBy sid pid
+          | None -> SessionHandWork.nothing
+        let memory =
+          match checkMemoryAdmission readSnapshot with
+          | Result.Ok () -> MemoryHeadroom.Roomy
+          | Result.Error err -> MemoryHeadroom.Short (SageFsError.describe err)
+        let facts : VenueFacts =
+          { File = file
+            Held = held
+            Startup = RespawnAfterReap.sequencingFor session.Targets session.WorkingDir session.ProjectRoles
+            Memory = memory }
+        return Venue.decide facts
+    }
   let effectDeps =
     { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.prepareForCreateOf configureWarmupAutoOpen with
+        Confirmation =
+          { ChooseVenue = chooseConfirmationVenue
+            WantThrowaway = confirmWorkers.Want
+            EndThrowaway = confirmWorkers.Ended }
         GetWarmupContext = Some (fun sid -> getWarmupContextForElm (WorkerProtocol.SessionId.value sid))
         GetStreamingTestProxy = fun sid ->
           let snapshot = readSnapshot()
@@ -2289,7 +2325,11 @@ let run
           OnWarmupProgress = fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress
           OnSessionFaulted = fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error))
           // Every route that stops a session (MCP, HTTP, the dashboard, the reaper, memory pressure) ends here.
-          OnSessionRemoved = fun sid -> SessionOwners.release (WorkerProtocol.SessionId.value sid)
+          OnSessionRemoved =
+            fun sid ->
+              SessionOwners.release (WorkerProtocol.SessionId.value sid)
+              // A throwaway worker built for this session's confirmation goes with it.
+              ConfirmWorkers.sessionRemoved sid
           OnAppOutput = fun sid stream line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) stream line
           WhoDrives = fun sid -> whoDrivesCallback sid
           OnSupervisorAlarm = fun alarm -> Log.warn "[SessionManager] %s" (SupervisorWatchdog.describe alarm)

@@ -27,6 +27,8 @@ let createEffectDeps
       HttpWorkerClient.proxyFromUrls (WorkerProtocol.SessionId.value sessionId) urls
       |> Option.map (WorkerProtocol.SessionProxy.touching (fun () ->
         sessionManager.Post(SessionManager.SessionCommand.TouchSession sessionId)))
+      // The live loop's evaluated buffers are counted here, so a confirming build can tell what a swap would lose.
+      |> Option.map (ConfirmWorkers.notingWorkOf snap sessionId)
     CreateSession = fun targets workingDir workflow ->
       async {
         let autoOpenNamespaces = prepareForCreate (SessionProjectTarget.paths targets) workingDir
@@ -63,6 +65,7 @@ let createEffectDeps
       sessionManager.PostAndAsyncReply(fun reply ->
         SessionManager.SessionCommand.AwaitReady(sessionId, reply))
     ReadyDeadline = Timeouts.rebuildReadyWait
+    Confirmation = ConfirmationPorts.swapOnly
     GetStreamingTestProxy = fun _sessionId -> None
     GetWarmupContext = None
     TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()

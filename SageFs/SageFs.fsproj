@@ -88,6 +88,9 @@
         <!-- SessionOwners: Mcp.fs records who created each session, and `SessionAccess` refuses stopping or resetting another member's. -->
         <Compile Include="SessionOwners.fs" />
         <Compile Include="McpSessionAccess.fs" />
+        <!-- The owner of the throwaway workers a confirming build runs its tests in (the decisions are ThrowawayBook's), and
+             the store of what each worker's session holds. Before the effect handler, which asks them. -->
+        <Compile Include="ConfirmWorkers.fs" />
         <Compile Include="SageFsEffectHandler.fs" />
         <Compile Include="SageFsSseDedup.fs" />
         <Compile Include="SageFsDispatchReduction.fs" />

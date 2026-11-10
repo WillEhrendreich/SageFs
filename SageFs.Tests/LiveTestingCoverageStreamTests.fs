@@ -264,6 +264,7 @@ module private Edge =
       ListSessions = fun () -> async { return [] }
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait
+      Confirmation = ConfirmationPorts.swapOnly
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()

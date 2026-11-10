@@ -156,7 +156,8 @@ let private depsFor
           calls.Awaiting.TrySetResult () |> ignore
           return! awaitReady
         }
-      ReadyDeadline = deadline }
+      ReadyDeadline = deadline
+      Confirmation = ConfirmationPorts.swapOnly }
 
 let private rebuildEffect generation =
   SageFsEffect.TestCycle (

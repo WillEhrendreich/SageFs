@@ -415,6 +415,8 @@ type BuildDisagreement =
   | ResultDiffers of evaluated: string * built: string
   /// The build or the run against it did not answer in time.
   | BuildUnanswered of waited: string
+  /// No build was run, and this says why. The session's worker was left as it was.
+  | NotConfirmed of reason: string
 
 /// What code produced a test's current verdict. A keystroke's tests run against code the live session
 /// EVALUATED, which is not what a compiler would have made of the same text.
@@ -443,12 +445,10 @@ module ResultProvenance =
     | ResultProvenance.Compiled -> "ran against compiled binaries"
     | ResultProvenance.Evaluated -> "ran against code evaluated in the session; no real build has confirmed it yet"
     | ResultProvenance.VerifiedByBuild -> "evaluated, then confirmed by a real build"
-    | ResultProvenance.BuildDisagrees (BuildDisagreement.BuildFailed message) ->
-      sprintf "the real build failed, so this result is not confirmed: %s" message
-    | ResultProvenance.BuildDisagrees (BuildDisagreement.ResultDiffers (evaluated, built)) ->
-      sprintf "the real build disagrees: the eval said %s, the build says %s" evaluated built
-    | ResultProvenance.BuildDisagrees (BuildDisagreement.BuildUnanswered waited) ->
-      sprintf "the real build did not answer within %s, so this result is not confirmed" waited
+    | ResultProvenance.BuildDisagrees (BuildDisagreement.BuildFailed message) -> sprintf "the real build failed, so this result is not confirmed: %s" message
+    | ResultProvenance.BuildDisagrees (BuildDisagreement.ResultDiffers (evaluated, built)) -> sprintf "the real build disagrees: the eval said %s, the build says %s" evaluated built
+    | ResultProvenance.BuildDisagrees (BuildDisagreement.BuildUnanswered waited) -> sprintf "the real build did not answer within %s, so this result is not confirmed" waited
+    | ResultProvenance.BuildDisagrees (BuildDisagreement.NotConfirmed reason) -> sprintf "no real build confirmed this result: %s" reason
 
 type TestStatusEntry = {
   TestId: TestId

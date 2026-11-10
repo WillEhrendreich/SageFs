@@ -110,6 +110,7 @@ module TestDeps =
         }
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait
+      Confirmation = ConfirmationPorts.swapOnly
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -151,6 +152,7 @@ module TestDeps =
       ConfigureWarmupAutoOpen = ensureAutoOpenNoop
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait
+      Confirmation = ConfirmationPorts.swapOnly
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -793,6 +795,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ListSessions = fun () -> async { return [readySession] }
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait
+      Confirmation = ConfirmationPorts.swapOnly
       GetWarmupContext = Some getWarmupCtx
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -835,6 +838,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       }
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait
+      Confirmation = ConfirmationPorts.swapOnly
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -878,6 +882,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       }
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait
+      Confirmation = ConfirmationPorts.swapOnly
       GetWarmupContext =
         Some (fun _ -> async { ctxCalled <- true; return None })
       RegisterFileWatcher = fun _ _ -> ()
@@ -957,6 +962,7 @@ module RunEndHarness =
         ListSessions = fun () -> async { return [] }
         AwaitReady = fun _ -> async { return Result.Ok () }
         ReadyDeadline = Timeouts.rebuildReadyWait
+        Confirmation = ConfirmationPorts.swapOnly
         GetWarmupContext = None
         RegisterFileWatcher = fun _ _ -> ()
         DisposeFileWatcher = fun _ _ -> ()

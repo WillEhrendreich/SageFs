@@ -23,6 +23,10 @@ module BuildConfirmationSim =
   type BuildEnds =
     | Builds
     | Fails
+    /// The project builds and a throwaway worker comes up on it: the session's own worker is not touched.
+    | BuildsInThrowaway
+    /// No build is run: the venue refused the confirmation and said why.
+    | NotAttempted
 
   /// Whether the tests, run against what the build produced, say what the eval said.
   [<RequireQualifiedAccess>]
@@ -142,6 +146,14 @@ module BuildConfirmationSim =
     | [] -> ValueNone
     | _ -> ValueSome (List.item (((index % List.length keys) + List.length keys) % List.length keys) keys)
 
+  /// What a build that ends this way tells the machine.
+  let private answerOf (ends: BuildEnds) : BuildAnswer =
+    match ends with
+    | BuildEnds.Builds -> BuildAnswer.Built
+    | BuildEnds.BuildsInThrowaway -> BuildAnswer.BuiltInThrowaway
+    | BuildEnds.NotAttempted -> BuildAnswer.NotAttempted "the machine has no room for a second worker"
+    | BuildEnds.Fails -> BuildAnswer.DidNotBuild "the build failed"
+
   /// The event an op raises in this world, if it raises one.
   let private eventOf (world: World) (op: Op) : ConfirmationEvent voption =
     match op with
@@ -152,8 +164,7 @@ module BuildConfirmationSim =
     | Op.Quiet -> ValueSome ConfirmationEvent.QuietElapsed
     | Op.BuildDone (which, ends) ->
       nth which (world.Started |> Map.toList |> List.map fst)
-      |> ValueOption.map (fun g ->
-        ConfirmationEvent.BuildFinished (g, (match ends with | BuildEnds.Builds -> BuildAnswer.Built | BuildEnds.Fails -> BuildAnswer.DidNotBuild "the build failed")))
+      |> ValueOption.map (fun g -> ConfirmationEvent.BuildFinished (g, answerOf ends))
     | Op.RunDone (which, agreement) ->
       nth which (world.Running |> Map.toList |> List.map fst)
       |> ValueOption.map (fun g ->
@@ -180,7 +191,7 @@ module BuildConfirmationSim =
         (fun w effect ->
           match effect with
           | ConfirmationEffect.StartBuild (g, confirmation) -> { w with Started = Map.add g confirmation w.Started }
-          | ConfirmationEffect.RunAgainstBuild (g, _) ->
+          | ConfirmationEffect.RunAgainstBuild (g, _, _) ->
             match Map.tryFind g w.Started with
             | Some confirmation -> { w with Started = Map.remove g w.Started; Running = Map.add g confirmation w.Running }
             | None -> w

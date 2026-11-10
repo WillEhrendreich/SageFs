@@ -73,6 +73,24 @@ module SourceBound =
     |> Convert.ToHexString
     |> fun hex -> hex.ToLowerInvariant()
 
+/// What a confirming build asks of the daemon besides the session's own rebuild.
+type ConfirmationPorts =
+  { /// Where this session's confirmation of this file runs: `Venue.decide` over the facts the daemon reads (what the
+    /// worker holds, how the session starts, how much memory is left).
+    ChooseVenue: SessionId -> string -> Async<Venue>
+    /// A throwaway worker for this session's confirmation of this generation, built and Ready, or why not. Answers
+    /// every ask, including one whose generation ends first.
+    WantThrowaway: SessionId -> int64 -> Async<Result<ThrowawayWorker, string>>
+    /// This generation's confirmation is over: its throwaway worker is retired. Idempotent.
+    EndThrowaway: SessionId -> int64 -> unit }
+
+module ConfirmationPorts =
+  /// A daemon with no throwaway host: every confirmation swaps the session's worker, as before the host existed.
+  let swapOnly : ConfirmationPorts =
+    { ChooseVenue = fun _ _ -> async { return Venue.SwapInPlace SwapReason.NoThrowawayHost }
+      WantThrowaway = fun _ _ -> async { return Error "this daemon has no throwaway worker host" }
+      EndThrowaway = fun _ _ -> () }
+
 /// Dependencies the effect handler needs — injected, not hard-coded.
 /// This is the seam between pure Elm and impure infrastructure.
 type EffectDeps = {
@@ -114,6 +132,9 @@ type EffectDeps = {
   /// the discovery the daemon still holds. The daemon wires this to
   /// `SessionRefetch.postRefetchLiveTestingStateAfterReset`; the gate lives in the mailbox.
   RefetchLiveTestingState: SessionId -> Async<unit>
+  /// What a confirming build asks of the daemon besides the session's own rebuild: where it runs, and the throwaway
+  /// worker it runs in when the session holds something a swap would lose.
+  Confirmation: ConfirmationPorts
 }
 
 /// Routes SageFsEffect to real infrastructure via injected deps.
@@ -306,6 +327,9 @@ module SageFsEffectHandler =
 
   let private quietWindows = System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource>()
   let private confirmationBuilds = System.Collections.Concurrent.ConcurrentDictionary<struct (string * int64), CancellationTokenSource>()
+  /// Where each confirmation's throwaway worker answers, by session and generation, from the moment it is Ready until its
+  /// confirmation ends. The run against the build reads it; the worker itself belongs to `ConfirmWorkerOwner`.
+  let private confirmationThrowaways = System.Collections.Concurrent.ConcurrentDictionary<struct (string * int64), string>()
 
   let private confirmationEvent (dispatch: SageFsMsg -> unit) (sessionId: string) (event: Features.LiveTesting.ConfirmationEvent) =
     // The events that carry a verdict about the build are logged: a confirmation that never says anything
@@ -338,8 +362,13 @@ module SageFsEffectHandler =
       },
       fresh.Token)
 
-  /// Stop a build in flight, if it still is: its answer is no longer wanted.
-  let private abandonConfirmationBuild (sessionId: string) (generation: int64) =
+  /// Stop a build in flight, if it still is: its answer is no longer wanted. The confirmation's throwaway worker, if it
+  /// has one, goes with it: every way a confirmation ends comes through here.
+  let private abandonConfirmationBuild (deps: EffectDeps) (sessionId: string) (generation: int64) =
+    confirmationThrowaways.TryRemove(struct (sessionId, generation)) |> ignore
+    match SessionId.validate sessionId with
+    | Ok sid -> deps.Confirmation.EndThrowaway sid generation
+    | Error _ -> ()
     match confirmationBuilds.TryRemove(struct (sessionId, generation)) with
     | true, source ->
       Utils.Log.info "[confirm] session %s build %d is no longer watched (its answer, or a newer text, ended the wait)" sessionId generation
@@ -367,7 +396,7 @@ module SageFsEffectHandler =
       async {
         do! Async.Sleep Timeouts.liveTestConfirmationDeadline
         send (Features.LiveTesting.ConfirmationEvent.DeadlineReached generation)
-        abandonConfirmationBuild sessionId generation
+        abandonConfirmationBuild deps sessionId generation
       },
       token)
     Async.Start(
@@ -386,23 +415,41 @@ module SageFsEffectHandler =
             match SessionId.validate sessionId with
             | Error message -> send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild message))
             | Ok sid ->
-              match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
-              | Error err ->
-                send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild (SageFsError.describe err)))
-              | Ok _ ->
-                match! RebuildReadyWait.await (deps.AwaitReady sid) deps.ReadyDeadline token with
-                | RebuildReadyWait.Outcome.Ready ->
-                  match deps.GetStreamingTestProxy sid with
-                  | Some _ -> send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.Built))
-                  | None ->
-                    send (
-                      Features.LiveTesting.ConfirmationEvent.BuildFinished (
-                        generation, Features.LiveTesting.BuildAnswer.DidNotBuild "the build finished but the session has no test proxy to run the tests against"))
-                | RebuildReadyWait.Outcome.Failed err ->
+              match! deps.Confirmation.ChooseVenue sid confirmation.File with
+              | Venue.Refused refusal ->
+                send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.NotAttempted (ConfirmRefusal.describe refusal)))
+              | Venue.ThrowawayWorker keeps ->
+                // The session's own worker is not touched: the build and the tests are in a worker of their own.
+                Utils.Log.info "[confirm] session %s build %d runs in a throwaway worker; the session keeps %A" sessionId generation keeps
+                match! deps.Confirmation.WantThrowaway sid generation with
+                | Ok worker ->
+                  confirmationThrowaways.[struct (sessionId, generation)] <- worker.BaseUrl
+                  send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.BuiltInThrowaway))
+                  // Abandoned while the worker came up: its worker was retired with the abandon, so there is nothing to keep.
+                  match token.IsCancellationRequested with
+                  | true -> confirmationThrowaways.TryRemove(struct (sessionId, generation)) |> ignore
+                  | false -> ()
+                | Error reason ->
+                  send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild reason))
+              | Venue.SwapInPlace _ ->
+                // Nothing the session holds is lost by a swap, so the build replaces the worker and the tests run in it.
+                match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
+                | Error err ->
                   send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild (SageFsError.describe err)))
-                | RebuildReadyWait.Outcome.DeadlineReached ->
-                  send (Features.LiveTesting.ConfirmationEvent.DeadlineReached generation)
-                | RebuildReadyWait.Outcome.Cancelled -> ()
+                | Ok _ ->
+                  match! RebuildReadyWait.await (deps.AwaitReady sid) deps.ReadyDeadline token with
+                  | RebuildReadyWait.Outcome.Ready ->
+                    match deps.GetStreamingTestProxy sid with
+                    | Some _ -> send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.Built))
+                    | None ->
+                      send (
+                        Features.LiveTesting.ConfirmationEvent.BuildFinished (
+                          generation, Features.LiveTesting.BuildAnswer.DidNotBuild "the build finished but the session has no test proxy to run the tests against"))
+                  | RebuildReadyWait.Outcome.Failed err ->
+                    send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild (SageFsError.describe err)))
+                  | RebuildReadyWait.Outcome.DeadlineReached ->
+                    send (Features.LiveTesting.ConfirmationEvent.DeadlineReached generation)
+                  | RebuildReadyWait.Outcome.Cancelled -> ()
         with
         | :? OperationCanceledException -> ()
         | ex -> send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild ex.Message))
@@ -410,7 +457,7 @@ module SageFsEffectHandler =
       token)
 
   /// The main effect handler — plug into ElmProgram.ExecuteEffect
-  let execute
+  let rec execute
     (deps: EffectDeps)
     (dispatch: SageFsMsg -> unit)
     (effect: SageFsEffect) : Async<unit> =
@@ -1156,8 +1203,19 @@ module SageFsEffectHandler =
         | Features.LiveTesting.ConfirmationEffect.StartQuietWindow -> startQuietWindow dispatch sessionId
         | Features.LiveTesting.ConfirmationEffect.StartBuild (generation, evaluated) ->
           startConfirmationBuild deps dispatch sessionId generation evaluated
-        | Features.LiveTesting.ConfirmationEffect.AbandonBuild generation -> abandonConfirmationBuild sessionId generation
-        // The run against the build is an ordinary run effect the reducer emits beside this one.
+        | Features.LiveTesting.ConfirmationEffect.AbandonBuild generation -> abandonConfirmationBuild deps sessionId generation
+        // The run against the build is an ordinary run effect the reducer emits beside this one (`RunInThrowaway` when the
+        // build's worker is a throwaway).
         | Features.LiveTesting.ConfirmationEffect.RunAgainstBuild _
         | Features.LiveTesting.ConfirmationEffect.Mark _ -> ()
       }
+
+    | SageFsEffect.RunInThrowaway (sessionId, generation, request) ->
+      // The run is the ordinary one, asked of the throwaway worker built for this generation instead of the session's.
+      // A generation that was abandoned has no worker any more: its tests then end as not run, and the machine has
+      // already moved on, so nothing is said about them.
+      let proxy =
+        match confirmationThrowaways.TryGetValue(struct (sessionId, generation)) with
+        | true, baseUrl -> Some (HttpWorkerClient.streamingTestProxyWithCoverage Timeouts.workerHttpRead baseUrl)
+        | false, _ -> None
+      execute { deps with GetStreamingTestProxy = fun _ -> proxy } dispatch (SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RunAffectedTests request))

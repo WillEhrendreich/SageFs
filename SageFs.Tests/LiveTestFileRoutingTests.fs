@@ -243,6 +243,7 @@ let private watcherDirs (effects: SageFsEffect list) (pick: TestCycleEffect -> s
     | SageFsEffect.TestCycle cycleEffect -> pick cycleEffect
     | SageFsEffect.Editor _
     | SageFsEffect.SwitchWorkflow _
+    | SageFsEffect.RunInThrowaway _
     | SageFsEffect.Confirm _ -> None)
 
 let private registeredDir (effect: TestCycleEffect) =

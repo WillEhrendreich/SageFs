@@ -20,7 +20,7 @@ module BuildConfirmationGenerators =
           | 3 -> Op.EvaluatedNothing
           | 4 | 5 -> Op.Edited(rnd.Next contents)
           | 6 | 7 -> Op.Quiet
-          | 8 | 9 -> Op.BuildDone(rnd.Next(0, 4), (match rnd.Next 4 with | 0 -> BuildEnds.Fails | _ -> BuildEnds.Builds))
+          | 8 | 9 -> Op.BuildDone(rnd.Next(0, 4), (match rnd.Next 8 with | 0 -> BuildEnds.Fails | 1 | 2 -> BuildEnds.BuildsInThrowaway | 3 -> BuildEnds.NotAttempted | _ -> BuildEnds.Builds))
           | 10 | 11 -> Op.RunDone(rnd.Next(0, 4), (match rnd.Next 3 with | 0 -> Agreement.Differs | _ -> Agreement.Agrees))
           | _ -> Op.Deadline(rnd.Next(0, 4)) ]
     { Seed = seed; Ops = ops }
@@ -67,6 +67,16 @@ module BuildConfirmationGenerators =
   let hungRun : Scenario =
     { Seed = 307
       Ops = [ Op.Evaluated 0; Op.Quiet; Op.BuildDone(0, BuildEnds.Builds); Op.Deadline 0 ] }
+
+  /// The session holds REPL state, so the build is confirmed in a throwaway worker and the run goes there.
+  let agreesInThrowaway : Scenario =
+    { Seed = 309
+      Ops = [ Op.Evaluated 1; Op.Quiet; Op.BuildDone(0, BuildEnds.BuildsInThrowaway); Op.RunDone(0, Agreement.Agrees) ] }
+
+  /// The venue refuses: no build, and the rows say why.
+  let refused : Scenario =
+    { Seed = 310
+      Ops = [ Op.Evaluated 1; Op.Quiet; Op.BuildDone(0, BuildEnds.NotAttempted) ] }
 
   /// An eval that ran no tests: nothing to confirm, so nothing is built.
   let evaluatedNothing : Scenario =

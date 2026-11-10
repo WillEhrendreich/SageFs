@@ -565,6 +565,55 @@ module WorkerProtocol =
       | WorkerMessage.SetSaveSource _
       | WorkerMessage.Shutdown -> false
 
+  /// What a message the daemon sends puts into (or takes out of) the worker's FSI session, as far as a confirming build
+  /// needs to know: a swap of the worker drops all of it.
+  [<RequireQualifiedAccess>]
+  type WorkPut =
+    /// Evaluated by hand: a REPL eval, or a script loaded.
+    | HandEval
+    /// The live loop evaluated this file's editor buffer.
+    | Buffer of file: string
+    /// A reset emptied the session.
+    | Cleared
+    /// Nothing the session would miss.
+    | Nothing
+
+  [<RequireQualifiedAccess>]
+  module WorkPut =
+    /// What this message puts into the session. Only the messages that define things, or empty the session, say
+    /// anything; the rest is `Nothing`.
+    let ofMessage (message: WorkerMessage) : WorkPut =
+      match message with
+      | WorkerMessage.EvalCode _
+      | WorkerMessage.LoadScript _ -> WorkPut.HandEval
+      | WorkerMessage.EvalLiveTestFile (file, _, _) -> WorkPut.Buffer file
+      | WorkerMessage.ResetSession _
+      | WorkerMessage.HardResetSession _ -> WorkPut.Cleared
+      // Every other message reads or runs what the session already holds. Each is listed, so a new message cannot slip
+      // by unconsidered.
+      | WorkerMessage.CheckCode _
+      | WorkerMessage.TypeCheckWithSymbols _
+      | WorkerMessage.GetCompletions _
+      | WorkerMessage.GetReferences _
+      | WorkerMessage.CancelEval
+      | WorkerMessage.CancelEvalRequest _
+      | WorkerMessage.LevelRepl _
+      | WorkerMessage.GetStatus _
+      | WorkerMessage.GetLiveValues _
+      | WorkerMessage.EvaluateLiveMember _
+      | WorkerMessage.SetValueWalk _
+      | WorkerMessage.RunTests _
+      | WorkerMessage.GetTestDiscovery _
+      | WorkerMessage.GetInstrumentationMaps _
+      | WorkerMessage.RunApp _
+      | WorkerMessage.StopApp _
+      | WorkerMessage.AwaitAppChange _
+      | WorkerMessage.DebugTestBegin _
+      | WorkerMessage.DebugTestContinue _
+      | WorkerMessage.SetSaveSource _
+      | WorkerMessage.ApplySaves _
+      | WorkerMessage.Shutdown -> WorkPut.Nothing
+
   /// What a reply says happened to the worker's FSI host.
   [<RequireQualifiedAccess>]
   type HostChange =
@@ -625,6 +674,16 @@ module WorkerProtocol =
         match WorkerMessage.isActivity msg with
         | true -> touch ()
         | false -> ()
+        proxy msg
+
+    /// Wrap a proxy so every message that defines something in the worker's session, or empties it, calls `put` before it
+    /// is sent. A confirming build asks what a swap of the worker would lose, and this is where that is counted: every
+    /// route into a worker goes through a proxy, so none can forget to say it.
+    let notingWork (put: WorkPut -> unit) (proxy: SessionProxy) : SessionProxy =
+      fun msg ->
+        match WorkPut.ofMessage msg with
+        | WorkPut.Nothing -> ()
+        | work -> put work
         proxy msg
 
     /// Wrap a proxy so a hard reset of the worker's own FSI host that resolves Ok calls `rebuilt` before the caller hears the

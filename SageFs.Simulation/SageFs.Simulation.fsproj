@@ -179,6 +179,11 @@
              manage_local_data; twins skip every tool, spare the creator on manage_local_data, and bring back the old
              gate that asked about the session tools. -->
         <Compile Include="ConfirmationGateSim.fs" />
+        <!-- Throwaway worker DST: folds the real ThrowawayBook.step through confirmations that want a worker, workers that
+             come up late, starts that fail, generations that end and sessions that go; twins leak a late worker, keep a
+             replaced one, strand the caller waiting on one, and ignore a session going. -->
+        <Compile Include="ConfirmThrowawaySim.fs" />
+        <Compile Include="ConfirmThrowawayInvariants.fs" />
         <Compile Include="TweakerVersusProgramSim.fs" />
         <!-- Ready-wait DST: folds the real ReadyWait decisions (plan, ofSession, ofRebuildEnd) through callers
              arriving, a rebuild starting and succeeding or failing, workers coming up, faults and deadlines,

@@ -127,6 +127,10 @@ module BuildConfirmationInvariants =
             match loud (function ResultProvenance.BuildDisagrees (BuildDisagreement.BuildFailed _) -> true | _ -> false) with
             | true -> ValueNone
             | false -> ValueSome (sprintf "step %A: the build of the content in flight failed and nothing was said" s.Op)
+          | ConfirmationEvent.BuildFinished (g, BuildAnswer.NotAttempted _), ValueSome active when g = active ->
+            match loud (function ResultProvenance.BuildDisagrees (BuildDisagreement.NotConfirmed _) -> true | _ -> false) with
+            | true -> ValueNone
+            | false -> ValueSome (sprintf "step %A: the confirmation was refused and nothing was said" s.Op)
           | ConfirmationEvent.DeadlineReached g, ValueSome active when g = active ->
             match loud (function ResultProvenance.BuildDisagrees (BuildDisagreement.BuildUnanswered _) -> true | _ -> false) with
             | true -> ValueNone

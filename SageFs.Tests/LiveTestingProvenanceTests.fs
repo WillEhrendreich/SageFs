@@ -114,7 +114,7 @@ let confirmationFlowTests =
         |> List.pick (function ConfirmationEffect.StartBuild (g, _) -> Some g | _ -> None)
       let built = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.Built)))
       confirmEffects (snd built)
-      |> List.exists (function ConfirmationEffect.RunAgainstBuild (g, tests) -> g = generation && List.sort tests = List.sort (List.ofArray ids) | _ -> false)
+      |> List.exists (function ConfirmationEffect.RunAgainstBuild (g, tests, RunTarget.SessionWorker) -> g = generation && List.sort tests = List.sort (List.ofArray ids) | _ -> false)
       |> Expect.isTrue "every evaluated test is run against the build"
       let after, _ = built |> runs sid results
       for tc in everyTest do
@@ -167,6 +167,55 @@ let confirmationFlowTests =
       let late, _ = abandoned |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.DidNotBuild "too late to matter")))
       for tc in everyTest do
         provenanceOf sid tc late |> Expect.equal (sprintf "%s is untouched by an answer about older text" tc.DisplayName) ResultProvenance.Evaluated
+
+    testCase "a build whose worker is a throwaway runs the tests there, never in the session's own worker, with no coverage maps" <| fun _ ->
+      let model, sid = started ()
+      let results = everyTest |> Array.map passed
+      let state = evaluatedRun sid results model |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.QuietElapsed))
+      let generation =
+        confirmEffects (snd state)
+        |> List.pick (function ConfirmationEffect.StartBuild (g, _) -> Some g | _ -> None)
+      let built = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.BuiltInThrowaway)))
+      confirmEffects (snd built)
+      |> List.exists (function ConfirmationEffect.RunAgainstBuild (g, tests, RunTarget.Throwaway) -> g = generation && List.sort tests = List.sort (List.ofArray ids) | _ -> false)
+      |> Expect.isTrue "every evaluated test is run against the throwaway worker"
+      let thrownAway =
+        snd built
+        |> List.choose (function SageFsEffect.RunInThrowaway (s, g, request) when s = sid && g = generation -> Some request | _ -> None)
+      match thrownAway with
+      | [ request ] ->
+        request.Tests |> Array.map (fun t -> t.Id) |> Array.sort |> Expect.equal "the evaluated tests" (Array.sort ids)
+        request.InstrumentationMaps |> Expect.isEmpty "a throwaway worker's coverage is not the session's, so the run carries no maps"
+      | other -> failtestf "expected exactly one run in the throwaway worker, got %d" other.Length
+      snd built
+      |> List.exists (function SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests _) -> true | _ -> false)
+      |> Expect.isFalse "the session's own worker is not asked to run them"
+      let after, _ = built |> runs sid results
+      for tc in everyTest do
+        provenanceOf sid tc after |> Expect.equal (sprintf "%s agreed with the throwaway build" tc.DisplayName) ResultProvenance.VerifiedByBuild
+
+    testCase "a confirmation the venue refused marks every row not confirmed, with the reason, and runs nothing" <| fun _ ->
+      let model, sid = started ()
+      let state = evaluatedRun sid (everyTest |> Array.map passed) model |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.QuietElapsed))
+      let generation =
+        confirmEffects (snd state)
+        |> List.pick (function ConfirmationEffect.StartBuild (g, _) -> Some g | _ -> None)
+      let reason = ConfirmRefusal.describe (ConfirmRefusal.MemoryPressure "the machine is almost out of memory")
+      let after, effects = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.NotAttempted reason)))
+      for tc in everyTest do
+        match provenanceOf sid tc after with
+        | ResultProvenance.BuildDisagrees (BuildDisagreement.NotConfirmed said) ->
+          said |> Expect.stringContains "the reason is on the row" "almost out of memory"
+        | other -> failtestf "expected %s to say it was not confirmed, got %A" tc.DisplayName other
+      effects
+      |> List.exists (function SageFsEffect.RunInThrowaway _ -> true | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests _) -> true | _ -> false)
+      |> Expect.isFalse "no run anywhere"
+
+    testCase "a session the landing gate drives is never confirmed by a build of its own" <| fun _ ->
+      let model, sid = started ()
+      let verifying = fst (SageFsUpdate.update (SageFsMsg.SessionVerifiesLandings sid) model)
+      let _, effects = evaluatedRun sid (everyTest |> Array.map passed) verifying
+      confirmEffects effects |> Expect.isEmpty "no quiet window, no build, nothing to swap under a verification"
   ]
 
 [<Tests>]

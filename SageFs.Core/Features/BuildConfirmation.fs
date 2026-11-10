@@ -58,6 +58,11 @@ type RunBasis =
 type BuildAnswer =
   /// The project built, and the session came back up on what it made.
   | Built
+  /// The project built, and a throwaway worker came up on what it made. The session's own worker was not touched, so
+  /// its definitions, its unsaved buffers and a test held for a debugger are all still there.
+  | BuiltInThrowaway
+  /// No build was run, and this is why. The session was left as it was.
+  | NotAttempted of reason: string
   /// It did not, and this is why, in the compiler's or the session's own words.
   | DidNotBuild of message: string
 
@@ -74,13 +79,21 @@ type ConfirmationEvent =
   /// The wait for this generation's build or built run has gone on too long.
   | DeadlineReached of generation: int64
 
+/// Which worker runs the tests against a build.
+[<RequireQualifiedAccess>]
+type RunTarget =
+  /// The session's own worker, which the build replaced.
+  | SessionWorker
+  /// A throwaway worker built for this generation. Its coverage is not the session's, so the run reports none.
+  | Throwaway
+
 [<RequireQualifiedAccess>]
 type ConfirmationEffect =
   /// Start (or restart) the quiet window.
   | StartQuietWindow
   | StartBuild of generation: int64 * Confirmation
   | AbandonBuild of generation: int64
-  | RunAgainstBuild of generation: int64 * tests: TestId list
+  | RunAgainstBuild of generation: int64 * tests: TestId list * target: RunTarget
   /// What the rows of these tests say now, for this content.
   | Mark of content: AnalysisIdentity * provenance: Map<TestId, ResultProvenance>
 
@@ -93,6 +106,15 @@ module ConfirmationPhase =
     | ConfirmationPhase.Quiet _ -> "quiet"
     | ConfirmationPhase.Building _ -> "building"
     | ConfirmationPhase.RunningBuilt _ -> "running_built"
+
+module RunBasis =
+  /// The provenance a run's results carry, by what the run ran against. A run against a confirming build carries
+  /// Compiled until the confirmation says what the build made of it.
+  let provenanceOf (basis: RunBasis) : ResultProvenance =
+    match basis with
+    | RunBasis.Evaluated _ -> ResultProvenance.Evaluated
+    | RunBasis.Compiled
+    | RunBasis.ConfirmingBuild _ -> ResultProvenance.Compiled
 
 module ConfirmationEvent =
   /// One word for the log, saying which event a step folded.
@@ -201,7 +223,14 @@ module BuildConfirmation =
       [ ConfirmationEffect.StartBuild (generation, confirmation) ]
     | ConfirmationPhase.Building (confirmation, generation), ConfirmationEvent.BuildFinished (answered, BuildAnswer.Built) when answered = generation ->
       { machine with Phase = ConfirmationPhase.RunningBuilt (confirmation, generation) },
-      [ ConfirmationEffect.RunAgainstBuild (generation, confirmation.Evaluated |> Map.keys |> List.ofSeq) ]
+      [ ConfirmationEffect.RunAgainstBuild (generation, confirmation.Evaluated |> Map.keys |> List.ofSeq, RunTarget.SessionWorker) ]
+    | ConfirmationPhase.Building (confirmation, generation), ConfirmationEvent.BuildFinished (answered, BuildAnswer.BuiltInThrowaway) when answered = generation ->
+      { machine with Phase = ConfirmationPhase.RunningBuilt (confirmation, generation) },
+      [ ConfirmationEffect.RunAgainstBuild (generation, confirmation.Evaluated |> Map.keys |> List.ofSeq, RunTarget.Throwaway) ]
+    | ConfirmationPhase.Building (confirmation, generation), ConfirmationEvent.BuildFinished (answered, BuildAnswer.NotAttempted reason) when answered = generation ->
+      { machine with Phase = ConfirmationPhase.Idle },
+      [ ConfirmationEffect.Mark (confirmation.Content, markAll confirmation (ResultProvenance.BuildDisagrees (BuildDisagreement.NotConfirmed reason)))
+        ConfirmationEffect.AbandonBuild generation ]
     | ConfirmationPhase.Building (confirmation, generation), ConfirmationEvent.BuildFinished (answered, BuildAnswer.DidNotBuild message) when answered = generation ->
       // Answered, so the deadline that was watching this generation has nothing left to watch.
       { machine with Phase = ConfirmationPhase.Idle },

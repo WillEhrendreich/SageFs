@@ -575,6 +575,9 @@
         <Compile Include="TestDiscoveryReport.fs" />
         <Compile Include="SessionManagerCallbacks.fs" />
         <Compile Include="SessionRemoval.fs" />
+        <!-- Where a confirming build's tests run (a swap of the session's worker, or a throwaway worker), what a swap
+             would lose, and the book of throwaway workers. Pure; the daemon's owner is SageFs/ConfirmWorkers.fs. -->
+        <Compile Include="ConfirmationVenue.fs" />
         <Compile Include="SessionManager.fs" />
         <!-- After SessionManager: posts the one refetch every daemon-side caller of an in-worker
              reset makes once the reset resolves Ok (SessionCommand.RefetchLiveTestingState). -->

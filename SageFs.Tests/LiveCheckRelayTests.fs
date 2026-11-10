@@ -244,6 +244,7 @@ let liveCheckRelayTests =
                 return Result.Ok ()
               }
           ReadyDeadline = Timeouts.rebuildReadyWait
+          Confirmation = ConfirmationPorts.swapOnly
           GetWarmupContext = None
           RefetchLiveTestingState = fun _ -> async { return () }
           TestCycleCancellation = TestCycleCancellation.create ()

@@ -208,6 +208,8 @@ type SageFsEffect =
   | SwitchWorkflow of WorkflowTypes.SessionWorkflow
   /// What the confirmation of an evaluated run against a real build asks the world to do.
   | Confirm of sessionId: string * Features.LiveTesting.ConfirmationEffect
+  /// Run a confirmation's tests in the throwaway worker built for this generation, and report them as an ordinary run.
+  | RunInThrowaway of sessionId: string * generation: int64 * Features.LiveTesting.TestRunRequest
 
 /// The complete application state managed by the Elm loop.
 type SageFsModel = {
@@ -891,14 +893,6 @@ module SageFsUpdate =
   // produced its verdict, and an evaluated verdict is confirmed (or contradicted) by a real build once the
   // editing has gone quiet. The decision is the pure `BuildConfirmation.step`; this is only the wiring.
 
-  /// The provenance a run's results carry, by what the run ran against. A run against a confirming build
-  /// carries Compiled until the confirmation says what the build made of it.
-  let private provenanceOfBasis (basis: Features.LiveTesting.RunBasis) : Features.LiveTesting.ResultProvenance =
-    match basis with
-    | Features.LiveTesting.RunBasis.Evaluated _ -> Features.LiveTesting.ResultProvenance.Evaluated
-    | Features.LiveTesting.RunBasis.Compiled
-    | Features.LiveTesting.RunBasis.ConfirmingBuild _ -> Features.LiveTesting.ResultProvenance.Compiled
-
   /// Carry out what a confirmation step asked for: mark the rows it names, and hand the world the effects it
   /// cannot do itself. The run against a finished build is an ordinary run effect, with the basis recorded first.
   let private applyConfirmation
@@ -919,7 +913,7 @@ module SageFsUpdate =
                     Provenances = marks |> Map.fold (fun all id mark -> Map.add id mark all) state.Provenances }),
               ()) current
           marked, emitted
-        | Features.LiveTesting.ConfirmationEffect.RunAgainstBuild (generation, tests) ->
+        | Features.LiveTesting.ConfirmationEffect.RunAgainstBuild (generation, tests, target) ->
           let wanted = Set.ofList tests
           let running, planned =
             tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
@@ -929,18 +923,17 @@ module SageFsUpdate =
               { cycle with RunBasis = Features.LiveTesting.RunBasis.ConfirmingBuild generation },
               (toRun, sessionMaps)) current
           let toRun, sessionMaps = planned |> Option.defaultValue ([||], [||])
+          // A throwaway worker instrumented its own copy, so its run carries no maps and reports no coverage.
+          let request : Features.LiveTesting.TestRunRequest =
+            { Tests = toRun; Trigger = Features.LiveTesting.RunTrigger.ExplicitRun; TreeSitterElapsed = TimeSpan.Zero; FcsElapsed = TimeSpan.Zero; SessionId = Some sessionId
+              InstrumentationMaps = (match target with Features.LiveTesting.RunTarget.Throwaway -> [||] | Features.LiveTesting.RunTarget.SessionWorker -> sessionMaps) }
           let run =
             match Array.isEmpty toRun with
             | true -> []
             | false ->
-              [ SageFsEffect.TestCycle (
-                  Features.LiveTesting.TestCycleEffect.RunAffectedTests
-                    { Tests = toRun
-                      Trigger = Features.LiveTesting.RunTrigger.ExplicitRun
-                      TreeSitterElapsed = TimeSpan.Zero
-                      FcsElapsed = TimeSpan.Zero
-                      SessionId = Some sessionId
-                      InstrumentationMaps = sessionMaps }) ]
+              match target with
+              | Features.LiveTesting.RunTarget.Throwaway -> [ SageFsEffect.RunInThrowaway (sessionId, generation, request) ]
+              | Features.LiveTesting.RunTarget.SessionWorker -> [ SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RunAffectedTests request) ]
           running, emitted @ [ SageFsEffect.Confirm (sessionId, effect) ] @ run
         | other -> current, emitted @ [ SageFsEffect.Confirm (sessionId, other) ])
       (model, [])
@@ -957,6 +950,8 @@ module SageFsUpdate =
         let event =
           match cycle.RunBasis with
           | Features.LiveTesting.RunBasis.Compiled -> ValueNone
+          // A session the landing gate drives is never confirmed by a build of its own: the gate runs its files itself.
+          | Features.LiveTesting.RunBasis.Evaluated _ when Set.contains owner model.VerifyingSessions -> ValueNone
           | Features.LiveTesting.RunBasis.Evaluated (content, tests) ->
             ValueSome (
               Features.LiveTesting.ConfirmationEvent.EvaluatedRunFinished
@@ -1044,7 +1039,7 @@ module SageFsUpdate =
           let allResults = nonEmptyBatches |> List.collect Array.toList
           // Each result is marked with what the run it belongs to ran against, BEFORE the rows are
           // computed from it, so a row never shows a verdict with the wrong provenance.
-          let provenance = provenanceOfBasis cycle.RunBasis
+          let provenance = Features.LiveTesting.RunBasis.provenanceOf cycle.RunBasis
           let stamped =
             { cycle.TestState with
                 Provenances =

@@ -121,6 +121,31 @@ let buildConfirmationSimTests =
         |> Expect.isTrue "BuildUnanswered on every row"
         assertHolds t
 
+      testCase "agreesInThrowaway: the run goes to the throwaway worker, never to the session's own, and the rows end VerifiedByBuild" <| fun _ ->
+        let t = run BuildConfirmationGenerators.agreesInThrowaway
+        effectsOf t
+        |> List.exists (function ConfirmationEffect.RunAgainstBuild (_, _, RunTarget.Throwaway) -> true | _ -> false)
+        |> Expect.isTrue "the run is asked of the throwaway worker"
+        effectsOf t
+        |> List.exists (function ConfirmationEffect.RunAgainstBuild (_, _, RunTarget.SessionWorker) -> true | _ -> false)
+        |> Expect.isFalse "the session's own worker is not asked to run it"
+        finalRows 1 t
+        |> Map.toList
+        |> List.map snd
+        |> List.distinct
+        |> Expect.equal "all verified" [ ResultProvenance.VerifiedByBuild ]
+        assertHolds t
+
+      testCase "refused: no build runs, no test runs, and every row says it was not confirmed and why" <| fun _ ->
+        let t = run BuildConfirmationGenerators.refused
+        finalRows 1 t
+        |> Map.forall (fun _ p -> match p with ResultProvenance.BuildDisagrees (BuildDisagreement.NotConfirmed reason) -> reason <> "" | _ -> false)
+        |> Expect.isTrue "NotConfirmed with a reason on every row"
+        effectsOf t
+        |> List.exists (function ConfirmationEffect.RunAgainstBuild _ -> true | _ -> false)
+        |> Expect.isFalse "no run against anything"
+        assertHolds t
+
       testCase "evaluatedNothing: an eval that ran no tests confirms nothing and builds nothing" <| fun _ ->
         let t = run BuildConfirmationGenerators.evaluatedNothing
         builds t |> Expect.isEmpty "no build for a run of nothing"
