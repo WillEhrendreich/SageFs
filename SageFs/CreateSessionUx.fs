@@ -75,6 +75,31 @@ module CreateSessionUx =
     |> HostCoreAdoption.previewNoteForDaemon
     |> adoptionHint
 
+  /// The create reply's SDK line: when the SDK `dotnet` picks for these projects is one the worker cannot load (#183),
+  /// the refusal, which names the SDK and the global.json that pins one it can. A bare session has no project, so
+  /// `refusalFor` is not asked. `refusalFor` is `SdkChoice.refusalFor` in production.
+  let sdkHintWith
+    (refusalFor: int -> string -> string list -> SdkChoice.Refusal option)
+    (hostMajor: int)
+    (workingDir: string)
+    (targets: SessionProjectTarget list)
+    : string option =
+    let paths =
+      targets
+      |> List.choose (function
+        | SessionProjectTarget.Project path
+        | SessionProjectTarget.Solution path -> Some path
+        | SessionProjectTarget.Bare -> None)
+    match paths with
+    | [] -> None
+    | _ -> refusalFor hostMajor workingDir paths |> Option.map (fun refusal -> "SDK: " + SdkChoice.describeRefusal refusal)
+
+  /// The lines a create reply carries about the host side of the session: the project's own SageFs.Core, and the SDK
+  /// `dotnet` picks. The SDK line asks `dotnet --list-sdks`, a short process, like the adoption line reads files.
+  let hostHintsOfTargets (workingDir: string) (targets: SessionProjectTarget list) : string list =
+    Option.toList (adoptionHintOfTargets targets)
+    @ Option.toList (sdkHintWith SdkChoice.refusalFor System.Environment.Version.Major workingDir targets)
+
   /// Explicit session-creation success reply. At creation time the worker has
   /// not finished resolving projects, so this states exactly what was requested
   /// and points at get_session_status to confirm what actually loaded.

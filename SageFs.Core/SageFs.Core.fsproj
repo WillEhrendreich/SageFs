@@ -456,6 +456,9 @@
         <Compile Include="SessionState.fs" />
         <!-- Before SageFsError: ProjectFrameworkNotHostable carries its UnsupportedTfmReason. -->
         <Compile Include="ProjectCompatibility.fs" />
+        <!-- The SDK a project load uses, and the refusal that names it. After ProjectCompatibility (it reads the
+             project's target frameworks) and before AppState (the warmup fault carries its text). -->
+        <Compile Include="SdkChoice.fs" />
         <Compile Include="FsiHostCrash.fs" />
         <!-- How long an eval call waits, and when it asks the eval to stop. BCL only. -->
         <Compile Include="EvalBound.fs" />

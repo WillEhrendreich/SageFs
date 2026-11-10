@@ -399,6 +399,7 @@
         <Compile Include="FsiProtocolThroughputTests.fs" />
         <Compile Include="FsiHostBuildTests.fs" />
         <Compile Include="FsiHostSdkRootTests.fs" />
+        <Compile Include="SdkChoiceTests.fs" />
         <Compile Include="FsiHostClientTests.fs" />
         <Compile Include="FsiHostLostTests.fs" />
         <Compile Include="HostCrashTests.fs" />

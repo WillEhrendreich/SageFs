@@ -1804,7 +1804,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           let msg =
             match ex with
             | :? OperationCanceledException -> "Initial warm-up timed out after 5 minutes"
-            | _ -> sprintf "Initial warm-up failed: %s" ex.Message
+            | _ -> SdkChoice.warmupFailureMessage System.Environment.Version.Major (sprintf "Initial warm-up failed: %s" ex.Message) originalSln.Mode (originalSln.FsProjects |> List.map (fun p -> p.ProjectFileName))
           logger.LogError (sprintf "❌ %s" msg)
           match isNull ex.InnerException with
           | false -> logger.LogError (sprintf "  Inner: %s" ex.InnerException.Message)

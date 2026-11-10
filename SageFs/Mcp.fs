@@ -2203,7 +2203,7 @@ module McpTools =
         let packageRefs = perProject |> List.map snd |> WorkflowTypes.WorkflowDetection.extractPackageNames
         let lines =
           Option.toList (formatDetectionHint packageRefs workflow)
-          @ ProjectCompatibility.formatToolchainAdvisories perProject @ Option.toList (CreateSessionUx.adoptionHintOfTargets targets)
+          @ ProjectCompatibility.formatToolchainAdvisories perProject @ CreateSessionUx.hostHintsOfTargets workingDir targets
         let hint = match lines with [] -> None | ls -> Some(String.concat "\n\n" ls)
         return CreateSessionUx.formatCreateSessionReply sid targets hint
       | Result.Error err -> return SageFsError.describeForAgent err

@@ -97,7 +97,12 @@ module FallbackCause =
     | FallbackCause.ReturnedNothing ->
       sprintf "MSBuild evaluation failed in-process without reporting an error (the project loader returned no projects). %s" whatToDo
     | FallbackCause.SkippedNewerSdk (sdkMajor, hostMajor) ->
-      sprintf "This project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d), so it was not loaded in-process. %s" sdkMajor hostMajor whatToDo
+      sprintf
+        "This project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d), so it was not loaded in-process. To load it, pin an installed SDK of major %d or older with a global.json in the project's folder or above it (`dotnet --list-sdks` lists what is installed). %s"
+        sdkMajor
+        hostMajor
+        hostMajor
+        whatToDo
 
 /// Project role classification for session management.
 /// Determines which projects are suitable for hot-reloading vs. testing.
