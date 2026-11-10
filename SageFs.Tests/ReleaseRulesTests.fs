@@ -575,14 +575,17 @@ let pipelineEnvironmentTests =
       parsePipelineEnvironment "" |> Expect.equal "empty text adds nothing" (Result.Ok [])
       parsePipelineEnvironment "  " |> Expect.equal "blank text adds nothing" (Result.Ok [])
 
-    testCase "WHY — entries are NAME=value separated by semicolons, and a value may hold an equals sign" <| fun _ ->
-      parsePipelineEnvironment "LD_PRELOAD=/home/x/fdshim.so;FDSHIM_LOG=/home/x/gate.log;FLAGS=a=b"
-      |> Expect.equal "three entries, the third keeps its own equals sign"
-        (Result.Ok [ "LD_PRELOAD", "/home/x/fdshim.so"; "FDSHIM_LOG", "/home/x/gate.log"; "FLAGS", "a=b" ])
+    testCase "WHY — entries are NAME=value separated by semicolons, a value may hold an equals sign, and a name may be mixed case like the runtime's own switches" <| fun _ ->
+      parsePipelineEnvironment "LD_PRELOAD=/home/x/fdshim.so;DOTNET_PerfMapEnabled=3;FLAGS=a=b"
+      |> Expect.equal "three entries, the second is mixed case and the third keeps its own equals sign"
+        (Result.Ok [ "LD_PRELOAD", "/home/x/fdshim.so"; "DOTNET_PerfMapEnabled", "3"; "FLAGS", "a=b" ])
 
-    testCase "WHY — an entry that is not a variable name and a value is refused by name, because a typo must not silently run an unmeasured gate" <| fun _ ->
-      match parsePipelineEnvironment "GOOD=1;lower=2" with
-      | Result.Error message -> message |> Expect.stringContains "the refusal names the entry" "lower=2"
+    testCase "WHY — an entry that is not an identifier and a value is refused by name, because a typo must not silently run an unmeasured gate" <| fun _ ->
+      match parsePipelineEnvironment "GOOD=1;1BAD=2" with
+      | Result.Error message -> message |> Expect.stringContains "the refusal names the entry" "1BAD=2"
+      | Result.Ok parsed -> failtestf "expected a refusal, got %A" parsed
+      match parsePipelineEnvironment "has space=2" with
+      | Result.Error message -> message |> Expect.stringContains "the refusal names the entry" "has space=2"
       | Result.Ok parsed -> failtestf "expected a refusal, got %A" parsed
       match parsePipelineEnvironment "NOEQUALS" with
       | Result.Error message -> message |> Expect.stringContains "the refusal names the entry" "NOEQUALS"

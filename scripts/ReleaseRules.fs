@@ -368,14 +368,15 @@ let syncCheckoutSteps (sha: string) : CheckoutSync =
 /// Extra environment for the gate's pipeline process and what it starts, and for nothing else: `SAGEFS_PIPELINE_ENV` holds
 /// `NAME=value` entries separated by semicolons (a value may hold an equals sign). It exists so a diagnostic such as a
 /// preloaded descriptor canary can ride one gate run without reaching the daemon that `install-local` restarts from the same
-/// shell. A name is an upper-case identifier, and an entry that is not `NAME=value` is refused by name, so a typo cannot run an
+/// shell. A name is an identifier (letters, digits and underscores, not starting with a digit; the runtime's own switches are
+/// mixed case, like `DOTNET_PerfMapEnabled`), and an entry that is not `NAME=value` is refused by name, so a typo cannot run an
 /// unmeasured gate that looks like a measured one.
 let parsePipelineEnvironment (text: string) : Result<(string * string) list, string> =
-  let validName = Regex(@"^[A-Z_][A-Z0-9_]*$")
+  let validName = Regex(@"^[A-Za-z_][A-Za-z0-9_]*$")
   let entry (raw: string) : Result<string * string, string> =
     match raw.IndexOf '=' with
     | at when at > 0 && validName.IsMatch(raw.Substring(0, at)) -> Ok(raw.Substring(0, at), raw.Substring(at + 1))
-    | _ -> Error(sprintf "SAGEFS_PIPELINE_ENV entry '%s' is not NAME=value with an upper-case NAME" raw)
+    | _ -> Error(sprintf "SAGEFS_PIPELINE_ENV entry '%s' is not NAME=value with an identifier for NAME" raw)
   text.Split([| ';' |], StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries)
   |> Array.toList
   |> List.fold
