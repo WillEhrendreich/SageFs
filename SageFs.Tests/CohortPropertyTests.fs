@@ -116,6 +116,9 @@ type Intent =
   /// A person replaces the holder of a bound seat with `toAgent` (5 is never a member). `holder` 0 names whoever holds
   /// the seat when the intent runs; 1 to 4 name that agent, who may no longer hold it (a stale name must be refused).
   | IReplace of holder: int * toAgent: int
+  /// The conductor (or anyone: a non-conductor must be refused) clears claim `claimIdx` once its holder has been silent for
+  /// the window, so the intent waits that long first.
+  | IClear of by: int * claimIdx: int
   | IResolveVeto of by: int * landingIdx: int
   | IAdvance of FrontStep
   /// `OpenCohort`: the cohort's own scope (an idempotent no-op that is still a ledger entry) or another one (refused).
@@ -224,6 +227,14 @@ let replaceHistory =
   seating
   @ [ IAcquire(1, 0)    // the conductor holds a claim, which stays theirs
       IReplace(0, 2) ]  // a person replaces whoever holds the seat with a member who is here
+
+/// The ONE history that clears a claim a silent member left behind, written out for the reason `replaceHistory` is: 3 takes
+/// a claim and says nothing more, and after the window the conductor (1, who joined first) clears it. A random draw reaches
+/// a clear only by luck, since the intent has to wait out the silence first and name a claim that exists.
+let clearHistory =
+  seating
+  @ [ IAcquire(3, 0)   // the holder takes a claim and is not heard from again
+      IClear(1, 0) ]   // after the silence window the conductor clears it
 
 /// The ordinary intents, leaning hard on the landing pipeline: claims by the two implementers, landings requested by
 /// them, and the front landing pushed along. Seated first, as the delegating histories are. This is the history the
@@ -406,6 +417,11 @@ let resolveIntent<'m when 'm: comparison>
       | 0, (ConductorBinding.NeverBound | ConductorBinding.Vacant _) -> absent
       | _ -> who h
     now (CohortCommand.ReplaceConductor(named, (if toA = 5 then absent else who toA), machine))
+  | IClear(by, c) ->
+    pick claimPool c
+    |> Option.bind (fun cid ->
+      Map.tryFind cid state.Claims
+      |> Option.map (fun claim -> Timeouts.cohortHolderSilentAfter, CohortCommand.ClearClaim(who by, cid, claim.Fence, machine)))
   | IResolveVeto(by, l) -> onLanding l (fun lid -> CohortCommand.ResolveVeto(who by, lid, machine))
   | IAdvance step ->
     // The landing at the front of the queue, and the command ITS stage calls for. A landing that is not at the front
@@ -1149,7 +1165,7 @@ let cohortPropertyTests =
         let delegating = Gen.sample 300 (Arb.toGen (DelegatingGenerators.History())) |> Array.map (fun (DelegatingHistory intents) -> run intents)
         // The deterministic history LAST, so the corpus is the generated one plus the one path a
         // random draw cannot be relied on to reach (`reassignHistory`).
-        let histories = Array.concat [ pipeline; plain; delegating; [| run reassignHistory; run seatHistory; run replaceHistory |] ]
+        let histories = Array.concat [ pipeline; plain; delegating; [| run reassignHistory; run seatHistory; run replaceHistory; run clearHistory |] ]
         let accepted = histories |> Array.collect (fun h -> h.Steps |> List.map (fun s -> caseOf s.Command) |> Array.ofList) |> Set.ofArray
         // The deterministic history earns its place or it is not there. If `decide` ever stops
         // accepting this path, the corpus falls back on the draw and the claim below becomes a
@@ -1166,6 +1182,10 @@ let cohortPropertyTests =
         |> fun h -> h.Steps |> List.map (fun s -> caseOf s.Command)
         |> List.contains "ReplaceConductor"
         |> Expect.isTrue "the deterministic history really replaces a conductor, so the coverage does not rest on the draw"
+        run clearHistory
+        |> fun h -> h.Steps |> List.map (fun s -> caseOf s.Command)
+        |> List.contains "ClearClaim"
+        |> Expect.isTrue "the deterministic history really clears a silent member's claim, so the coverage does not rest on the draw"
         Set.difference allCases accepted
         |> Set.toList
         |> Expect.equal "every CohortCommand case is accepted in some generated history; the ones listed never were" []
