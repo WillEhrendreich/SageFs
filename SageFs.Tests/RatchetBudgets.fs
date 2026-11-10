@@ -440,7 +440,7 @@ let analyzerFindings : (string * int) list =
 /// catalog is 38,533 with the same 73 tools (a second raise, for a parameter that did not exist). The nine starter tools stay
 /// at 5,521. FsiMcp 0.3.0's seven tools are 5,606.
 let toolList : (string * int) list =
-  [ "full catalog characters", 38533
+  [ "full catalog characters", 38325
     "starter list characters", 5521 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =

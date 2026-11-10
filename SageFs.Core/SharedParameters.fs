@@ -52,7 +52,7 @@ module SharedParameters =
   module AgentName =
     /// A cohort tool: the name the caller joined with, which is how its authority is looked up.
     [<Literal>]
-    let Member = "Your agent name, the one you joined the cohort with."
+    let Member = "The name you joined the cohort with."
 
     /// A tool that records who called: a short, stable id.
     [<Literal>]
