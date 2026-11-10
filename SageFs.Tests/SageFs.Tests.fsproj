@@ -1003,6 +1003,10 @@
         <!-- Before the browser runner, which lists the journeys this file adds. -->
         <Compile Include="DashboardPanelVisibilityTests.fs" />
         <Compile Include="DashboardPanelContextBrowserTests.fs" />
+        <!-- Movable panels: the pure layout and its store, the page drawn from a layout, then the browser matrix (before the runner, which lists it). -->
+        <Compile Include="PaneLayoutTests.fs" />
+        <Compile Include="PaneMenuViewTests.fs" />
+        <Compile Include="DashboardPaneLayoutBrowserTests.fs" />
         <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="VscodeCommandProofTests.fs" />
         <Compile Include="CoverageTreemapTests.fs" />
@@ -1014,10 +1018,6 @@
         <Compile Include="ErrorNumberClassificationTests.fs" />
         <Compile Include="CohortPropertyTests.fs" />
         <Compile Include="EvalLatencyTraceTests.fs" />
-        <!-- Movable panels: the pure layout and its store, the page drawn from a layout, then the browser matrix (before the runner, which lists it). -->
-        <Compile Include="PaneLayoutTests.fs" />
-        <Compile Include="PaneMenuViewTests.fs" />
-        <Compile Include="DashboardPaneLayoutBrowserTests.fs" />
         <Compile Include="SessionManagerBuildSemaphoreTests.fs" />
         <Compile Include="WorkerForceKillTests.fs" />
         <Compile Include="CohortTestProjectionTests.fs" />

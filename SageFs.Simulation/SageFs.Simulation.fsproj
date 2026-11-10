@@ -270,9 +270,9 @@
         <Compile Include="McpStdioBridgeInvariants.fs" />
         <Compile Include="McpStdioBridgeGenerators.fs" />
         <Compile Include="McpStdioBridgeReconnectSim.fs" />
-        <!-- File-watcher lifecycle DST: folds the real LiveTestWatcherCore
         <Compile Include="PaneLayoutSim.fs" />
         <Compile Include="PaneLayoutSimInvariants.fs" />
+        <!-- File-watcher lifecycle DST: folds the real LiveTestWatcherCore
              claim/reconcile core (for watch-count bookkeeping, not routing)
              and the real FileWatcher.fileChangeAction; twins reintroduce a
              session stop that never releases its claims (the inotify-watch
