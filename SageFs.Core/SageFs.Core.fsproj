@@ -395,6 +395,11 @@
              and MachineMemory. SymbolReferenceCheck, the compiler call, holds its checker through it. -->
         <Compile Include="Features\ReferenceCacheRetention.fs" />
         <Compile Include="Features\SymbolReferenceCheck.fs" />
+        <!-- The profile tool: the report (pure), the Speedscope and nettrace readers (pure), and the recorder that drives dotnet-trace. -->
+        <Compile Include="Features\ProfileReport.fs" />
+        <Compile Include="Features\ProfileTrace.fs" />
+        <Compile Include="Features\ProfileNetTrace.fs" />
+        <Compile Include="Features\ProfileRecorder.fs" />
         <!-- check_project's effects: the MSBuild process, the build of a stale referenced project, the overlay files and
              the same ParseAndCheckProject call the two checks above make. The decisions are ProjectCheckCore's. -->
         <Compile Include="Features\CheckProject.fs" />

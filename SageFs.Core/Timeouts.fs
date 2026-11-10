@@ -203,6 +203,10 @@ module Timeouts =
   /// Cancelling frees a wait in milliseconds. An eval still running this long after is in a tight loop, a native call
   /// that nothing can interrupt, or a deep unwind, and waiting longer only leaves the session stuck in Cancelling.
   let evalCancelGrace = TimeSpan.FromSeconds(10.0)
+  /// How long the profile recorder (`dotnet-trace`) gets to attach to the host, and then to stop, write the trace and convert
+  /// it, before it is killed and the profile is refused. Measured 2026-11-10 on this machine: it attaches in under a second and
+  /// stops, writes and converts a 16 MB trace in about 2 seconds, so a minute is long past anything it does when it works.
+  let profileRecorderWait = TimeSpan.FromSeconds(60.0)
   /// How long a confirmation prompt waits for the person at the client to answer
   /// before the call is refused. This is a person reading a sentence, not a
   /// process starting, so it is NOT scaled by machine tier; it takes an override

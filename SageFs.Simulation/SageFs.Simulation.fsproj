@@ -135,6 +135,11 @@
         <Compile Include="ReferenceCacheSim.fs" />
         <Compile Include="ReferenceCacheInvariants.fs" />
         <Compile Include="ReferenceCacheGenerators.fs" />
+        <!-- Profile recorder DST: folds the real ProfileRecorder.around and SpeedscopeTrace.cpuReport over a simulated
+             collector (tool missing, attach refused, host ends, stop times out, disk full, corrupt trace) and a simulated
+             disk. Twins leave the trace file when the host ends, run the code under a refused recording, and skip the
+             finish when the eval throws. -->
+        <Compile Include="ProfileRecorderSim.fs" />
         <!-- Session reaper DST: folds the real Reaper.SweepAsync over real SessionInfo values through arrivals, departures,
              use, daemon restarts and sweeps; the truth is an independent fold of who was seen when. Twins forget the
              restart, ignore presence and treat a person's session as an agent's. -->
