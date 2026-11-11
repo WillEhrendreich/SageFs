@@ -48,7 +48,7 @@ module SettingsPanel =
         Resolved = resolved
         InUse = SettingsCatalog.inUse d p
         Override = SettingsCatalog.overrideNote d p
-        Notes = [] }
+        Notes = SettingsCatalog.repoLayerNote paths d |> Option.toList }
     | Error _ ->
       { Descriptor = d; Resolved = resolved; InUse = InUseSameAsSaved; Override = SettingsCatalog.NotOverridden; Notes = [] }
 

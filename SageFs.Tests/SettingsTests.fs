@@ -232,6 +232,52 @@ let catalogTests =
           Timeouts.setPerTestTimeout original)
   ]
 
+/// `<repo>/.SageFs/settings.json` was read for every descriptor, so a cloned repository could choose where the daemon
+/// binds, which port it takes and where it keeps its data. A machine-wide setting (`Scope = Global`) reads the global
+/// layer only, and a value the repo file holds for one is shown as ignored.
+[<Tests>]
+let repoLayerScopeTests =
+  let withRepo (run: ConfigPaths -> string -> unit) =
+    withTempDir (fun root ->
+      let gdir = Path.Combine(root, "g")
+      let repo = Path.Combine(root, "r")
+      Directory.CreateDirectory gdir |> ignore
+      Directory.CreateDirectory repo |> ignore
+      run { GlobalDir = gdir; Repo = RepoRootAt repo } repo)
+  testList "Settings — what a repo layer may set" [
+    testCase "WHY - a repo file's daemon port is not read, because a cloned repository must not choose where the daemon listens" <| fun _ ->
+      withRepo (fun paths repo ->
+        SettingsStore.setKey (SettingsStore.repoPath repo) SettingsCatalog.mcpPort.Key "40000" |> Expect.isOk "the repo file holds a port"
+        match SettingsCatalog.resolve paths SettingsCatalog.mcpPort with
+        | Error why -> failtestf "resolve failed: %A" why
+        | Ok prov ->
+          prov.Source |> Expect.equal "the repo layer is not a source" LDefault
+          prov.PerLayer |> List.exists (fun (layer, _) -> layer = LRepo) |> Expect.isFalse "and is not listed")
+
+    testCase "WHY - every machine-wide descriptor ignores the repo file, and a repo-overridable one still reads it" <| fun _ ->
+      withRepo (fun paths repo ->
+        for descriptor in [ SettingsCatalog.mcpPort; SettingsCatalog.bindHost; SettingsCatalog.dataDirectory ] do
+          descriptor.Scope |> Expect.equal (sprintf "%s is machine-wide" descriptor.Key) Global
+        SettingsStore.setKey (SettingsStore.repoPath repo) SettingsCatalog.perTestTimeout.Key "30" |> Expect.isOk "saved"
+        match SettingsCatalog.resolve paths SettingsCatalog.perTestTimeout with
+        | Ok prov -> prov.Source |> Expect.equal "a repo-overridable setting reads the repo" LRepo
+        | Error why -> failtestf "resolve failed: %A" why)
+
+    testCase "WHY - the row for a machine-wide setting the repo file names says the repo value is ignored" <| fun _ ->
+      withRepo (fun paths repo ->
+        SettingsCatalog.repoLayerNote paths SettingsCatalog.mcpPort |> Expect.isNone "nothing to say before the repo sets it"
+        SettingsStore.setKey (SettingsStore.repoPath repo) SettingsCatalog.mcpPort.Key "40000" |> Expect.isOk "saved"
+        match SettingsCatalog.repoLayerNote paths SettingsCatalog.mcpPort with
+        | Some note -> note |> Expect.stringContains "says it is ignored" "set by the repo, ignored"
+        | None -> failtest "the row says nothing about the repo's value")
+
+    testCase "WHY - an edit of a machine-wide setting aimed at the repo layer is refused, and nothing is written" <| fun _ ->
+      withRepo (fun paths repo ->
+        SettingsCatalog.edit paths LRepo "40000" SettingsCatalog.mcpPort |> Expect.isError "refused"
+        SettingsStore.readLayer (SettingsStore.repoPath repo) |> Map.tryFind SettingsCatalog.mcpPort.Key
+        |> Expect.isNone "the repo file is untouched")
+  ]
+
 /// The port the Settings panel persists and the daemon reads. The row says it
 /// applies on the next daemon restart; until now the value was written and then
 /// read by nobody, so the row was a promise nobody kept.

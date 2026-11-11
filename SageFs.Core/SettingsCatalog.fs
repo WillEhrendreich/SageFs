@@ -39,6 +39,14 @@ module SettingsCatalog =
     | SettingsStore.LayerRead.Layer values -> Ok (Map.tryFind key values)
     | SettingsStore.LayerRead.Unreadable reason -> Error (LayerValueInvalid(key, layer, reason))
 
+  /// Whether a repo's `.SageFs/settings.json` may set this descriptor. Only a repo-overridable one: `Global` is
+  /// machine-wide by its definition, and a session-only value is never saved.
+  let readsRepoLayer (descriptor: SettingDescriptor) : bool =
+    match descriptor.Scope with
+    | RepoOverridable -> true
+    | Global
+    | SessionOnly -> false
+
   /// Resolve one descriptor's effective value + provenance across the file
   /// layers (global, and repo when the session has a checkout). A parse failure
   /// at any present layer is surfaced (with why) rather than silently dropped —
@@ -70,11 +78,14 @@ module SettingsCatalog =
       match readsFiles with
       | true -> rawAt LGlobal (SettingsStore.globalPath paths.GlobalDir) descriptor.Key
       | false -> Ok None
+    // A machine-wide setting never reads the repo file: a cloned repository must not choose the daemon's port, bind
+    // host or data directory. `repoLayerNote` says so on the row when the file names one.
     let repoRaw =
-      match readsFiles, paths.Repo with
-      | true, RepoRootAt root -> rawAt LRepo (SettingsStore.repoPath root) descriptor.Key
-      | true, NoRepoCheckout
-      | false, _ -> Ok None
+      match readsFiles, readsRepoLayer descriptor, paths.Repo with
+      | true, true, RepoRootAt root -> rawAt LRepo (SettingsStore.repoPath root) descriptor.Key
+      | true, true, NoRepoCheckout
+      | true, false, _
+      | false, _, _ -> Ok None
     let environmentRaw =
       ExternalSource.variable descriptor.External
       |> Option.bind (fun variable ->
@@ -107,6 +118,19 @@ module SettingsCatalog =
     match String.IsNullOrWhiteSpace workingDir || not (IO.Directory.Exists workingDir) with
     | true -> { GlobalDir = globalDir; Repo = NoRepoCheckout }
     | false -> { GlobalDir = globalDir; Repo = RepoRootAt workingDir }
+
+  /// The sentence for a row whose repo file names a setting the repo may not set: the value is there and ignored.
+  let repoLayerNote (paths: ConfigPaths) (descriptor: SettingDescriptor) : string option =
+    match readsRepoLayer descriptor, paths.Repo with
+    | false, RepoRootAt root ->
+      let file = SettingsStore.repoPath root
+      match SettingsStore.readLayerChecked file with
+      | SettingsStore.LayerRead.Layer values when Map.containsKey descriptor.Key values ->
+        Some (sprintf "%s = %s is set by the repo, ignored: this setting is machine-wide, so only the global layer sets it (%s)." descriptor.Key values[descriptor.Key] file)
+      | SettingsStore.LayerRead.Layer _
+      | SettingsStore.LayerRead.Unreadable _ -> None
+    | false, NoRepoCheckout
+    | true, _ -> None
 
   /// How the value the subsystem is using compares with what the layers resolve to. Read from the consumer,
   /// never from the file. A setting whose consumer reads the layers each time is in use as soon as it is saved.
@@ -179,9 +203,10 @@ module SettingsCatalog =
         match layer with
         | LGlobal -> SettingsStore.setKey (SettingsStore.globalPath paths.GlobalDir) descriptor.Key (descriptor.Render value)
         | LRepo ->
-          match paths.Repo with
-          | RepoRootAt root -> SettingsStore.setKey (SettingsStore.repoPath root) descriptor.Key (descriptor.Render value)
-          | NoRepoCheckout -> Error (LayerUnavailable "this session has no repo checkout, so there is no repo layer to write to")
+          match readsRepoLayer descriptor, paths.Repo with
+          | false, _ -> Error (LayerUnavailable (sprintf "%s is machine-wide, so a repo cannot set it; save it to the global layer" descriptor.Key))
+          | true, RepoRootAt root -> SettingsStore.setKey (SettingsStore.repoPath root) descriptor.Key (descriptor.Render value)
+          | true, NoRepoCheckout -> Error (LayerUnavailable "this session has no repo checkout, so there is no repo layer to write to")
         | LDefault | LSession | LEnvironment | LCommandLine ->
           Error (LayerUnavailable "edits persist to the global or repo layer, not default, session, environment or flag")
       match persisted with
