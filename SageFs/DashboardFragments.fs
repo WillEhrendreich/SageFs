@@ -1188,6 +1188,57 @@ let previousSessionHeadline (s: PreviousSession) : string =
       | dirName -> dirName
     | false -> "Session"
 
+/// How much of the "Resume Previous" list is drawn open. Stopped sessions are kept for seven days and one project can have
+/// dozens of them (266 rows were measured on a working machine), so the list shows the newest few of each project and the
+/// newest few overall, and the rest sit behind a "show all" control.
+type PreviousListCaps =
+  { /// The newest stopped sessions of ONE project that are eligible to be drawn open.
+    PerProject: int
+    /// The most rows drawn open, whatever the number of projects.
+    Total: int }
+
+module PreviousListCaps =
+  /// Three of a project covers "the one I was just in" and its recent neighbours; twelve rows fit one screen.
+  let standard : PreviousListCaps = { PerProject = 3; Total = 12 }
+
+/// The list split into what is drawn open and what is behind "show all". Both halves are in the chosen sort order.
+type PreviousListPlan =
+  { Shown: PreviousSession list
+    Hidden: PreviousSession list }
+
+/// What one project means for the cap: its working directory, or its headline when it has none.
+let previousSessionProjectKey (s: PreviousSession) : string =
+  match s.WorkingDir.Length > 0 with
+  | true -> s.WorkingDir
+  | false -> previousSessionHeadline s
+
+/// Choose the rows drawn open: the newest `PerProject` of each project, then the newest `Total` of those. Recency decides
+/// what is kept whatever the sort order is, so the sort control reorders the kept rows and never swaps which sessions are kept.
+let planPreviousSessions (caps: PreviousListCaps) (order: PreviousSessionSort) (sessions: PreviousSession list) : PreviousListPlan =
+  let newestFirst = sortPreviousSessions PreviousSessionSort.Recent sessions
+  let kept =
+    newestFirst
+    |> List.groupBy previousSessionProjectKey
+    |> List.collect (fun (_, group) -> List.truncate caps.PerProject group)
+    |> sortPreviousSessions PreviousSessionSort.Recent
+    |> List.truncate caps.Total
+    |> List.map (fun s -> s.Id)
+    |> Set.ofList
+  let shown, hidden = sessions |> List.partition (fun s -> Set.contains s.Id kept)
+  { Shown = sortPreviousSessions order shown
+    Hidden = sortPreviousSessions order hidden }
+
+/// The sentence that says how many stopped sessions are behind "show all", and by what rule the rest were chosen.
+let previousListHiddenSentence (caps: PreviousListCaps) (plan: PreviousListPlan) : string =
+  sprintf
+    "Showing the newest %d stopped sessions, at most %d per project. %d older %s hidden."
+    plan.Shown.Length
+    caps.PerProject
+    plan.Hidden.Length
+    (match plan.Hidden.Length with
+     | 1 -> "one is"
+     | _ -> "ones are")
+
 /// The "Resume Previous" sort control — server-rendered `<option selected>`
 /// mirroring `renderThemePicker`'s shape (the worked example this follows):
 /// the signal is re-seeded on every render so Datastar's data-bind can never
@@ -1302,7 +1353,7 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
       ]
       match previous.IsEmpty with
       | false ->
-        let ordered = sortPreviousSessions sortOrder previous
+        let plan = planPreviousSessions PreviousListCaps.standard sortOrder previous
         Elem.div [ Attr.class' "picker-previous" ] [
           Elem.h3 [ Attr.style "color: var(--fg-blue); margin-bottom: 0.5rem;" ] [
             textEnc (Glyphs.lead Glyph.List + "Resume Previous")
@@ -1320,7 +1371,7 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
           match previous.Length > 1 with
           | true -> renderPreviousSessionSortSelect sortOrder
           | false -> ()
-          yield! ordered |> List.map (fun s ->
+          let renderRow (s: PreviousSession) : XmlNode =
             // How long ago the session was seen is the browser's to count (ElapsedClock): a render that read
             // the clock here made the same list of sessions a different string a minute later. The row's
             // accessible name carries the headline and id only; the age is the visible text beneath it.
@@ -1367,7 +1418,25 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
                   ]
                 ]
                 Elem.span [ Attr.style "color: var(--fg-blue); font-size: 0.857rem;" ] [ Text.raw "▶" ]
-              ])
+              ]
+          yield! plan.Shown |> List.map renderRow
+          // The rest are one native disclosure away: a <details> is reachable by Tab, opens on Enter or Space, and says how many
+          // rows it holds. It stays open across a morph, so a person scrolling the full list is not snapped shut by the next push.
+          match plan.Hidden.IsEmpty with
+          | true -> ()
+          | false ->
+            Elem.p
+              [ Attr.class' "meta"
+                testid "resume-hidden-sentence"
+                Attr.style "margin: 0.5rem 0 0.25rem 0;" ]
+              [ textEnc (previousListHiddenSentence PreviousListCaps.standard plan) ]
+            Elem.details
+              [ Attr.id "previous-show-all"
+                Attr.class' "picker-previous-more"
+                testid "resume-show-all"
+                Ds.preserveAttr "open" ]
+              [ Elem.summary [] [ textEnc (sprintf "Show all %d hidden sessions" plan.Hidden.Length) ]
+                yield! plan.Hidden |> List.map renderRow ]
         ]
       | true -> ()
     ]

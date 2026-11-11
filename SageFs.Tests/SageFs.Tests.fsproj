@@ -270,6 +270,7 @@
         <Compile Include="DashboardTestStatusGridTests.fs" />
         <Compile Include="DashboardLandingTests.fs" />
         <Compile Include="DashboardEvalRefusalTests.fs" />
+        <Compile Include="ResumePreviousCapTests.fs" />
         <Compile Include="DashboardHealthVerdictRenderingTests.fs" />
         <Compile Include="DashboardUxDefectTests.fs" />
         <Compile Include="DashboardWorkflowSwitchTests.fs" />
