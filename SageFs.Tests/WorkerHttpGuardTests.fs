@@ -301,20 +301,20 @@ let workerRouteTableTests =
     testCase "every POST route in the table classifies as mutating (any casing)" <| fun _ ->
       let posts =
         WorkerHttpTransport.routes
-        |> List.filter (fun r -> WorkerHttpTransport.WorkerRoute.httpMethod r = "POST")
+        |> List.filter (fun r -> WorkerRoute.httpMethod r = "POST")
       posts |> Expect.isNonEmpty "the worker declares POST routes"
       for r in posts do
-        let path = WorkerHttpTransport.WorkerRoute.path r
+        let path = WorkerRoute.path r
         for p in [ path; path.ToUpperInvariant(); upperFirstHalf path ] do
           WorkerHttpTransport.classify { HttpMethod = "POST"; Path = p }
-          |> Expect.equal (sprintf "POST %s must be mutating" p) WorkerHttpTransport.RouteAccess.Mutating
+          |> Expect.equal (sprintf "POST %s must be mutating" p) RouteAccess.Mutating
 
     testCase "the route table declares the eval/reset/test/completion routes as mutating" <| fun _ ->
       for path in [ "/eval"; "/hard-reset"; "/run-tests"; "/run-tests-stream"; "/completions"; "/shutdown"; "/load-script" ] do
         WorkerHttpTransport.routes
-        |> List.tryFind (fun r -> WorkerHttpTransport.WorkerRoute.path r = path)
-        |> Option.map WorkerHttpTransport.WorkerRoute.access
-        |> Expect.equal (sprintf "%s must be declared mutating" path) (Some WorkerHttpTransport.RouteAccess.Mutating)
+        |> List.tryFind (fun r -> WorkerRoute.path r = path)
+        |> Option.map WorkerRoute.access
+        |> Expect.equal (sprintf "%s must be declared mutating" path) (Some RouteAccess.Mutating)
 
     testProperty "any non-GET/HEAD method is mutating on any path" <| fun (m: string) (p: string) ->
       let m = match String.IsNullOrWhiteSpace m with | true -> "POST" | false -> m.Trim()
@@ -323,24 +323,24 @@ let workerRouteTableTests =
       | "GET" | "HEAD" -> ()
       | _ ->
         WorkerHttpTransport.classify { HttpMethod = m; Path = p }
-        |> Expect.equal (sprintf "%s %s must be mutating" m p) WorkerHttpTransport.RouteAccess.Mutating
+        |> Expect.equal (sprintf "%s %s must be mutating" m p) RouteAccess.Mutating
 
     testCase "GET routes keep their declared access under any casing; unknown GETs are read-only" <| fun _ ->
       for r in WorkerHttpTransport.routes do
-        match WorkerHttpTransport.WorkerRoute.httpMethod r with
+        match WorkerRoute.httpMethod r with
         | "GET" ->
-          let path = WorkerHttpTransport.WorkerRoute.path r
+          let path = WorkerRoute.path r
           for p in [ path; path.ToUpperInvariant(); path + "/" ] do
             WorkerHttpTransport.classify { HttpMethod = "GET"; Path = p }
-            |> Expect.equal (sprintf "GET %s keeps its declared access" p) (WorkerHttpTransport.WorkerRoute.access r)
+            |> Expect.equal (sprintf "GET %s keeps its declared access" p) (WorkerRoute.access r)
         | _ -> ()
       WorkerHttpTransport.classify { HttpMethod = "GET"; Path = "/no-such-route" }
-      |> Expect.equal "an unknown GET is read-only (it 404s)" WorkerHttpTransport.RouteAccess.ReadOnly
+      |> Expect.equal "an unknown GET is read-only (it 404s)" RouteAccess.ReadOnly
 
     testCase "HttpWorkerClient only targets routes declared in the worker table" <| fun _ ->
       let declared =
         WorkerHttpTransport.routes
-        |> List.map (fun r -> WorkerHttpTransport.WorkerRoute.httpMethod r, WorkerHttpTransport.WorkerRoute.path r)
+        |> List.map (fun r -> WorkerRoute.httpMethod r, WorkerRoute.path r)
         |> Set.ofList
       for msg in sampleMessages do
         let m, pathWithQuery, _ = HttpWorkerClient.toRoute msg
@@ -352,9 +352,9 @@ let workerRouteTableTests =
 
     testCase "decide rejects every POST route cross-site or same-site from another loopback port" <| fun _ ->
       for r in WorkerHttpTransport.routes do
-        match WorkerHttpTransport.WorkerRoute.httpMethod r with
+        match WorkerRoute.httpMethod r with
         | "POST" ->
-          let path = WorkerHttpTransport.WorkerRoute.path r
+          let path = WorkerRoute.path r
           for site in [ "cross-site"; "same-site" ] do
             match WorkerHttpTransport.decide workerOwn path (guardRequest "POST" None (Some site) (Some "http://localhost:5173")) with
             | WorkerHttpTransport.GuardVerdict.Reject _ -> ()
@@ -363,8 +363,8 @@ let workerRouteTableTests =
 
     testCase "decide allows the daemon proxy (no browser headers) on every route" <| fun _ ->
       for r in WorkerHttpTransport.routes do
-        WorkerHttpTransport.decide workerOwn (WorkerHttpTransport.WorkerRoute.path r)
-          (guardRequest (WorkerHttpTransport.WorkerRoute.httpMethod r) (Some "127.0.0.1:5000") None None)
+        WorkerHttpTransport.decide workerOwn (WorkerRoute.path r)
+          (guardRequest (WorkerRoute.httpMethod r) (Some "127.0.0.1:5000") None None)
         |> Expect.equal "no-header loopback requests pass" WorkerHttpTransport.GuardVerdict.Allow
 
     testCase "decide reflects a loopback origin on the DevReload stream and rejects remote ones" <| fun _ ->
@@ -443,7 +443,7 @@ let workerHttpGuardMutatingTests =
         let mapped = server.MappedRoutes |> Set.ofList
         let declared =
           WorkerHttpTransport.routes
-          |> List.map (fun r -> WorkerHttpTransport.WorkerRoute.httpMethod r, WorkerHttpTransport.WorkerRoute.path r)
+          |> List.map (fun r -> WorkerRoute.httpMethod r, WorkerRoute.path r)
           |> Set.ofList
         Set.difference mapped declared
         |> Expect.isEmpty "every mapped endpoint must be declared in WorkerHttpTransport.routes"

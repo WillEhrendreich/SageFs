@@ -523,6 +523,8 @@
         <Compile Include="EvalPreflight.fs" />
         <Compile Include="SessionMode.fs" />
         <Compile Include="AppRunOrchestration.fs" />
+        <!-- The one home of the daemon/worker wire paths: HttpWorkerClient and WorkerHttpTransport both name a route by its case. -->
+        <Compile Include="WorkerRoute.fs" />
         <Compile Include="HttpWorkerClient.fs" />
         <Compile Include="HostManifest.fs" />
         <Compile Include="HostAdaptation.fs" />

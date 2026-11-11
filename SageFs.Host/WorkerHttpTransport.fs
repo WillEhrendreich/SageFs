@@ -95,146 +95,19 @@ module WorkerHttpTransport =
     do! ctx.Response.WriteAsync(Serialization.serialize {| message = sprintf "the request's %s could not be read: %s" field (SageFsError.describe error) |})
   }
 
-  /// How the origin gate treats a request.
-  [<RequireQualifiedAccess>]
-  type RouteAccess =
-    /// Executes F# or mutates worker state: any cross-site signal or foreign
-    /// origin is rejected (HttpOriginGuard.decide).
-    | Mutating
-    /// Reads state only: loopback origins pass, foreign origins are rejected.
-    | ReadOnly
-    /// The DevReload SSE stream — the one surface a browser page (the user's
-    /// dev app on a loopback origin) legitimately reads cross-origin.
-    | CrossOriginStream
-
-  /// Access for a GET route. There is no way to declare a POST read-only:
-  /// every `Post` is Mutating by construction.
-  [<RequireQualifiedAccess>]
-  type GetAccess =
-    | ReadOnly
-    | CrossOriginStream
-
-  /// One worker HTTP route. `routes` below is the single source of truth:
-  /// startServer maps endpoints only through it, and the origin gate
-  /// classifies requests from it.
-  [<RequireQualifiedAccess>]
-  type WorkerRoute =
-    | Post of path: string
-    | Get of path: string * access: GetAccess
-
-  [<RequireQualifiedAccess>]
-  module WorkerRoute =
-    let path (route: WorkerRoute) =
-      match route with
-      | WorkerRoute.Post p -> p
-      | WorkerRoute.Get (p, _) -> p
-    let httpMethod (route: WorkerRoute) =
-      match route with
-      | WorkerRoute.Post _ -> "POST"
-      | WorkerRoute.Get _ -> "GET"
-    let access (route: WorkerRoute) =
-      match route with
-      | WorkerRoute.Post _ -> RouteAccess.Mutating
-      | WorkerRoute.Get (_, GetAccess.ReadOnly) -> RouteAccess.ReadOnly
-      | WorkerRoute.Get (_, GetAccess.CrossOriginStream) -> RouteAccess.CrossOriginStream
-
-  /// The worker's route table. (`/diag/threadpool` and `/status` are read-only
-  /// GETs; nothing reachable by GET executes code or mutates state.)
-  module Routes =
-    let diagThreadpool = WorkerRoute.Get ("/diag/threadpool", GetAccess.ReadOnly)
-    let status = WorkerRoute.Get ("/status", GetAccess.ReadOnly)
-    let liveValues = WorkerRoute.Get ("/live-values", GetAccess.ReadOnly)
-    /// Runs one getter of the user's code on a click, so it is a POST like every other route that executes code.
-    let liveValuesEvaluate = WorkerRoute.Post "/live-values/evaluate"
-    /// Changes how much of a class every later walk runs, so it is a POST like every other mutating route.
-    let liveValuesMode = WorkerRoute.Post "/live-values/mode"
-    let eval = WorkerRoute.Post "/eval"
-    let check = WorkerRoute.Post "/check"
-    let typecheckSymbols = WorkerRoute.Post "/typecheck-symbols"
-    let completions = WorkerRoute.Post "/completions"
-    /// Runs the compiler over the session's projects, so it is a POST like the other routes that ask the compiler.
-    let references = WorkerRoute.Post "/references"
-    /// Asks which process the session's FSI runs in. A POST with a body, like the other routes the daemon asks one question of.
-    let hostProcess = WorkerRoute.Post "/host-process"
-    let cancel = WorkerRoute.Post "/cancel"
-    let cancelRequest = WorkerRoute.Post "/cancel-request"
-    let loadScript = WorkerRoute.Post "/load-script"
-    let reset = WorkerRoute.Post "/reset"
-    let hardReset = WorkerRoute.Post "/hard-reset"
-    /// Replaces the FSI host when nothing in it would be lost, so it changes what the worker runs: a POST like the resets.
-    let levelRepl = WorkerRoute.Post "/level-repl"
-    let runTests = WorkerRoute.Post "/run-tests"
-    let runTestsStream = WorkerRoute.Post "/run-tests-stream"
-    let testDiscovery = WorkerRoute.Get ("/test-discovery", GetAccess.ReadOnly)
-    /// Identity-preserving buffer eval for as-you-type live testing (Brief 3
-    /// of live-testing-asyoutype-plan.md). Executes F# from the request body —
-    /// same mutating/CSRF-gated class as `/eval`.
-    let evalLiveTestFile = WorkerRoute.Post "/eval-live-test-file"
-    let instrumentationMaps = WorkerRoute.Get ("/instrumentation-maps", GetAccess.ReadOnly)
-    let shutdown = WorkerRoute.Post "/shutdown"
-    let warmupContext = WorkerRoute.Get ("/warmup-context", GetAccess.ReadOnly)
-    let hotReload = WorkerRoute.Get ("/hotreload", GetAccess.ReadOnly)
-    let hotReloadToggle = WorkerRoute.Post "/hotreload/toggle"
-    /// Run the new initializer of a `let mutable` a save kept (rule 3 of the
-    /// state spec). Writes the app's live state, so it's a POST like every
-    /// other mutating route.
-    let hotReloadResetState = WorkerRoute.Post "/hotreload/reset-state"
-    /// Switch the running app's reflection read mode (rule 2). Changes what the
-    /// app's process watches, so it's a POST like every other mutating route.
-    let hotReloadReflectionMode = WorkerRoute.Post "/hotreload/reflection-mode"
-    let hotReloadWatchAll = WorkerRoute.Post "/hotreload/watch-all"
-    let hotReloadUnwatchAll = WorkerRoute.Post "/hotreload/unwatch-all"
-    let hotReloadWatchProject = WorkerRoute.Post "/hotreload/watch-project"
-    let hotReloadUnwatchProject = WorkerRoute.Post "/hotreload/unwatch-project"
-    let hotReloadWatchDirectory = WorkerRoute.Post "/hotreload/watch-directory"
-    let hotReloadUnwatchDirectory = WorkerRoute.Post "/hotreload/unwatch-directory"
-    let runApp = WorkerRoute.Post "/run-app"
-    let stopApp = WorkerRoute.Post "/stop-app"
-    let awaitAppChange = WorkerRoute.Post "/await-app-change"
-    /// Hold one test for a debugger, and release it. Both change what the host is doing, so both are POSTs.
-    let debugTest = WorkerRoute.Post "/debug-test"
-    let debugTestContinue = WorkerRoute.Post "/debug-test-continue"
-    /// Where the save pipeline takes its saves from, and the saves a landing hands it. Both change what the worker does.
-    let saveSource = WorkerRoute.Post "/save-source"
-    let applySaves = WorkerRoute.Post "/apply-saves"
-    let devReload = WorkerRoute.Get ("/__sagefs__/reload", GetAccess.CrossOriginStream)
-    /// The last terminal `ReloadOutcome`, past the server boundary, for a
-    /// client that cannot hold the `devReload` SSE stream open — a dashboard
-    /// poll, a health check, an editor extension with no standing connection
-    /// to this port. Same JSON shape a live SSE subscriber gets
-    /// (DevReload.LastReload.json); loopback-only like every other read
-    /// (not the DevReload stream's cross-origin carve-out, since this is a
-    /// plain same-origin poll, not the user's dev app reading its own
-    /// reload channel).
-    let hotReloadLastOutcome = WorkerRoute.Get ("/hotreload/last-outcome", GetAccess.ReadOnly)
-
-  let routes : WorkerRoute list = [
-    Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.liveValuesEvaluate; Routes.liveValuesMode; Routes.eval; Routes.check
-    Routes.typecheckSymbols; Routes.completions; Routes.references; Routes.hostProcess; Routes.cancel; Routes.cancelRequest; Routes.loadScript
-    Routes.reset; Routes.hardReset; Routes.levelRepl; Routes.runTests; Routes.runTestsStream
-    Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
-    Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState; Routes.hotReloadReflectionMode
-    Routes.hotReloadWatchAll; Routes.hotReloadUnwatchAll
-    Routes.hotReloadWatchProject; Routes.hotReloadUnwatchProject
-    Routes.hotReloadWatchDirectory; Routes.hotReloadUnwatchDirectory
-    Routes.runApp; Routes.stopApp; Routes.awaitAppChange
-    Routes.debugTest; Routes.debugTestContinue
-    Routes.saveSource; Routes.applySaves
-    Routes.devReload; Routes.hotReloadLastOutcome
-  ]
+  /// The worker's route table: every case of `WorkerRoute` (SageFs.Core/WorkerRoute.fs), the one home of the wire paths.
+  /// `startServer` maps endpoints only through it, and the origin gate classifies requests from it.
+  let routes : WorkerRoute list = WorkerRoute.all
 
   /// Declared access of every GET route, matched the way ASP.NET routing
   /// matches: case-insensitively, trailing slash optional.
   let private getAccessByPath =
     let d = Dictionary<string, RouteAccess>(StringComparer.OrdinalIgnoreCase)
     for route in routes do
-      match route with
-      | WorkerRoute.Get (p, _) -> d[p] <- WorkerRoute.access route
-      | WorkerRoute.Post _ -> ()
+      match WorkerRoute.getAccess route with
+      | Some access -> d[WorkerRoute.path route] <- access
+      | None -> ()
     d
-
-  /// The two things that name a request: its HTTP method and its path. One record, so a call site says which is which.
-  type RequestRoute = { HttpMethod: string; Path: string }
 
   /// Classify one request. Method-driven: every non-GET/HEAD request is
   /// Mutating, whatever its path — so a newly mapped POST (or a path the table
@@ -423,15 +296,17 @@ module WorkerHttpTransport =
 
       let inline respond' ctx msg = respond handler ctx msg
 
-      // Every endpoint is mapped through its `Routes` entry, so the verb it is
+      // Every endpoint is mapped through its `WorkerRoute` case, so the verb it is
       // mapped with and the access the origin gate applies come from one table.
+      let mapped = HashSet<WorkerRoute>()
       let map (route: WorkerRoute) (endpoint: Func<HttpContext, Task>) =
-        match route with
-        | WorkerRoute.Post p -> app.MapPost(p, endpoint)
-        | WorkerRoute.Get (p, _) -> app.MapGet(p, endpoint)
+        mapped.Add route |> ignore
+        match WorkerRoute.getAccess route with
+        | Some _ -> app.MapGet(WorkerRoute.path route, endpoint)
+        | None -> app.MapPost(WorkerRoute.path route, endpoint)
 
       // Diagnostic: ThreadPool state for measuring starvation
-      map Routes.diagThreadpool (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.DiagThreadpool (Func<HttpContext, Task>(fun ctx -> task {
         let workerThreads = ref 0
         let completionPortThreads = ref 0
         let maxWorkerThreads = ref 0
@@ -450,17 +325,17 @@ module WorkerHttpTransport =
           completionPortThreads.Value maxCompletionPortThreads.Value minCompletionPortThreads.Value)
       })) |> ignore
 
-      map Routes.status (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.Status (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetStatus rid)
       })) |> ignore
 
-      map Routes.liveValues (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.LiveValues (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetLiveValues rid)
       })) |> ignore
 
-      map Routes.liveValuesEvaluate (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.LiveValuesEvaluate (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let binding = (jsonProp doc "binding").GetString()
@@ -469,7 +344,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.EvaluateLiveMember(binding, path, rid))
       })) |> ignore
 
-      map Routes.liveValuesMode (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.LiveValuesMode (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let name = (jsonProp doc "mode").GetString()
@@ -479,7 +354,7 @@ module WorkerHttpTransport =
         | Result.Ok mode -> return! respond' ctx (WorkerMessage.SetValueWalk(mode, rid))
       })) |> ignore
 
-      map Routes.eval (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.Eval (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -487,7 +362,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.EvalCode(code, rid))
       })) |> ignore
 
-      map Routes.check (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.Check (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -495,7 +370,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.CheckCode(code, rid))
       })) |> ignore
 
-      map Routes.typecheckSymbols (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.TypecheckSymbols (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -504,7 +379,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.TypeCheckWithSymbols(code, filePath, rid))
       })) |> ignore
 
-      map Routes.completions (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.Completions (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -514,7 +389,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.GetCompletions(code, cursorPos, limit, rid))
       })) |> ignore
 
-      map Routes.references (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.References (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let qualifiedName = (jsonProp doc "qualifiedName").GetString()
@@ -522,24 +397,24 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.GetReferences(qualifiedName, rid))
       })) |> ignore
 
-      map Routes.hostProcess (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HostProcess (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.GetHostProcess rid)
       })) |> ignore
 
-      map Routes.cancel (Func<HttpContext, Task>(fun ctx ->
+      map WorkerRoute.Cancel (Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.CancelEval)) |> ignore
 
-      map Routes.cancelRequest (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.CancelRequest (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.CancelEvalRequest rid)
       })) |> ignore
 
-      map Routes.loadScript (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.LoadScript (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let filePath = (jsonProp doc "filePath").GetString()
@@ -547,14 +422,14 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.LoadScript(filePath, rid))
       })) |> ignore
 
-      map Routes.reset (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.Reset (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.ResetSession rid)
       })) |> ignore
 
-      map Routes.hardReset (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HardReset (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rebuild = (jsonProp doc "rebuild").GetBoolean()
@@ -562,14 +437,14 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.HardResetSession(rebuild, rid))
       })) |> ignore
 
-      map Routes.levelRepl (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.LevelRepl (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.LevelRepl rid)
       })) |> ignore
 
-      map Routes.runTests (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.RunTests (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let testsJson = (jsonProp doc "tests").GetRawText()
@@ -581,7 +456,7 @@ module WorkerHttpTransport =
           return! respond' ctx (WorkerMessage.RunTests(tests, maxParallelism, rid))
       })) |> ignore
 
-      map Routes.runTestsStream (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.RunTestsStream (Func<HttpContext, Task>(fun ctx -> task {
         let streamActivity = Features.LiveTesting.LiveTestingInstrumentation.activitySource.StartActivity("live_testing.stream")
         let streamSw = System.Diagnostics.Stopwatch.StartNew()
         let! body = readBody ctx
@@ -740,12 +615,12 @@ module WorkerHttpTransport =
             raise ex
       })) |> ignore
 
-      map Routes.testDiscovery (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.TestDiscovery (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetTestDiscovery rid)
       })) |> ignore
 
-      map Routes.evalLiveTestFile (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.EvalLiveTestFile (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let filePath = (jsonProp doc "filePath").GetString()
@@ -754,12 +629,12 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.EvalLiveTestFile(filePath, content, rid))
       })) |> ignore
 
-      map Routes.instrumentationMaps (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.InstrumentationMaps (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetInstrumentationMaps rid)
       })) |> ignore
 
-      map Routes.runApp (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.RunApp (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
@@ -770,7 +645,7 @@ module WorkerHttpTransport =
           return! respond' ctx (WorkerMessage.RunApp(project, previous, rid))
       })) |> ignore
 
-      map Routes.stopApp (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.StopApp (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         match SageFs.WorkerProtocol.Serialization.tryDeserialize<AppRun.StopScope> ((jsonProp doc "scope").GetRawText()) with
@@ -780,7 +655,7 @@ module WorkerHttpTransport =
           return! respond' ctx (WorkerMessage.StopApp(scope, rid))
       })) |> ignore
 
-      map Routes.awaitAppChange (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.AwaitAppChange (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let runId = (jsonProp doc "runId").GetString()
@@ -788,7 +663,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.AwaitAppChange(runId, rid))
       })) |> ignore
 
-      map Routes.debugTest (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.DebugTest (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         match Serialization.tryDeserialize<Features.LiveTesting.TestCase> ((jsonProp doc "test").GetRawText()) with
@@ -798,7 +673,7 @@ module WorkerHttpTransport =
           return! respond' ctx (WorkerMessage.DebugTestBegin(test, rid))
       })) |> ignore
 
-      map Routes.debugTestContinue (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.DebugTestContinue (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         match Serialization.tryDeserialize<TimeSpan> ((jsonProp doc "park").GetRawText()) with
@@ -809,7 +684,7 @@ module WorkerHttpTransport =
           return! respond' ctx (WorkerMessage.DebugTestContinue(ticket, park, rid))
       })) |> ignore
 
-      map Routes.saveSource (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.SaveSource (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         match Serialization.tryDeserialize<Features.TrunkFollow.SaveSource> ((jsonProp doc "source").GetRawText()) with
@@ -819,7 +694,7 @@ module WorkerHttpTransport =
           return! respond' ctx (WorkerMessage.SetSaveSource(source, rid))
       })) |> ignore
 
-      map Routes.applySaves (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.ApplySaves (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         match Serialization.tryDeserialize<Features.TrunkFollow.SavedFile list> ((jsonProp doc "files").GetRawText()) with
@@ -829,20 +704,20 @@ module WorkerHttpTransport =
           return! respond' ctx (WorkerMessage.ApplySaves(files, rid))
       })) |> ignore
 
-      map Routes.shutdown (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.Shutdown (Func<HttpContext, Task>(fun ctx -> task {
         do! respond' ctx WorkerMessage.Shutdown
         onShutdown ()
       })) |> ignore
 
       // Session context endpoint
-      map Routes.warmupContext (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.SessionWarmupContext (Func<HttpContext, Task>(fun ctx -> task {
         let wCtx = getWarmupContext ()
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(Serialization.serialize wCtx)
       })) |> ignore
 
       // Hot-reload state endpoints
-      map Routes.hotReload (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReload (Func<HttpContext, Task>(fun ctx -> task {
         let state = !hotReloadStateRef
         let files =
           projectFiles
@@ -864,7 +739,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| files = files; watchedCount = HotReloadState.watchedCount state; kept = kept; reflectionReads = reflectionReads |})
       })) |> ignore
 
-      map Routes.hotReloadReflectionMode (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadReflectionMode (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let requested = (jsonProp doc "mode").GetString() |> Option.ofObj |> Option.defaultValue ""
@@ -882,7 +757,7 @@ module WorkerHttpTransport =
             do! ctx.Response.WriteAsync(Features.KeptState.ReflectionReadsJson.render report)
       })) |> ignore
 
-      map Routes.hotReloadResetState (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadResetState (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let binding = (jsonProp doc "binding").GetString() |> Option.ofObj |> Option.defaultValue ""
@@ -892,7 +767,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Features.KeptState.ResetOutcome.toJson outcome)
       })) |> ignore
 
-      map Routes.hotReloadToggle (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadToggle (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let path = (jsonProp doc "path").GetString()
@@ -902,19 +777,19 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| path = path; watched = isNowWatched |})
       })) |> ignore
 
-      map Routes.hotReloadWatchAll (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadWatchAll (Func<HttpContext, Task>(fun ctx -> task {
         hotReloadStateRef.Value <- HotReloadState.watchAll projectFiles !hotReloadStateRef
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(Serialization.serialize {| watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
-      map Routes.hotReloadUnwatchAll (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadUnwatchAll (Func<HttpContext, Task>(fun ctx -> task {
         hotReloadStateRef.Value <- HotReloadState.unwatchAll !hotReloadStateRef
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(Serialization.serialize {| watchedCount = 0 |})
       })) |> ignore
 
-      map Routes.hotReloadWatchProject (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadWatchProject (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
@@ -923,7 +798,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
-      map Routes.hotReloadUnwatchProject (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadUnwatchProject (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
@@ -932,7 +807,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
-      map Routes.hotReloadWatchDirectory (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadWatchDirectory (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let dir = (jsonProp doc "directory").GetString()
@@ -942,7 +817,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| directory = dir; watchedCount = List.length watched |})
       })) |> ignore
 
-      map Routes.hotReloadUnwatchDirectory (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadUnwatchDirectory (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let dir = (jsonProp doc "directory").GetString()
@@ -954,7 +829,7 @@ module WorkerHttpTransport =
       // Past the server boundary (roast: "Carry ReloadOutcome past the server
       // boundary"): the same payload a live DevReload SSE subscriber gets for
       // the last terminal save, for a client that only polls plain HTTP.
-      map Routes.hotReloadLastOutcome (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.HotReloadLastOutcome (Func<HttpContext, Task>(fun ctx -> task {
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(DevReload.LastReload.json ())
       })) |> ignore
@@ -970,7 +845,7 @@ module WorkerHttpTransport =
       let connectedBytes = Text.Encoding.UTF8.GetBytes(": connected\n\nretry: 1000\n\n")
       let compilingBytes = Text.Encoding.UTF8.GetBytes(DevReload.DevReloadEvent.sseData (DevReload.Compiling None))
 
-      map Routes.devReload (Func<HttpContext, Task>(fun ctx -> task {
+      map WorkerRoute.DevReloadStream (Func<HttpContext, Task>(fun ctx -> task {
         ctx.Response.ContentType <- "text/event-stream"
         ctx.Response.Headers["Cache-Control"] <- "no-cache"
         ctx.Response.Headers["Connection"] <- "keep-alive"
@@ -1037,6 +912,12 @@ module WorkerHttpTransport =
         | :? ArgumentOutOfRangeException as ex -> Log.debug "[SSE] Client %s write error: %s" id ex.Message
         | :? InvalidOperationException as ex -> Log.debug "[SSE] Client %s invalid op: %s" id ex.Message
       })) |> ignore
+
+      // A `WorkerRoute` case with no endpoint above would answer 404 to the daemon at runtime, so the worker refuses to start.
+      match routes |> List.filter (fun route -> not (mapped.Contains route)) with
+      | [] -> ()
+      | unserved ->
+        failwithf "The worker has no endpoint for these routes: %s" (unserved |> List.map WorkerRoute.path |> String.concat ", ")
 
       beforeListen ()
       do! app.StartAsync()

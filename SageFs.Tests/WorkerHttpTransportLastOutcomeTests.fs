@@ -36,9 +36,9 @@ let hotReloadLastOutcomeHttpTests =
 
     testCase "the route is declared GET/ReadOnly and actually mapped" <| fun _ ->
       WorkerHttpTransport.routes
-      |> List.tryFind (fun r -> WorkerHttpTransport.WorkerRoute.path r = "/hotreload/last-outcome")
-      |> Option.map WorkerHttpTransport.WorkerRoute.access
-      |> Expect.equal "declared read-only, like every other worker GET" (Some WorkerHttpTransport.RouteAccess.ReadOnly)
+      |> List.tryFind (fun r -> WorkerRoute.path r = "/hotreload/last-outcome")
+      |> Option.map WorkerRoute.access
+      |> Expect.equal "declared read-only, like every other worker GET" (Some RouteAccess.ReadOnly)
 
     testTask "GET /hotreload/last-outcome serves DevReload.LastReload.json() verbatim" {
       Broadcast.broadcastOutcome (ReloadOutcome.Patched(1, 2))

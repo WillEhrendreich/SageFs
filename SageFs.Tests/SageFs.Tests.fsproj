@@ -392,6 +392,7 @@
         <Compile Include="WorkerWireRoundTripTests.fs" />
         <Compile Include="WorkerHttpTransportLastOutcomeTests.fs" />
         <Compile Include="WorkerHttpGuardTests.fs" />
+        <Compile Include="WorkerRouteTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="ShutdownLifecycleTests.fs" />
         <Compile Include="CompletionsContractTests.fs" />

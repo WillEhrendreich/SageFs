@@ -46,8 +46,8 @@ let routeTests =
     testCase "the worker's route table lists both routes as mutating" <| fun _ ->
       let mutating =
         SageFs.WorkerHttpTransport.routes
-        |> List.filter (fun route -> SageFs.WorkerHttpTransport.WorkerRoute.access route = SageFs.WorkerHttpTransport.RouteAccess.Mutating)
-        |> List.map SageFs.WorkerHttpTransport.WorkerRoute.path
+        |> List.filter (fun route -> WorkerRoute.access route = RouteAccess.Mutating)
+        |> List.map WorkerRoute.path
       mutating |> Expect.contains "evaluate is a POST" "/live-values/evaluate"
       mutating |> Expect.contains "mode is a POST" "/live-values/mode"
   ]

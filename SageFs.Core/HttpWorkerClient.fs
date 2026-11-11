@@ -9,87 +9,82 @@ open SageFs.WorkerProtocol
 /// Lives in SageFs.Core so SessionManager can create proxies.
 module HttpWorkerClient =
 
+  /// A read that names its caller's reply in the query string.
+  let withReply(route: WorkerRoute) (rid: string) : WorkerRoute * string * string option =
+    route, sprintf "%s?replyId=%s" (WorkerRoute.path route) (Uri.EscapeDataString rid), None
+
+  /// A write: the route's path and a JSON body.
+  let withBody(route: WorkerRoute) (body: string) : WorkerRoute * string * string option =
+    route, WorkerRoute.path route, Some body
+
+  /// A write with nothing to say beyond the route itself.
+  let bare(route: WorkerRoute) : WorkerRoute * string * string option =
+    route, WorkerRoute.path route, None
+
+  /// Map WorkerMessage → (route, request target, bodyJson option). The route is the wire's one named home
+  /// (`WorkerRoute`); the target is its path, plus the reply id for a read.
+  let toCall (msg: WorkerMessage) : WorkerRoute * string * string option =
+    match msg with
+    | WorkerMessage.GetStatus rid -> withReply WorkerRoute.Status rid
+    | WorkerMessage.GetLiveValues rid -> withReply WorkerRoute.LiveValues rid
+    | WorkerMessage.EvaluateLiveMember(binding, path, rid) ->
+      withBody WorkerRoute.LiveValuesEvaluate (Serialization.serialize {| binding = binding; path = path; replyId = rid |})
+    | WorkerMessage.SetValueWalk(mode, rid) ->
+      withBody WorkerRoute.LiveValuesMode (Serialization.serialize {| mode = ValueWalk.name mode; replyId = rid |})
+    | WorkerMessage.EvalCode(code, rid) ->
+      withBody WorkerRoute.Eval (Serialization.serialize {| code = code; replyId = rid |})
+    | WorkerMessage.CheckCode(code, rid) ->
+      withBody WorkerRoute.Check (Serialization.serialize {| code = code; replyId = rid |})
+    | WorkerMessage.TypeCheckWithSymbols(code, filePath, rid) ->
+      withBody WorkerRoute.TypecheckSymbols (Serialization.serialize {| code = code; filePath = filePath; replyId = rid |})
+    | WorkerMessage.GetCompletions(code, cursorPos, limit, rid) ->
+      withBody WorkerRoute.Completions (Serialization.serialize {| code = code; cursorPos = cursorPos; limit = limit; replyId = rid |})
+    | WorkerMessage.GetReferences(qualifiedName, rid) ->
+      withBody WorkerRoute.References (Serialization.serialize {| qualifiedName = qualifiedName; replyId = rid |})
+    | WorkerMessage.GetHostProcess rid ->
+      withBody WorkerRoute.HostProcess (Serialization.serialize {| replyId = rid |})
+    | WorkerMessage.CancelEval -> bare WorkerRoute.Cancel
+    | WorkerMessage.CancelEvalRequest rid ->
+      withBody WorkerRoute.CancelRequest (Serialization.serialize {| replyId = rid |})
+    | WorkerMessage.LoadScript(filePath, rid) ->
+      withBody WorkerRoute.LoadScript (Serialization.serialize {| filePath = filePath; replyId = rid |})
+    | WorkerMessage.ResetSession rid ->
+      withBody WorkerRoute.Reset (Serialization.serialize {| replyId = rid |})
+    | WorkerMessage.HardResetSession(rebuild, rid) ->
+      withBody WorkerRoute.HardReset (Serialization.serialize {| rebuild = rebuild; replyId = rid |})
+    | WorkerMessage.LevelRepl rid ->
+      withBody WorkerRoute.LevelRepl (Serialization.serialize {| replyId = rid |})
+    | WorkerMessage.RunTests(tests, maxParallelism, rid) ->
+      withBody WorkerRoute.RunTests (Serialization.serialize {| tests = tests; maxParallelism = maxParallelism; replyId = rid |})
+    | WorkerMessage.GetTestDiscovery rid -> withReply WorkerRoute.TestDiscovery rid
+    | WorkerMessage.EvalLiveTestFile(filePath, content, rid) ->
+      withBody WorkerRoute.EvalLiveTestFile (Serialization.serialize {| filePath = filePath; content = content; replyId = rid |})
+    | WorkerMessage.GetInstrumentationMaps rid -> withReply WorkerRoute.InstrumentationMaps rid
+    | WorkerMessage.RunApp(project, previous, rid) ->
+      withBody WorkerRoute.RunApp (Serialization.serialize {| project = project; previous = previous; replyId = rid |})
+    | WorkerMessage.StopApp(scope, rid) ->
+      withBody WorkerRoute.StopApp (Serialization.serialize {| scope = scope; replyId = rid |})
+    | WorkerMessage.AwaitAppChange(runId, rid) ->
+      withBody WorkerRoute.AwaitAppChange (Serialization.serialize {| runId = runId; replyId = rid |})
+    | WorkerMessage.DebugTestBegin(test, rid) ->
+      withBody WorkerRoute.DebugTest (Serialization.serialize {| test = test; replyId = rid |})
+    | WorkerMessage.DebugTestContinue(ticket, park, rid) ->
+      withBody WorkerRoute.DebugTestContinue (Serialization.serialize {| ticket = ticket; park = park; replyId = rid |})
+    | WorkerMessage.SetSaveSource(source, rid) ->
+      withBody WorkerRoute.SaveSource (Serialization.serialize {| source = source; replyId = rid |})
+    | WorkerMessage.ApplySaves(files, rid) ->
+      withBody WorkerRoute.ApplySaves (Serialization.serialize {| files = files; replyId = rid |})
+    | WorkerMessage.Shutdown -> bare WorkerRoute.Shutdown
+
+  /// The route a message goes to.
+  let routeOf (msg: WorkerMessage) : WorkerRoute =
+    let route, _, _ = toCall msg
+    route
+
   /// Map WorkerMessage → (httpMethod, path, bodyJson option).
   let toRoute (msg: WorkerMessage) : string * string * string option =
-    match msg with
-    | WorkerMessage.GetStatus rid ->
-      "GET", sprintf "/status?replyId=%s" (Uri.EscapeDataString rid), None
-    | WorkerMessage.GetLiveValues rid ->
-      "GET", sprintf "/live-values?replyId=%s" (Uri.EscapeDataString rid), None
-    | WorkerMessage.EvaluateLiveMember(binding, path, rid) ->
-      "POST", "/live-values/evaluate",
-      Some (Serialization.serialize {| binding = binding; path = path; replyId = rid |})
-    | WorkerMessage.SetValueWalk(mode, rid) ->
-      "POST", "/live-values/mode",
-      Some (Serialization.serialize {| mode = ValueWalk.name mode; replyId = rid |})
-    | WorkerMessage.EvalCode(code, rid) ->
-      "POST", "/eval",
-      Some (Serialization.serialize {| code = code; replyId = rid |})
-    | WorkerMessage.CheckCode(code, rid) ->
-      "POST", "/check",
-      Some (Serialization.serialize {| code = code; replyId = rid |})
-    | WorkerMessage.TypeCheckWithSymbols(code, filePath, rid) ->
-      "POST", "/typecheck-symbols",
-      Some (Serialization.serialize {| code = code; filePath = filePath; replyId = rid |})
-    | WorkerMessage.GetCompletions(code, cursorPos, limit, rid) ->
-      "POST", "/completions",
-      Some (Serialization.serialize {| code = code; cursorPos = cursorPos; limit = limit; replyId = rid |})
-    | WorkerMessage.GetReferences(qualifiedName, rid) ->
-      "POST", "/references",
-      Some (Serialization.serialize {| qualifiedName = qualifiedName; replyId = rid |})
-    | WorkerMessage.GetHostProcess rid ->
-      "POST", "/host-process",
-      Some (Serialization.serialize {| replyId = rid |})
-    | WorkerMessage.CancelEval ->
-      "POST", "/cancel", None
-    | WorkerMessage.CancelEvalRequest rid ->
-      "POST", "/cancel-request",
-      Some (Serialization.serialize {| replyId = rid |})
-    | WorkerMessage.LoadScript(filePath, rid) ->
-      "POST", "/load-script",
-      Some (Serialization.serialize {| filePath = filePath; replyId = rid |})
-    | WorkerMessage.ResetSession rid ->
-      "POST", "/reset",
-      Some (Serialization.serialize {| replyId = rid |})
-    | WorkerMessage.HardResetSession(rebuild, rid) ->
-      "POST", "/hard-reset",
-      Some (Serialization.serialize {| rebuild = rebuild; replyId = rid |})
-    | WorkerMessage.LevelRepl rid ->
-      "POST", "/level-repl",
-      Some (Serialization.serialize {| replyId = rid |})
-    | WorkerMessage.RunTests(tests, maxParallelism, rid) ->
-      "POST", "/run-tests",
-      Some (Serialization.serialize {| tests = tests; maxParallelism = maxParallelism; replyId = rid |})
-    | WorkerMessage.GetTestDiscovery rid ->
-      "GET", sprintf "/test-discovery?replyId=%s" (Uri.EscapeDataString rid), None
-    | WorkerMessage.EvalLiveTestFile(filePath, content, rid) ->
-      "POST", "/eval-live-test-file",
-      Some (Serialization.serialize {| filePath = filePath; content = content; replyId = rid |})
-    | WorkerMessage.GetInstrumentationMaps rid ->
-      "GET", sprintf "/instrumentation-maps?replyId=%s" (Uri.EscapeDataString rid), None
-    | WorkerMessage.RunApp(project, previous, rid) ->
-      "POST", "/run-app",
-      Some (Serialization.serialize {| project = project; previous = previous; replyId = rid |})
-    | WorkerMessage.StopApp(scope, rid) ->
-      "POST", "/stop-app",
-      Some (Serialization.serialize {| scope = scope; replyId = rid |})
-    | WorkerMessage.AwaitAppChange(runId, rid) ->
-      "POST", "/await-app-change",
-      Some (Serialization.serialize {| runId = runId; replyId = rid |})
-    | WorkerMessage.DebugTestBegin(test, rid) ->
-      "POST", "/debug-test",
-      Some (Serialization.serialize {| test = test; replyId = rid |})
-    | WorkerMessage.DebugTestContinue(ticket, park, rid) ->
-      "POST", "/debug-test-continue",
-      Some (Serialization.serialize {| ticket = ticket; park = park; replyId = rid |})
-    | WorkerMessage.SetSaveSource(source, rid) ->
-      "POST", "/save-source",
-      Some (Serialization.serialize {| source = source; replyId = rid |})
-    | WorkerMessage.ApplySaves(files, rid) ->
-      "POST", "/apply-saves",
-      Some (Serialization.serialize {| files = files; replyId = rid |})
-    | WorkerMessage.Shutdown ->
-      "POST", "/shutdown", None
+    let route, target, body = toCall msg
+    WorkerRoute.httpMethod route, target, body
 
   /// How much of a worker's explanation an exception carries.
   let refusalDetailLimit = 1000
