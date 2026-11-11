@@ -35,15 +35,16 @@ let private responseText (ctx: HttpContext) =
 
 /// The refusal branches never read the queries or the infrastructure, so a handler built over nothing proves
 /// they do not reach for either. A fake evaluator records whether anything was asked to run.
-let private runHandler (body: string) : string * bool =
+let private runHandler (body: string) : Task<string * bool> = task {
   let evaluated = ref false
   let evalCode (_: WorkerProtocol.SessionId) (_: string) : Task<Result<string, string>> =
     evaluated.Value <- true
     Task.FromResult(Ok "ran")
   let handler = createEvalHandler Unchecked.defaultof<_> Unchecked.defaultof<_> evalCode
   let ctx = contextWithBody body
-  (handler ctx).GetAwaiter().GetResult()
-  responseText ctx, evaluated.Value
+  do! handler ctx
+  return responseText ctx, evaluated.Value
+}
 
 [<Tests>]
 let decisionTests =
@@ -90,23 +91,26 @@ let decisionTests =
 [<Tests>]
 let handlerTests =
   testList "createEvalHandler refusals keep the code and say why" [
-    testCase "WHY — blank code shows the refusal and does not touch the code signal" <| fun _ ->
-      let out, evaluated = runHandler (sprintf """{"code":"   ","viewingSessionId":"%s"}""" goodId)
+    testTask "WHY — blank code shows the refusal and does not touch the code signal" {
+      let! out, evaluated = runHandler (sprintf """{"code":"   ","viewingSessionId":"%s"}""" goodId)
       evaluated |> Expect.isFalse "nothing was evaluated"
       out |> Expect.stringContains "the notice is on the page" "action-result"
       out |> Expect.stringContains "the sentence is there" (EvalRefusal.describe EvalRefusal.BlankCode |> fun s -> s.Substring(0, 20))
       out.Contains "datastar-patch-signals" |> Expect.isFalse "no signal patch, so the box keeps what is in it"
+    }
 
-    testCase "WHY — code with no session in view keeps the code and tells the person to open a session" <| fun _ ->
-      let out, evaluated = runHandler """{"code":"let x = 1","viewingSessionId":""}"""
+    testTask "WHY — code with no session in view keeps the code and tells the person to open a session" {
+      let! out, evaluated = runHandler """{"code":"let x = 1","viewingSessionId":""}"""
       evaluated |> Expect.isFalse "nothing was evaluated"
       out |> Expect.stringContains "the notice is on the page" "action-result"
       out |> Expect.stringContains "it names the next action" "Quick Start"
       out.Contains "datastar-patch-signals" |> Expect.isFalse "the code signal is left alone"
+    }
 
-    testCase "WHY — an id the validator refuses keeps the code and carries the validator's reason" <| fun _ ->
-      let out, evaluated = runHandler """{"code":"let x = 1","viewingSessionId":"zzz"}"""
+    testTask "WHY — an id the validator refuses keeps the code and carries the validator's reason" {
+      let! out, evaluated = runHandler """{"code":"let x = 1","viewingSessionId":"zzz"}"""
       evaluated |> Expect.isFalse "nothing was evaluated"
       out |> Expect.stringContains "the reason is shown" "invalid session ID format"
       out.Contains "datastar-patch-signals" |> Expect.isFalse "the code signal is left alone"
+    }
   ]

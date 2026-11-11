@@ -44,13 +44,13 @@ let private stopped (n: int) : PreviousSession =
 /// 266 stopped sessions across 28 projects, the shape measured on a working machine.
 let private manyStopped = [ for n in 1 .. 266 -> stopped n ]
 
-let private pageHtml : Lazy<string> =
-  lazy (
+let private pageHtml : Lazy<Task<string>> =
+  lazy (task {
     let queries =
       { DashboardRenderGateTests.mkQueries (ref 0) [] with
           GetPreviousSessions = fun () -> Task.FromResult manyStopped }
-    let page = (Dashboard.renderLanding queries (DashboardRenderGateTests.mkInfra ()) "").GetAwaiter().GetResult()
-    renderNode page)
+    let! page = Dashboard.renderLanding queries (DashboardRenderGateTests.mkInfra ()) ""
+    return renderNode page })
 
 /// Serve the dashboard from memory. The stream is answered with an empty event stream, so nothing is ever pushed.
 let private serve (html: string) (page: IPage) = task {
@@ -91,8 +91,10 @@ let private atWidthWith (html: string) (waitFor: string) (width: int) (body: IPa
   | None -> ()
 }
 
-let private atWidth (width: int) (body: IPage -> Task<unit>) =
-  atWidthWith pageHtml.Value "#session-picker .picker-container" width body
+let private atWidth (width: int) (body: IPage -> Task<unit>) = task {
+  let! html = pageHtml.Value
+  do! atWidthWith html "#session-picker .picker-container" width body
+}
 
 /// A screenshot of the window, saved for a person to look at. Chromium sometimes answers `Unable to capture screenshot` under load,
 /// so it is asked again, up to a few times, before the picture is given up on: the assertions carry the proof either way.
