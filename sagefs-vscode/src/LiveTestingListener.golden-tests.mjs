@@ -153,7 +153,9 @@ run("parseSummary consumes fallback decision golden fixture", () => {
   const summary = parseSummary(readFixture("summary-with-fallback-decision.json"));
   assert(summary.Total === 5, `expected Total=5, got ${summary.Total}`);
   assert(summary.LastDecision != null, "expected LastDecision to be present");
-  assert(summary.LastDecision.Precision.tag === 2, "expected ConservativeFallback precision");
+  // VscSelectionPrecision tags, in declaration order: ExactDependencyMatch 0, CoverageApproximation 1,
+  // LineCoverageNarrowing 2, ConservativeFallback 3, NoImpactedTests 4, SuppressedByPolicy 5.
+  assert(summary.LastDecision.Precision.tag === 3, `expected ConservativeFallback precision (tag 3), got ${summary.LastDecision.Precision.tag}`);
   assert(summary.LastDecision.Reason === "fallback rebuild", `unexpected reason: ${summary.LastDecision.Reason}`);
 });
 
@@ -205,7 +207,7 @@ run("parseSummary consumes suppressed-by-policy golden fixture", () => {
   const summary = parseSummary(readFixture("summary-with-suppressed-decision.json"));
   assert(summary.Total === 4, `expected Total=4, got ${summary.Total}`);
   assert(summary.LastDecision != null, "expected LastDecision to be present");
-  assert(summary.LastDecision.Precision.tag === 4, `expected SuppressedByPolicy precision, got ${summary.LastDecision.Precision.tag}`);
+  assert(summary.LastDecision.Precision.tag === 5, `expected SuppressedByPolicy precision (tag 5), got ${summary.LastDecision.Precision.tag}`);
   assert(summary.LastDecision.Trust.tag === 3, `expected Suppressed trust, got ${summary.LastDecision.Trust.tag}`);
   assert(summary.LastDecision.DeferredTests.length === 1, `expected 1 deferred test, got ${summary.LastDecision.DeferredTests.length}`);
 });
