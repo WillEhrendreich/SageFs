@@ -34,6 +34,7 @@ module NudgeKnob = SageFs.Vscode.NudgeKnob
 module SessionsTreePure = SageFs.Vscode.SessionsTreePure
 module StatusBarPure = SageFs.Vscode.StatusBarPure
 module EvalPreflightPure = SageFs.Vscode.EvalPreflightPure
+module StartupPure = SageFs.Vscode.StartupPure
 module WorkflowPickPure = SageFs.Vscode.WorkflowPickPure
 module ContextKeysPure = SageFs.Vscode.ContextKeysPure
 
@@ -1209,23 +1210,20 @@ let rec startDaemon () =
                 out.appendLine "SageFs daemon is ready."
                 onDaemonReady |> Option.iter (fun f -> f c)
                 refreshStatus ()
-              elif attempts > 120 then
+              elif attempts > StartupPure.giveUpSeconds then
                 startupSettled <- true
                 intervalId |> Option.iter jsClearInterval
                 isStarting <- false
-                let stderrSnippet =
-                  match daemonStderr.Trim() with
-                  | "" -> ""
-                  | s -> sprintf "\n\nDaemon output:\n%s" (if s.Length > 500 then s.Substring(0, 500) + "…" else s)
-                out.appendLine (sprintf "Timed out waiting for SageFs daemon after 120s.%s" stderrSnippet)
+                let giveUp = StartupPure.giveUpMessage daemonStderr
+                out.appendLine giveUp
                 out.show false
                 // `[Check Installation]` used to run `sagefs --version` in a
                 // terminal, which in the CLI-missing case just reproduces
                 // `command not found` and diagnoses nothing. Offer the actual
                 // remedy instead.
-                let! choice = Window.showErrorMessage (sprintf "SageFs daemon failed to start after 120s.%s" stderrSnippet) [| "Retry"; "Show Full Output"; "Reinstall SageFs" |]
+                let! choice = Window.showErrorMessage giveUp [| "Retry"; "Show Full Output"; "Reinstall SageFs" |]
                 match choice with
-                | Some "Retry" -> Commands.executeCommand "sagefs.restart" |> ignore
+                | Some "Retry" -> Commands.executeCommand "sagefs.retryStart" |> ignore
                 | Some "Show Full Output" -> showOutputPanel ()
                 | Some "Reinstall SageFs" -> installCli ()
                 | _ -> ()
@@ -1248,20 +1246,12 @@ and ensureRunning () =
       match choice with
       | Some "Start SageFs" ->
         do! startDaemon ()
-        let mutable ready = false
-        let mutable attempts = 0
-        while not ready && attempts < 30 do
+        // `startDaemon` owns the one startup timer and the one failure message. This waits for
+        // that poll to settle (`isStarting` goes false on ready, exit and give-up) instead of
+        // running a second, shorter clock of its own.
+        while isStarting do
           do! sleep 1000
-          let! r = Client.isRunning c
-          ready <- r
-          attempts <- attempts + 1
-        if not ready then
-          let! choice = Window.showErrorMessage "SageFs didn't start in time." [| "Retry"; "Show Output"; "Check Installation" |]
-          match choice with
-          | Some "Retry" -> Commands.executeCommand "sagefs.restart" |> ignore
-          | Some "Show Output" -> showOutputPanel ()
-          | Some "Check Installation" -> checkInstallation ()
-          | _ -> ()
+        let! ready = Client.isRunning c
         return ready
       | _ ->
         return false
@@ -2767,6 +2757,28 @@ let activate (context: ExtensionContext) =
       do! stopDaemon ()
       do! waitForDaemonGone 20
       do! startDaemon ()
+    } |> promiseIgnoreLog logToOutput)
+  // The Retry button on the startup give-up toast. `sagefs.restart` stops the daemon first, which
+  // kills a start that was about to answer, so Retry probes first and restarts only when nothing
+  // answers (`StartupPure.retryStep`). Registered, not contributed: it is a button, not a palette entry.
+  reg "sagefs.retryStart" (fun _ ->
+    promise {
+      match client with
+      | None -> ()
+      | Some c ->
+        let! _ = discoverDaemonPorts c
+        let! running = Client.isRunning c
+        let probe = if running then StartupPure.DaemonProbe.Answering else StartupPure.DaemonProbe.Silent
+        match StartupPure.retryStep probe with
+        | StartupPure.RetryStep.ConnectToRunningDaemon ->
+          (getOutput()).appendLine "SageFs daemon answers now. Connecting."
+          onDaemonReady |> Option.iter (fun f -> f c)
+          refreshStatus ()
+        | StartupPure.RetryStep.RestartDaemon ->
+          (getOutput()).appendLine "No SageFs daemon answers. Restarting."
+          do! stopDaemon ()
+          do! waitForDaemonGone 20
+          do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
   // Every "Show Output" button in a dialog opens this channel; the same thing is now one palette entry.
