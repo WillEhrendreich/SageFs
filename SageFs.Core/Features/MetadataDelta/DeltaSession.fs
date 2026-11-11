@@ -16,8 +16,6 @@ open System
 /// The standing of one process's delta route.
 [<RequireQualifiedAccess>]
 type Standing =
-  /// Nothing has been captured yet.
-  | NoBaseline
   /// Deltas can be applied: the chain began at the module with this `Mvid` and `generation` of them have landed.
   | Tracking of baseline: Guid * generation: int
   /// The route cannot be used again in this process, and why. A restart is what clears it.
@@ -80,7 +78,6 @@ module DeltaSession =
   /// save, a no-change one included: the process may hold part of a delta.
   let precheck (standing: Standing) (running: Guid) (gaps: CapabilityGap list) : Result<int, Refusal> =
     match standing with
-    | Standing.NoBaseline -> Result.Error(Refusal.Unavailable "no baseline was captured when the app started")
     | Standing.Unusable why -> Result.Error(Refusal.Unavailable why)
     | Standing.Tracking(baseline, _) when baseline <> running ->
       Result.Error(Refusal.Unavailable "the module the chain was started from is not the one this process is running")

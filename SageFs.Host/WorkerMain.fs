@@ -1768,8 +1768,7 @@ let run (sessionId: string) (requestedPort: int) = async {
               match refusal with
               | Features.MetadataDelta.Refusal.Rude cause -> Features.ReloadPlanning.ReloadChange.RefusedByDelta cause
               | Features.MetadataDelta.Refusal.Unavailable why -> Features.ReloadPlanning.ReloadChange.DeltaUnavailable why
-              | Features.MetadataDelta.Refusal.Faulted (exceptionType, message) ->
-                Features.ReloadPlanning.ReloadChange.DeltaFaulted (exceptionType, message)
+              | Features.MetadataDelta.Refusal.Faulted (exnType, message) -> Features.ReloadPlanning.ReloadChange.DeltaFaulted (exnType, message)
             return! restartOrFallBack fileName (changeOf first) (rest |> List.map changeOf)
           | RunAppDelta.SaveResult.Landed landed ->
             reloadBaselines.[IO.Path.GetFullPath filePath] <- current
@@ -2273,8 +2272,7 @@ let run (sessionId: string) (requestedPort: int) = async {
         match session.Standing with
         | Features.MetadataDelta.Standing.Unusable why ->
           Log.warn "Run App: saves cannot be patched by metadata delta in this process (%s), so an edit restarts the app" why
-        | Features.MetadataDelta.Standing.Tracking _
-        | Features.MetadataDelta.Standing.NoBaseline ->
+        | Features.MetadataDelta.Standing.Tracking _ ->
           Log.info "Run App: saves are patched by metadata delta against %s" asm.Location
     | Features.MetadataDelta.MetadataDeltaMode.Off, _
     | Features.MetadataDelta.MetadataDeltaMode.On, _ -> ()

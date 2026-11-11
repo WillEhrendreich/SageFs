@@ -67,19 +67,26 @@ let private builtPathOf (loadedPath: string) : Result<string, string> =
 let private probeTarget : ProbeTarget =
   ProbeTarget.ofMethod (typeof<EntryHooks>.GetMethod "Enter")
 
-/// The chain, once there is one to start. A route that cannot be used has none.
+/// Where one assembly's route is. A chain exists only for a route that was started; a route refused at the start, or
+/// retired after a fault, has none and says why.
 [<RequireQualifiedAccess>]
-type private ChainHolder =
-  | NoChain
-  | Started of DeltaChain
+type private Route =
+  /// A chain started at the loaded module, and what `DeltaSession` says it is good for now.
+  | Chained of standing: Standing * chain: DeltaChain
+  /// No save can be a delta in this process.
+  | Retired of why: string
+
+let private standingOf (route: Route) : Standing =
+  match route with
+  | Route.Chained(standing, _) -> standing
+  | Route.Retired why -> Standing.Unusable why
 
 /// The route for one loaded assembly. Saves are taken one at a time: a delta is prepared from the generation the
 /// chain is at, so two saves in flight would prepare from the same one, and the second would be refused as stale.
 [<Sealed>]
-type Session private (assembly: Assembly, project: string, workingDir: string, builtPath: string, initial: Standing, initialChain: ChainHolder) =
+type Session private (assembly: Assembly, project: string, workingDir: string, builtPath: string, initial: Route) =
   let gate = new SemaphoreSlim(1, 1)
-  let mutable standing = initial
-  let mutable chain = initialChain
+  let mutable route = initial
   // Set from the moment the runtime is handed a delta until the save answers: a step that throws in that window
   // leaves the process holding a delta the chain may not have recorded, so the route is not used again.
   let mutable handedToRuntime = false
@@ -90,10 +97,12 @@ type Session private (assembly: Assembly, project: string, workingDir: string, b
         let running = assembly.ManifestModule.ModuleVersionId
         let capability = DeltaApply.capability ()
         let gaps = DeltaApply.moduleGaps capability assembly
-        match DeltaSession.precheck standing running gaps, chain with
-        | Result.Error refusal, _ -> return SaveResult.Restart(refusal, [])
-        | Result.Ok _, ChainHolder.NoChain -> return SaveResult.Restart(Refusal.Unavailable "the delta chain was not started", [])
-        | Result.Ok _, ChainHolder.Started current ->
+        match route with
+        | Route.Retired why -> return SaveResult.Restart(Refusal.Unavailable why, [])
+        | Route.Chained(standing, current) ->
+        match DeltaSession.precheck standing running gaps with
+        | Result.Error refusal -> return SaveResult.Restart(refusal, [])
+        | Result.Ok _ ->
           let watch = Stopwatch.StartNew()
           match! SageFs.SessionBuild.runBuildAsync [ project ] workingDir with
           | Result.Error err -> return SaveResult.BuildFailed (SageFs.SageFsError.describe err)
@@ -124,7 +133,7 @@ type Session private (assembly: Assembly, project: string, workingDir: string, b
             | SaveDecision.Apply, (PrepareOutcome.NothingChanged | PrepareOutcome.Refused _) ->
               return SaveResult.Restart(Refusal.Unavailable "the route decided to apply a delta that was not prepared", [])
             | SaveDecision.Apply, PrepareOutcome.Ready delta ->
-              match DeltaApply.check capability assembly delta.Payload, DeltaSession.decide standing running gaps (Preparation.Ready delta.FromGeneration) with
+              match DeltaApply.check capability assembly delta.Payload, DeltaSession.decide (standingOf route) running gaps (Preparation.Ready delta.FromGeneration) with
               | CapabilityCheck.Incapable found, _ ->
                 return SaveResult.Restart(Refusal.Unavailable(found |> List.map DeltaApply.describeGap |> String.concat "; "), [])
               // Asked again at the moment of the call, against the standing as it is then: the saves are taken one at a time,
@@ -137,12 +146,13 @@ type Session private (assembly: Assembly, project: string, workingDir: string, b
                 let outcome = DeltaApply.apply assembly delta.Payload
                 let applyMs = watch.Elapsed.TotalMilliseconds
                 let landing = DeltaSession.landingOf outcome
-                standing <- DeltaSession.settle standing landing
+                let settled = DeltaSession.settle (standingOf route) landing
+                route <- Route.Chained(settled, current)
                 match landing with
                 | Landing.DidNotLand why -> return SaveResult.Restart(Refusal.Unavailable why, [])
                 | Landing.Landed
                 | Landing.LandedWithHandlerFailures _ ->
-                  chain <- ChainHolder.Started (current.Commit delta)
+                  route <- Route.Chained(settled, current.Commit delta)
                   // This save's bodies are the ones that run now: an earlier probe of the same method that never ran is superseded.
                   for probe in allocated.Values do
                     ProbeRegistry.Shared.Commit probe
@@ -164,14 +174,14 @@ type Session private (assembly: Assembly, project: string, workingDir: string, b
   /// The assembly this session patches.
   member _.Assembly : Assembly = assembly
 
-  member _.Standing : Standing = standing
+  member _.Standing : Standing = standingOf route
 
   /// Capture the baseline: the module this process loaded, as it is now. What it can do is read from the runtime
   /// here, once, and again before every save (a debugger can attach later).
   static member Start(assembly: Assembly, project: string, workingDir: string) : Session =
     let running = assembly.ManifestModule.ModuleVersionId
     let gaps = DeltaApply.moduleGaps (DeltaApply.capability ()) assembly
-    let unusable (why: string) = Session(assembly, project, workingDir, "", Standing.Unusable why, ChainHolder.NoChain)
+    let unusable (why: string) = Session(assembly, project, workingDir, "", Route.Retired why)
     match DeltaSession.start running gaps, builtPathOf assembly.Location with
     | Standing.Unusable why, _ -> unusable why
     | _, Result.Error why -> unusable why
@@ -182,7 +192,7 @@ type Session private (assembly: Assembly, project: string, workingDir: string, b
         | false -> unusable "the file this assembly was loaded from is not the module in memory"
         | true ->
           let chain = DeltaChain.Start(image, ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol)
-          Session(assembly, project, workingDir, builtPath, tracking, ChainHolder.Started chain)
+          Session(assembly, project, workingDir, builtPath, Route.Chained(tracking, chain))
       with e -> unusable (sprintf "the loaded assembly cannot be read: %s" e.Message)
 
   /// Build the project and take what changed as a delta. Always answers: a step that throws is a restart naming the
@@ -195,8 +205,7 @@ type Session private (assembly: Assembly, project: string, workingDir: string, b
         let afterFault (e: exn) =
           match handedToRuntime with
           | true ->
-            standing <- Standing.Unusable(sprintf "a save failed with %s after its delta was handed to the runtime" (e.GetType().Name))
-            chain <- ChainHolder.NoChain
+            route <- Route.Retired(sprintf "a save failed with %s after its delta was handed to the runtime" (e.GetType().Name))
           | false -> ()
         return! answerFaults afterFault saveUnderGate
       finally

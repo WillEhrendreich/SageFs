@@ -32,8 +32,7 @@ let private decl (name: string) : SourceDecl =
     EndLine = 1 }
 
 let private standings : Standing list =
-  [ Standing.NoBaseline
-    Standing.Unusable "an earlier delta did not apply"
+  [ Standing.Unusable "an earlier delta did not apply"
     Standing.Tracking(mvidA, 0)
     Standing.Tracking(mvidA, 3)
     Standing.Tracking(mvidB, 3) ]
@@ -140,11 +139,24 @@ let deltaRouteTests =
       wrong |> Expect.isEmpty "every combination agrees with the rule"
 
     testCase "WHY - a process whose chain is gone or broken restarts for every save, a save that changed nothing included" <| fun _ ->
-      for standing in [ Standing.NoBaseline; Standing.Unusable "an earlier delta did not apply" ] do
-        for preparation in preparations do
-          match DeltaSession.decide standing mvidA [] preparation with
-          | SaveDecision.Restart(Refusal.Unavailable _, []) -> ()
-          | other -> failtestf "%A %A: should restart, and is %A" standing preparation other
+      let standing = Standing.Unusable "an earlier delta did not apply"
+      for preparation in preparations do
+        match DeltaSession.decide standing mvidA [] preparation with
+        | SaveDecision.Restart(Refusal.Unavailable _, []) -> ()
+        | other -> failtestf "%A %A: should restart, and is %A" standing preparation other
+
+    testAsync "WHY - a route refused when the app started restarts every save with the reason it was refused, and has no chain to build against" {
+      // This test assembly is not a shadow copy, so the route cannot know the build it came from.
+      let session = RunAppDelta.Session.Start(typeof<Preparation>.Assembly, "App.fsproj", IO.Path.GetTempPath())
+      let why =
+        match session.Standing with
+        | Standing.Unusable why -> why
+        | other -> failtestf "a session the route cannot use should say so, and is %A" other
+      why |> Expect.isNotEmpty "and says why"
+      match! session.Save() with
+      | RunAppDelta.SaveResult.Restart(Refusal.Unavailable said, []) -> said |> Expect.equal "every save restarts with that reason" why
+      | other -> failtestf "a save on a refused route should restart, and is %A" other
+    }
 
     testCase "WHY - an edit the emitter refuses is a restart that names every cause, and a refusal with no cause still says something" <| fun _ ->
       match DeltaSession.decide (Standing.Tracking(mvidA, 0)) mvidA [] (Preparation.Refused [ cause; RudeCause.TypeAdded "Handlers+clo@31" ]) with
@@ -175,7 +187,7 @@ let deltaRouteTests =
         | Landing.DidNotLand why -> why |> Expect.isNotEmpty (sprintf "%A says why" outcome)
         | other -> failtestf "%A did not land, and reads as %A" outcome other
 
-    testCase "WHY - a save whose step throws is a restart that names the exception, so the old body never keeps serving behind an internal fault" <| fun _ ->
+    testAsync "WHY - a save whose step throws is a restart that names the exception, so the old body never keeps serving behind an internal fault" {
       let directory = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-delta-fault-%s" (Guid.NewGuid().ToString "N"))
       IO.Directory.CreateDirectory directory |> ignore
       try
@@ -193,9 +205,7 @@ let deltaRouteTests =
             "NullReferenceException" ]
         for what, step, expectedType in steps do
           let seen = Collections.Generic.List<exn>()
-          let answer =
-            RunAppDelta.answerFaults seen.Add (fun () -> async { step (); return RunAppDelta.SaveResult.Unchanged })
-            |> Async.RunSynchronously
+          let! answer = RunAppDelta.answerFaults seen.Add (fun () -> async { step (); return RunAppDelta.SaveResult.Unchanged })
           match answer with
           | RunAppDelta.SaveResult.Restart(Refusal.Faulted(exceptionType, message), []) ->
             exceptionType |> Expect.equal (sprintf "%s: the exception type is named" what) expectedType
@@ -209,6 +219,7 @@ let deltaRouteTests =
           seen.Count |> Expect.equal (sprintf "%s: the session hears of the fault once" what) 1
       finally
         try IO.Directory.Delete(directory, true) with _ -> ()
+    }
 
     testCase "WHY - a process starts tracking the module it loaded, or says what stops the runtime editing it" <| fun _ ->
       DeltaSession.start mvidA [] |> Expect.equal "nothing in the way" (Standing.Tracking(mvidA, 0))
