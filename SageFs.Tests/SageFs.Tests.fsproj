@@ -1176,6 +1176,7 @@
         <Compile Include="SourceWalkPruningTests.fs" />
         <Compile Include="SessionStateReleaseTests.fs" />
         <Compile Include="EvalTraceStageNamesTests.fs" />
+        <Compile Include="SessionStatusLabelTests.fs" />
         <Compile Include="HotPathPerfTests.fs" />
         <Compile Include="AfterTypeCheckVerdictTests.fs" />
         <Compile Include="Program.fs" />

@@ -1301,7 +1301,7 @@ module McpTools =
         let availableTools = Affordances.availableTools SessionState.Faulted
         return
           Json.serialize Json.standard
-            {| state = "Faulted"
+            {| state = SessionStatusPayload.stateLabelOf SessionState.Faulted
                sessionId = sid
                machineTier = MachineTier.toString Timeouts.machineTier
                faultReason = FaultCause.describe cause
@@ -1427,7 +1427,7 @@ module McpTools =
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
         return Json.serialize Json.standard (
-          {| state = "WarmingUp"
+          {| state = SessionStatusPayload.stateLabelOf SessionState.WarmingUp
              scope = "Session"
              sessionId = sid
              lifecycle = WorkerProtocol.SessionLifecycleStatus.label status
@@ -1445,7 +1445,7 @@ module McpTools =
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
         return Json.serialize Json.standard (
-          {| state = "Faulted"
+          {| state = SessionStatusPayload.stateLabelOf SessionState.Faulted
              scope = "Session"
              sessionId = sid
              faultReason = FaultCause.describe cause; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid)
