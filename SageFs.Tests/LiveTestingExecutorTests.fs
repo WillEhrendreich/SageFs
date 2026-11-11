@@ -707,3 +707,31 @@ let allHookTests = testList "LiveTestingHook" [
   findAffectedTestsTests
   afterReloadTests
 ]
+
+let private hungCase : TestCase =
+  { Id = TestId.create "Exec.Tests.hangs" TestFramework.Expecto
+    FullName = "Exec.Tests.hangs"
+    DisplayName = "hangs"
+    NamePath = []
+    Origin = TestOrigin.ReflectionOnly
+    Labels = []
+    Framework = TestFramework.Expecto
+    Category = TestCategory.Unit }
+
+[<Tests>]
+let timedOutAndCancelledTests = testList "A hung or cancelled test is not a skip" [
+  testAsync "WHY — a test that outlives its timeout fails as timed out, because an edit that made a loop infinite must read red" {
+    let never = System.Threading.Tasks.TaskCompletionSource<TestResult>()
+    let! result = TestOrchestrator.executeOneWithin TestTimeouts.deadlineTight (fun _ -> Async.AwaitTask never.Task) hungCase
+    match result.Result with
+    | TestResult.Failed (TestFailure.TimedOut after, _) -> after |> Expect.equal "the timeout it outlived" TestTimeouts.deadlineTight
+    | other -> failtestf "expected a timed-out failure, was %A" other
+    FlakyDetection.outcomeOf result.Result |> Expect.equal "a timeout is a failing sample, never a pass" (Some TestOutcome.Fail)
+  }
+
+  testAsync "WHY — a cancelled test never reported, because it did not finish on this code" {
+    let! result = TestOrchestrator.executeOneWithin TestTimeouts.slowWork (fun _ -> async { return raise (System.OperationCanceledException()) }) hungCase
+    result.Result |> Expect.equal "no result, with why" (TestResult.NoResult NoResultReason.RunCancelled)
+    FlakyDetection.outcomeOf result.Result |> Expect.isNone "a cancelled test is no flake sample"
+  }
+]

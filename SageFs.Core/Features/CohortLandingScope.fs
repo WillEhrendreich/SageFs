@@ -67,7 +67,7 @@ module CohortLandingScope =
   // -- A test that did not pass, and why --
 
   /// Why a test that was in the run did not come back Passed, when it did not FAIL: it could not run. A test that failed its
-  /// assertions has no reason here and is a failing test. A per-test timeout ends as `Skipped "Timed out after 5s"`, which is the
+  /// assertions has no reason here and is a failing test. A per-test timeout ends as `Failed (TimedOut 5s)`, which is the
   /// case that blocked the two landings: it is "could not run", not a failure of the landing's code.
   let couldNotRun (result: TestResult option) : string option =
     let lower (text: string) = match text with "" -> text | _ -> string (Char.ToLowerInvariant text.[0]) + text.Substring 1

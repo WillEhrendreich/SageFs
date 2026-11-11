@@ -119,13 +119,13 @@ let executorTests =
       asyncThrown |> Expect.stringContains "an async exception keeps its message" "boom"
     }
 
-    testAsync "a cancelled token skips a sync body and an async body, whatever the reflection wrapped" {
+    testAsync "WHY — a cancelled token reports no result for a sync body and an async body, because a cancelled test did not run on this code" {
       let cache = expectoCache ()
       use source = new CancellationTokenSource()
       source.Cancel()
       for tree in [ syncTree (); asyncTree () ] do
         let! outcome = runOnce cache source.Token (reflectedOf cache tree)
-        outcome |> Expect.equal "cancelled" "Skipped Cancelled"
+        outcome |> Expect.equal "cancelled" (sprintf "%A" (TestResult.NoResult NoResultReason.RunCancelled))
     }
   ]
 

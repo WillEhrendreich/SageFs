@@ -565,7 +565,7 @@ module BuiltInExecutors =
           | false ->
             match ex :? OperationCanceledException with
             | true ->
-              TestResult.Skipped "Cancelled"
+              TestResult.NoResult NoResultReason.RunCancelled
             | false ->
               TestResult.Failed(
                 TestFailure.ExceptionThrown(
@@ -675,7 +675,7 @@ module BuiltInExecutors =
             | false -> tie :> exn
           return mapException cache inner sw.Elapsed
         | :? OperationCanceledException ->
-          return TestResult.Skipped "Cancelled"
+          return TestResult.NoResult NoResultReason.RunCancelled
         | ex ->
           sw.Stop()
           return mapException cache ex sw.Elapsed
@@ -983,7 +983,8 @@ module TestOrchestrator =
     Console.SetOut(tc)
     tc
 
-  let executeOne
+  let executeOneWithin
+    (perTestTimeout: TimeSpan)
     (runTest: TestCase -> Async<TestResult>)
     (testCase: TestCase)
     : Async<TestRunResult> =
@@ -996,7 +997,6 @@ module TestOrchestrator =
         activity.SetTag("test.framework", testCase.Framework) |> ignore
       | true -> ()
       let sw = Stopwatch.StartNew()
-      let perTestTimeout = Timeouts.perTestDefault()
       let stdoutCapture = new IO.StringWriter()
       // Install per-thread capture — no global SetOut calls needed
       threadCapture.SetCapture(stdoutCapture)
@@ -1011,16 +1011,14 @@ module TestOrchestrator =
             | true ->
               cts.Cancel()
               sw.Stop()
-              return TestResult.Skipped (sprintf "Timed out after %gs" perTestTimeout.TotalSeconds)
+              return TestResult.Failed (TestFailure.TimedOut perTestTimeout, sw.Elapsed)
             | false ->
               return! testTask |> Async.AwaitTask
           with
-          | :? OperationCanceledException ->
-            sw.Stop()
-            return TestResult.Skipped "Cancelled"
-          | :? System.AggregateException as ae when (ae.InnerException :? OperationCanceledException) ->
-            sw.Stop()
-            return TestResult.Skipped "Cancelled"
+          // A test that outlives the timeout failed by timing out (above); a cancelled one never reported. Neither is a skip.
+          | :? OperationCanceledException -> return TestResult.NoResult NoResultReason.RunCancelled
+          | :? AggregateException as ae when (ae.InnerException :? OperationCanceledException) ->
+            return TestResult.NoResult NoResultReason.RunCancelled
           | ex ->
             sw.Stop()
             return TestResult.Failed(
@@ -1039,12 +1037,12 @@ module TestOrchestrator =
         | TestResult.Passed _ ->
           LiveTestingInstrumentation.testsPassed.Add(1L)
           "passed"
+        | TestResult.Failed (TestFailure.TimedOut _, _) ->
+          LiveTestingInstrumentation.testsTimedOut.Add(1L)
+          "timed_out"
         | TestResult.Failed _ ->
           LiveTestingInstrumentation.testsFailed.Add(1L)
           "failed"
-        | TestResult.Skipped msg when msg.StartsWith("Timed out") ->
-          LiveTestingInstrumentation.testsTimedOut.Add(1L)
-          "timed_out"
         | TestResult.Skipped _ -> "skipped"
         | TestResult.NotRun -> "not_run"
         | TestResult.NoResult _ -> "no_result"
@@ -1074,6 +1072,8 @@ module TestOrchestrator =
         Output = output
       }
     }
+
+  let executeOne runTest testCase = executeOneWithin (Timeouts.perTestDefault ()) runTest testCase
 
   /// Run `tests` in chunks of `maxParallelism`, calling `onResult` as each one finishes. The run has no deadline of its own: a
   /// hung test is bounded by the per-test timeout in `executeOne`, and a caller that wants a run ended cancels `ct`. The worker
