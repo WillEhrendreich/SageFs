@@ -21,10 +21,12 @@ the tool.
 ## First minute
 
 1. Call `get_daemon_status`. If the tools are missing, SageFs is not connected,
-   so tell the user. Some clients (Claude Code) load MCP tools on demand: fetch
-   the core ones in ONE call (get_daemon_status, list_sessions,
-   get_available_projects, create_project_session, get_session_status,
-   send_fsharp_code, hard_reset_fsi_session, stop_session). If the daemon's
+   so tell the user. If your client lists only tool names and loads each
+   schema on demand (Claude Code does, through its tool search), fetch the core
+   ones in ONE call: get_daemon_status, list_sessions, get_available_projects,
+   create_project_session, get_session_status, send_fsharp_code,
+   hard_reset_fsi_session, stop_session. A client that shows every tool's schema
+   up front has nothing to fetch. If the daemon's
    version is behind the code you are working on, tell the user. Do not restart
    it yourself: it is theirs and other agents may be on it.
 2. Call `list_sessions`. A session belongs to a working directory (a git
@@ -33,9 +35,14 @@ the tool.
    `create_project_session` (one `.fsproj`), `create_solution_session` (a
    `.sln` or `.slnx`) or `create_bare_session` (no project). SageFs builds
    missing generated state itself, so do not run a shell build first.
-4. Warmup takes 15-30s. Call `get_session_status` with `wait_seconds=60`: it
-   returns once the session is `Ready`, so no sleeping or polling. If `wait`
-   says `TimedOut`, call again; on `Faulted`, act on the reason it names.
+4. Warmup takes seconds on a small project and longer on a big one (a repo with
+   dozens of projects, see `docs/arcade-and-large-repos.md`). Call
+   `get_session_status` with `wait_seconds=60`: it returns once the session is
+   `Ready`, so no sleeping or polling. 60 is the longest a single wait lasts.
+   If `wait` says `TimedOut`, the session is still warming: call again, as many
+   times as it takes while the reply's progress line keeps changing. Never
+   create a second session and never run `dotnet build` to get around the wait.
+   On `Faulted`, act on the reason it names.
 
 ## The loop
 

@@ -37,6 +37,7 @@ Everything else is reference material you can come back to when you need it.
 - **[System Architecture](architecture.md)**: daemon, workers, dashboard, and the MCP surface
 - **[Configuration](configuration.md)**: every `SAGEFS_*` environment variable, with its default and what it is for
 - **[Troubleshooting](TROUBLESHOOTING.md)**: first-run issues, runtime problems, where the logs are, what Degraded means, platform fixes
+- **[Arcade repos and repos with many projects](arcade-and-large-repos.md)**: a repo-local SDK in `global.json`, output under `artifacts/`, picking one project among dozens, and a warmup longer than one status wait
 
 ## For contributors
 - **[Contributing Guide](../CONTRIBUTING.md)**: development workflow, testing, PRs
