@@ -2,6 +2,70 @@
 
 Roadmap item: `live-testing-numbers-on-bigger-projects` (Later, Live testing). Plan written 2026-10-26 against master `59a8692c`.
 
+## Work order
+
+Written 2026-11-11 against master `8975e898`. This is measurement work: the first two steps produce numbers and need a quiet machine, and the code that follows exists to make the numbers reproducible and keep the docs honest. Corrections to the plan below, found while checking it: the runner is at `DashboardBrowserRunner.fs:703` (the plan says 667); `summarize` does have property tests (`SageFs.Tests/LatencyStatsTests.fs:44,55`); the figures 712 and 542 are quoted in six files (the plan says five; `Readme.md:515` is the sixth); and `scripts/machine-bench.fsx:645-677` already enables live testing and runs it once per stage, so it is closer to the driver this plan wants than the plan says.
+
+### 1. Outcome
+
+`docs/live-testing-numbers.md` gives p50, p95, min, max and n for each live-testing path on the FromCSharp sample, a synthetic project, `SageFs.Tests` and an F# compiler test project, each row naming machine, load, SageFs version and project commit, and the six places that quote 712 ms and 542 ms link to it. A fresh checkout runs one command and lands within 20 percent of the published small-subject figures on the same machine class. Gate: the page ratchet, the provenance test and the inline-figure budget in `--ratchets`; the small subject's p95 gate stays in `--integration-lt`. Linux only; no figure on another OS.
+
+### 2. Where the code is today
+
+- Measurement: `SageFs.Tests/LiveTestingLatencyTests.fs` (`keystrokeToVerdict` `:49`, `saveToGreen` `:89`, the two dedicated cases at `:173-181` registered through `Integration.dedicatedCaseTask "--integration-lt"`). Stats: `SageFs.Tests/LatencyStats.fs` (`samplesPerPath = 20` `:14`, `warmupEdits = 2` `:19`, `Summary` `:27`, `Machine` `:40`, `summarize` `:54`, `gate` `:68`, `machine ()` `:101`, `reportLine` `:109`). Bound: `SageFs.Tests/TestTimeouts.fs:214` `liveTestingKeystrokeP95Bound = secs 3.`.
+- Runner: `SageFs.Tests/DashboardBrowserRunner.fs:703` `runLiveTestingBrowserJourneys`: starts `SageFs/bin/<cfg>/net11.0/SageFs.dll` (`TestInfrastructure.SageFsBinary.path`), a copy of the sample (`LiveTestingShards.sampleCopy`, `LiveTestingShards.fs:93`), sets `SAGEFS_HOT_RELOAD=false` `:735`, waits for 11 green `:909-922`, exports `SAGEFS_LT_FIXTURE_DIR` and `SAGEFS_LT_MCP_PORT` `:934-936`, then runs the shard's share of `LiveTestingShards.tree` (`LiveTestingShards.fs:27-36`, latency last).
+- Stream helpers: `SageFs.Tests/LtStream.fs` (`SseFeed`, `expectFrame`, `awaitSettled`, env at `:55-56`).
+- Histograms declared, recording unchecked: `SageFs.Core/Instrumentation.fs:40-46`. The debounce in the 712 figure: `SageFs.Core/Timeouts.fs:308` `liveTestFcsDebounce` 300 ms.
+- Figure sites: `docs/how-live-testing-works.md:176`, `docs/live-testing-as-you-type.md:35,164`, `docs/vs-dotnet-watch.md:12`, `docs/progress.md:144`, `Readme.md:515`, and `scripts/roadmap/RoadmapItems.fs:433` (which generates `docs/roadmap.md`).
+- Precedents: `scripts/machine-bench.fsx` (`--out`, `--label`, `--memory-cap`, `--ready-cap`, `/proc/loadavg` at `:211`), `SageFs.Tests/RoadmapDocTests.fs:51-55` (stale-page ratchet), `SageFs.Tests/RatchetBudgets.fs:18` (`fileSize`, a table that only goes down), `TestInfrastructure.fs:774` (`Ratchet.register`).
+- Nothing of the design exists: no `SageFs.Core/LatencyRecord.fs`, no `scripts/bench-live-testing.fsx`, no `docs/live-testing-numbers.md`, no `docs/benchmarks/`.
+- Subjects: `~/Work/fsharp-compiler-services` is at `cdb9dc5e5` with `tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj` and `tests/FSharp.Compiler.ComponentTests/...fsproj` present. Whether either loads into a session is `[not verified]`; that is step 1.
+
+### 3. Steps
+
+1. **Measurement A: reproduce the small subject.** Quiet machine: no other agents (`sagefs call list_sessions`), no gate (`dotnet fsi scripts/gate-tail.fsx -- --status`), `cat /proc/loadavg` first field under 1.0, the installed daemon idle. Then `dotnet build SageFs.Tests -c Release` (builds `SageFs` too) and `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-lt --summary`. Read the two `LATENCY` lines. Run it three times. Write the p50s and the load into `Resume here`. If the p50s are outside 700 to 720 and 536 to 620, the published figures already need the page, and the harness is what you are measuring first.
+2. **Measurement B: count and load the big subjects.** From the REPL: `create_project_session` on `SageFs.Tests/SageFs.Tests.fsproj`, wait for Ready by `get_session_status`, `list_tests` for the count, note time to Ready from the status payload and the daemon, worker and host RSS (`ps -o rss= -p <pid>`; the worker pid is in `/health`). Repeat on `~/Work/fsharp-compiler-services/tests/FSharp.Compiler.Service.Tests`. A session that will not load is a SageFs bug to fix or file with the exact paths (`AGENTS.md`), and it blocks that subject. Record all of it in `Resume here`. One day. This step can end the item early if the counts and the floor-run times make the large-subject rows a non-event.
+3. **RED** `SageFs.Tests/LatencyRecordTests.fs`: a record with an empty machine, zero discovered tests, or 19 samples is refused with a named reason; a valid record round-trips through a `SageFs.Json` profile byte for byte. Compile-red. **Green**: `SageFs.Core/LatencyRecord.fs` with the plan's types; move `Summary`, `summarize`, `Machine`, `reportLine` into it and make `LatencyStats.fs` a re-export so the existing tests do not move. Register the test file in `SageFs.Tests.fsproj` next to `LatencyStatsTests.fs` (`:384`). Pure.
+4. **RED** `LatencyProbeTests.fs` and `FixtureTests.fs` (plan tests 5, 6). **Green**: `SageFs.Tests/LatencyProbe.fs` (pure red/green variants of a file) and `SageFs.Core/LatencyFixture.fs` (`render : SyntheticShape -> (path * content) list`, deterministic). Pure; parallel with step 3.
+5. `scripts/bench-live-testing.fsx`, glue only, in the shape of `machine-bench.fsx`: throwaway daemon, session on `--subject`, wait for Ready by event, run each `PathId` with the `LtStream` helpers (move `LtStream.fs` into a shared place or reference the test assembly from the script; DECISION below), write the record with `--out`. First subject `fromcsharp`; it must reproduce step 1 within 20 percent or the script is wrong.
+6. New paths on the small subject: keystroke to settled, edit no test reaches, confirming build, first edit after Ready. Each is a `PathId` case and a probe; no new project.
+7. Synthetic grid (1,000 and 10,000 tests; 1 ms and 50 ms), then `SageFs.Tests` and FCS in reflink clones (`cp --reflink=auto -r`), deleted after. These are runs. Quiet machine, one subject at a time, nothing else on the box.
+8. **RED** `LiveTestingNumbersDocTests.fs` (page equals render) and `LatencyFiguresTests.fs` (inline-figure budget, starts at 6 files; `docs/roadmap.md` is excluded because it is generated, and its sentence is fixed in `RoadmapItems.fs:433`). **Green**: `scripts/gen-live-testing-numbers.fsx` rendering `docs/live-testing-numbers.md` from `docs/benchmarks/live-testing/*.json`; both tests under `Ratchet.register`. Then replace the six inline figures with a sentence and a link, and the budget drops to zero by `--ratchets --tighten`.
+9. Ratchet 4 (bound between 1.5x and 5x the recorded p95) in `TimeoutLiteralsTests` territory, landmark `docs/live-testing-numbers.md` in `RoadmapItems.fs:430`, `how-live-testing-works.md:158` "What's still rough" rewritten from the page.
+
+### 4. How to check it
+
+- REPL: session on `SageFs.Tests`; prove `LatencyRecord.create` and `summarize` by `send_fsharp_code`; `run_tests` with `pattern=LatencyRecord`.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Inner loop: `--summary --filter-test-list "Latency"`; read `ran=`.
+- Acceptance: unfiltered `--summary`, then `--integration-lt --summary` (the small subject's gate), then the hand run of `scripts/bench-live-testing.fsx --subject fromcsharp` compared against the page.
+
+### 5. Traps in this repo
+
+- No bare durations: the 20 and 2 come from `LatencyStats` (moving to Core); new ceilings go in `TestTimeouts.fs` or `Timeouts.fs`, never at a call site (`TimeoutLiteralsTests` ratchets it).
+- Budgets only go down: the inline-figure budget starts at the real count (6) and is lowered by `--tighten`.
+- No new tier: `TrustSignalTests` fails for a tier `ci-pipeline.fsx` does not run. The script is run by hand; the ratchets are in the default suite.
+- `SpawnEnvironment.apply` on every child process the script or a test starts.
+- No timing-sensitive tests: the record tests are pure; only the script measures.
+- JSON through a `SageFs.Json` profile (`JsonCentralizationTests`).
+- Commit `SageFs.Tests.fsproj` and `SageFs.Core.fsproj` whole, by pathspec.
+- Linux only: `/proc/loadavg`, reflink copies.
+
+### 6. Size and order
+
+Steps 1 and 2 are one quiet day and decide the rest. Steps 3 and 4 are two days, pure, in parallel. Step 5 is a day. Steps 6 to 7 are runs: an afternoon per subject on a quiet machine. Step 8 and 9 are a day. About two weeks of one person's calendar, mostly waiting for a quiet machine. First commit: the measurements from steps 1 and 2 written into `Resume here`. First code commit: step 3's RED.
+
+### 7. Not now
+
+- A daemon route for the stage histograms: only if step 2 shows the end-to-end number is not enough to explain where time goes, and then as its own commit with a `Plugin:` trailer.
+- CI gating of the large subjects: no (decision 2 below).
+- The onboarding trial on the F# compiler repo uses these numbers; it does not wait on the page.
+
+### DECISIONs for Will (this section's additions)
+
+- Where the stream helpers live so a script can use them: move `LtStream.fs` into `SageFs.Core` (it is HTTP and SSE client code, no test dependency) or let the script `#r` the test assembly. Recommendation: move it; a script that loads a test DLL is the pattern the repo is retiring.
+- The rest are unchanged under "Decisions for Will" below.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -97,7 +161,7 @@ All four are tests in the default suite, registered with `Ratchet.register` in `
 
 1. Stale page: the page on disk equals the render of the records (as `RoadmapDocTests`).
 2. Provenance: every record has a machine, a load average, a project commit, a SageFs version, a non-zero discovered count, and at least `samplesPerPath` samples for each `Measured` path. A shorter run is refused at write time and at read time.
-3. One home: no page under `docs/` or `Readme.md` outside the generated one contains a latency figure of the shape `p50 <digits> ms` or `p95 <digits> ms`. The count of offending pages is a budget in `RatchetBudgets.fs`, starts at 5 (the pages above) and only goes down.
+3. One home: no page under `docs/` or `Readme.md` outside the generated one contains a latency figure of the shape `p50 <digits> ms` or `p95 <digits> ms`. The count of offending pages is a budget in `RatchetBudgets.fs`, starts at the real count and only goes down. Counted 2026-11-11: six files (`how-live-testing-works.md`, `live-testing-as-you-type.md`, `vs-dotnet-watch.md`, `progress.md`, `Readme.md`, and `docs/roadmap.md`, whose sentence comes from `scripts/roadmap/RoadmapItems.fs:433`).
 4. Bounds follow measurements: each gated bound (`liveTestingKeystrokeP95Bound` today) must be at least 1.5 times and at most 5 times the recorded p95 of the subject it gates. A bound loose enough to pass anything fails, as does one tighter than the measurement. `--ratchets --tighten` lowers it.
 
 Whether a record may go stale is a decision below.
@@ -113,7 +177,7 @@ RED first.
 1. `LatencyRecordTests.fs`: a record with an empty machine, a zero discovered count, or 19 samples is refused with a named reason; a valid record round-trips through the `SageFs.Json` profile byte for byte. Fails today, no module.
 2. `LiveTestingNumbersDocTests.fs`: the generated page equals the render of the records; a `NotMeasured why` cell renders its reason. Fails until the page and one record exist.
 3. `LatencyFiguresTests.fs` (ratchet 3): counts pages with an inline figure; budget 5; a sixth fails.
-4. Property: `summarize` agrees with a reference quantile on any list of 20 to 200 durations; p50 is never above p95; min is never above p50. (The function exists in `LatencyStats.fs` and has no property test that I could find.)
+4. Property: `summarize` agrees with a reference quantile on any list of 20 to 200 durations. (Correction, 2026-11-11: `SageFs.Tests/LatencyStatsTests.fs:44,55` already hold two properties, min <= p50 <= p95 <= max and order independence; the reference-quantile property is the one still missing, and it moves with the function into Core.)
 5. `LatencyProbeTests.fs`: the red and green variants differ in exactly the intended line, and applying red then green restores the original text exactly.
 6. `FixtureTests.fs`: `Fixture.render` is deterministic for a shape, produces exactly the requested test count, and a 10,000-test shape renders in under a second (a bound on a pure function).
 7. Mutation: `summarize` with `nearestRank` off by one; ratchet 4 with the lower bound removed.
