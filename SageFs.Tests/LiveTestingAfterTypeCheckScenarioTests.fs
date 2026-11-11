@@ -56,7 +56,7 @@ let tests =
           None
           Map.empty
 
-      match outcome.Decision, outcome.Effects with
+      match AfterTypeCheckVerdict.decision outcome.Verdict, outcome.Effects with
       | Some decision, [ TestCycleEffect.RequestRebuild(_, req) ] ->
         req.Tests
         |> Array.map (fun tc -> tc.Id)
@@ -94,7 +94,7 @@ let tests =
       outcome.Effects
       |> List.isEmpty
       |> Expect.isFalse "an unreached compiled file must not read as green"
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some decision ->
         decision.Explanation.Precision
         |> Expect.equal "the widening is labeled" SelectionPrecision.ConservativeFallback
@@ -125,7 +125,7 @@ let tests =
           None
           Map.empty
 
-      match outcome.Decision, outcome.Effects with
+      match AfterTypeCheckVerdict.decision outcome.Verdict, outcome.Effects with
       | Some decision, [ TestCycleEffect.RunAffectedTests req ] ->
         req.Tests
         |> Array.map (fun tc -> tc.Id)
@@ -160,7 +160,7 @@ let tests =
 
       outcome.Effects
       |> Expect.isEmpty "a save-only category must not run on a keystroke"
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some decision ->
         decision.Explanation.Precision
         |> Expect.equal "the silence is attributed to policy, not to 'no impacted tests'" SelectionPrecision.SuppressedByPolicy
@@ -184,7 +184,7 @@ let tests =
           None
           Map.empty
 
-      match outcome.Decision, outcome.Effects with
+      match AfterTypeCheckVerdict.decision outcome.Verdict, outcome.Effects with
       | Some decision, [ TestCycleEffect.RunAffectedTests req ] ->
         decision.Explanation.Precision |> Expect.equal "pure graph selection should stay exact" SelectionPrecision.ExactDependencyMatch
         decision.Trust |> Expect.equal "exact decisions should keep exact trust" FreshnessTrust.FreshExact
@@ -217,7 +217,7 @@ let tests =
           None
           (Map.ofList [ "s", maps ])
 
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some decision ->
         decision.Explanation.Precision |> Expect.equal "coverage widening should stay visible" SelectionPrecision.CoverageApproximation
         decision.Trust |> Expect.equal "coverage widening should be useful but approximate" FreshnessTrust.FreshApproximate
@@ -243,7 +243,7 @@ let tests =
           None
           Map.empty
 
-      match outcome.Decision, outcome.Effects with
+      match AfterTypeCheckVerdict.decision outcome.Verdict, outcome.Effects with
       | Some decision, [ TestCycleEffect.RequestRebuild (_, req) ] ->
         decision.Explanation.Precision |> Expect.equal "compiled fallback should be explicit" SelectionPrecision.ConservativeFallback
         decision.Trust |> Expect.equal "fallback should not claim exact trust" FreshnessTrust.FreshApproximate
@@ -269,7 +269,7 @@ let tests =
           None
           Map.empty
 
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some decision ->
         decision.Explanation.Precision |> Expect.equal "policy suppression should stay visible" SelectionPrecision.SuppressedByPolicy
         decision.Trust |> Expect.equal "suppression should not look fresh" FreshnessTrust.Suppressed
@@ -293,7 +293,7 @@ let tests =
           None
           Map.empty
 
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some decision ->
         decision.Explanation.Precision |> Expect.equal "the model should say no tests were impacted" SelectionPrecision.NoImpactedTests
         decision.Trust |> Expect.equal "no impacted tests should remain stale until the next meaningful run" FreshnessTrust.StaleAwaitingRerun

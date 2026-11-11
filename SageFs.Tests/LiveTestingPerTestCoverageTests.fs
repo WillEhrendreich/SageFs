@@ -306,7 +306,7 @@ let selectionTests =
       |> selectedBy
       |> Array.sort
       |> Expect.equal "A, and C because it has no coverage; B is left alone" (Array.sort [| testA.Id; testC.Id |])
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some decision ->
         decision.Explanation.Precision
         |> Expect.equal "the label says why" SelectionPrecision.LineCoverageNarrowing

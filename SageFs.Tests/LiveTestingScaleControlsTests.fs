@@ -43,12 +43,12 @@ let private decide (trigger: RunTrigger) (state: LiveTestState) =
     Map.empty
 
 let private selectedNames (outcome: AfterTypeCheckOutcome) =
-  match outcome.Decision with
+  match AfterTypeCheckVerdict.decision outcome.Verdict with
   | Some d -> d.Explanation.SelectedTests |> Array.sort
   | None -> failtest "expected a decision"
 
 let private deferredNames (outcome: AfterTypeCheckOutcome) =
-  match outcome.Decision with
+  match AfterTypeCheckVerdict.decision outcome.Verdict with
   | Some d -> d.Explanation.DeferredTests |> Array.sort
   | None -> failtest "expected a decision"
 
@@ -61,7 +61,7 @@ let pauseTests =
       selectedNames outcome |> Expect.isEmpty "no test is selected"
       deferredNames outcome
       |> Expect.equal "every test the edit reaches is named as held back" (everyTest |> Array.map (fun t -> t.FullName) |> Array.sort)
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some d ->
         d.Explanation.Precision |> Expect.equal "labeled as held back by policy" SelectionPrecision.SuppressedByPolicy
         d.Explanation.Reason.ToLowerInvariant() |> Expect.stringContains "the reason says why" "paused"
@@ -116,7 +116,7 @@ let scopeTests =
     testCase "an include set that matches nothing selects nothing and says so, never everything" <| fun _ ->
       let outcome = decide RunTrigger.Keystroke (withState LivePause.Live (TestScope.OnlyMatching [ "no such test" ]))
       selectedNames outcome |> Expect.isEmpty "nothing matches"
-      match outcome.Decision with
+      match AfterTypeCheckVerdict.decision outcome.Verdict with
       | Some d -> d.Explanation.Precision |> Expect.equal "held back by scope, said as policy" SelectionPrecision.SuppressedByPolicy
       | None -> failtest "expected a decision"
 

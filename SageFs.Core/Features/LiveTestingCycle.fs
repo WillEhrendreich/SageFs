@@ -14,8 +14,30 @@ open SageFs.Measures
 // per-session cycle state. Daemon-only. The isolated FSI host compiles LiveTestingTypes.fs and never
 // this file, so what lives here costs the host nothing.
 
+/// What a type-check decided, and which of four things that was. Every case but `Inactive` carries the decision
+/// the cycle records as the last one, so "nothing was judged" and "nothing was selected" are different answers.
+[<RequireQualifiedAccess>]
+type AfterTypeCheckVerdict =
+  /// Live testing is off for this session: nothing was judged and nothing is recorded.
+  | Inactive
+  /// The edit reaches no test, even after the conservative floor (a script, or no tests discovered yet).
+  | NothingAffected of LiveTestingDecision
+  /// The edit reaches tests, and the pause, the scope or the run policy holds every one of them back.
+  | HeldBack of LiveTestingDecision
+  /// The edit reaches tests that are selected to run. A run already in flight may still leave the effect list empty.
+  | Selected of LiveTestingDecision
+
+module AfterTypeCheckVerdict =
+  /// The decision to record as the last one, when one was made.
+  let decision (verdict: AfterTypeCheckVerdict) : LiveTestingDecision option =
+    match verdict with
+    | AfterTypeCheckVerdict.Inactive -> None
+    | AfterTypeCheckVerdict.NothingAffected decision
+    | AfterTypeCheckVerdict.HeldBack decision
+    | AfterTypeCheckVerdict.Selected decision -> Some decision
+
 type AfterTypeCheckOutcome = {
-  Decision: LiveTestingDecision option
+  Verdict: AfterTypeCheckVerdict
   Effects: TestCycleEffect list
 }
 
@@ -83,7 +105,7 @@ module TestCycleEffects =
     (instrumentationMaps: Map<string, InstrumentationMap array>)
     : AfterTypeCheckOutcome =
     match state.Activation = LiveTestingActivation.Inactive with
-    | true -> { Decision = None; Effects = [] }
+    | true -> { Verdict = AfterTypeCheckVerdict.Inactive; Effects = [] }
     | false ->
       let changedSymbols = symbols.Changed
       let cause = TestCycleOrchestrator.causeFromTrigger changedFilePath trigger
@@ -212,8 +234,8 @@ module TestCycleEffects =
         | ValueNone -> wideAffected, widePrecision, wideReason
       match Array.isEmpty effectiveAffected with
       | true ->
-        { Decision =
-            Some (
+        { Verdict =
+            AfterTypeCheckVerdict.NothingAffected (
               LiveTestingDecision.fromSelection
                 cause
                 precision
@@ -290,7 +312,7 @@ module TestCycleEffects =
         | true when paused ->
           // Paused: the session's evaluated code still follows the buffer (an eval with no tests to run), so
           // resuming judges the code as it is now. Only the runs are held back.
-          { Decision = Some decision
+          { Verdict = AfterTypeCheckVerdict.HeldBack decision
             Effects =
               [ TestCycleEffect.RunAffectedTests
                   { Tests = [||]
@@ -300,7 +322,7 @@ module TestCycleEffects =
                     SessionId = LiveTestState.ownerSessionId state
                     InstrumentationMaps = [||] } ] }
         | true ->
-          { Decision = Some decision
+          { Verdict = AfterTypeCheckVerdict.HeldBack decision
             Effects = [] }
         | false ->
           let tsElapsed = TestCycleTiming.accumulatedTsElapsed lastTiming
@@ -330,7 +352,7 @@ module TestCycleEffects =
               match isCompiled && trigger <> RunTrigger.Keystroke with
               | true -> [ TestCycleEffect.RequestRebuild(0L, req) ]
               | false -> [ TestCycleEffect.RunAffectedTests req ]
-          { Decision = Some decision
+          { Verdict = AfterTypeCheckVerdict.Selected decision
             Effects = effects }
 
   /// Name-delta-only entry point: selection sees which symbol NAMES moved and
@@ -1040,7 +1062,7 @@ module LiveTestCycleState =
           { s1.TestState with RunPhases = Map.empty }
           s1.LastTiming
           s1.InstrumentationMaps
-      let s1' = { s1 with TestState = { s1.TestState with LastDecision = outcome.Decision } }
+      let s1' = { s1 with TestState = { s1.TestState with LastDecision = AfterTypeCheckVerdict.decision outcome.Verdict } }
       // Brief 4: redirect the compiled-DLL decision into an FSI eval of the
       // now-known buffer content, for both Keystroke and FileSave. Applied
       // AFTER decideAfterTypeCheck so the pending/queued-rebuild bookkeeping
