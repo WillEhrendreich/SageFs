@@ -2,6 +2,87 @@
 
 Roadmap item: `sessions-learn-the-load-order` (Later, REPL). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. This item was stopped on 2026-11-07 after a measurement. This section says whether
+it should be closed, what would reopen it, and what to do with the one real cost the measurement found.
+
+### 1. Outcome, and the recommendation
+
+`DECISION:` close it. Recommend: close the roadmap item as "stopped, measured, nothing to fix" and keep the branch. The
+measurement in "Run 2026-10-26" below found no project whose opens need a second pass that a learned order could remove. The
+code (steps 1 to 6, green) sits on `archive/2026-11-07/rescue-load-order`: 9 commits on top of merge base `1f4daeee`, 12
+files, +984/-25 (`SageFs.Core/OpenOrder.fs` 395 lines, `SageFs.Tests/OpenOrderTests.fs` 436 lines, a schema 6 bump in
+`WarmupReplayCache.fs`, a public `orderByProjectReferences`). Verified on 2026-11-11 with `git log master..archive/2026-11-07/rescue-load-order`.
+
+What a user would get if it were built: a session whose warmup opens every name on the first pass on the second start. Nobody
+has a project where the first pass fails for an order reason, so the user-visible gain today is zero.
+
+Evidence that reopens it, any one of these:
+- A worker log (`<data dir>/workers/<session>.log`) for a real project showing a batch-failure line whose names then open in a
+  later round of `openWithRetryRichCore` (`SageFs.Core/WarmUp.fs:212`). The 2026-10-26 run saw none on four projects.
+- `warmup-context` (fetched by `SageFs/DaemonMode.fs:3922`) for a project listing a name with `RetryCount > 0` that did open.
+- A source file in a user's project with a bare relative `open Inner` under `namespace Outer` (the static scan found zero
+  such edges in 1,454 files in this repo). `~/Work/SageTech` and T-Gro's `dotnet/fsharp` trial were never measured; run the
+  measurement there first if either shows a slow warmup.
+
+### 2. Where the code is today (master)
+
+- Discovery: `SageFs.Core/AppState.fs:539-550` builds `rootNamespaces` from the FIRST segment of each type's namespace
+  (`parts.[0]`), so `SageFs.Simulation` never enters a plan, only `SageFs`. Opens phase: `AppState.fs:874-875` calls
+  `WarmUp.openWithRetryRichBatched 5 WarmUp.DefaultOpenBatchSize` (`WarmUp.fs:343`, batch size 8 at `:196`). The plan body's
+  `AppState.fs:447`, `:918` and `WarmUp.fs:325` are stale numbers.
+- Drops before replay: `SageFs.Core/OpenReplay.fs:146` `resolveWarmupOpens` with `DroppedOpenReason:69` (`InternalTopLevelModule |
+  NestedModuleBareReference | NestedModuleNotVisible`), applied at `AppState.fs:635-639`.
+- The two bare opens that fail on every start of a `SageFs.Simulation` session are still there:
+  `SageFs.Simulation/ConfirmationGateSim.fs:161` and `:231` (`open ConfirmationGateSim`), `ReflectionReadSim.fs:448`
+  (`open ReflectionReadSim`). Cost measured 2026-10-26: 19 of 44 eval calls wasted, two warnings per start.
+- `WarmupReplayCache.SchemaVersion = 5` at `WarmupReplayCache.fs:20`.
+- Neighbour: `docs/plans/faster-time-to-ready.md` is "Not started"; its first deliverable is a stage table, which is where the
+  opens-phase share would be read from.
+- `[not verified]`: that the archive branch still builds against today's master (it is 4 days and many commits behind).
+
+### 3. Steps
+
+The item itself has none. The one real cost has a small fix that belongs to `faster-time-to-ready`, and it can be done alone:
+
+1. RED, domain: `SageFs.Tests/WarmupOpenReplayTests.fs`, "a bare open of a module that lives directly in a non-root namespace
+   is dropped before replay with a reason that names the namespace to open". Today `resolveWarmupOpens` lets
+   `ConfirmationGateSim` through. Add `DroppedOpenReason.ModuleInUndiscoveredNamespace of dottedFullName` (one `describe` arm)
+   and the rule in `OpenReplay.fs`. Pure. No schema bump.
+2. Or, the larger fix: discovery adds full namespace paths (every prefix of `t.Namespace`, not `parts.[0]`) at
+   `AppState.fs:539-550`, which needs `SchemaVersion` 6 and the existing schema test in `WarmupReplayCacheTests.fs` extended.
+   `DECISION:` 1 or 2. Recommend 1 now (a day, zero risk to plans on disk) and 2 only when `faster-time-to-ready` has its
+   stage table and can show the opens share.
+
+If the item is reopened: rebase `archive/2026-11-07/rescue-load-order` onto master, rerun its tests, then continue at its step 7
+(sim) and step 8 (host-tier gate) as the plan body describes.
+
+### 4. How to check it
+
+- Inner loop (step 1): SageFs session on `SageFs.Tests`; eval `OpenReplay.resolveWarmupOpens ["ConfirmationGateSim"] facts`
+  with facts from `OpenReplay.fs:106` and watch it move from `Replayable` to `Dropped`; `run_tests` filtered to `WarmupOpenReplay`.
+- Lane: `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Proof on the real project: create a session on `SageFs.Simulation` and read the worker log; the two "Dropped source-scanned
+  open" lines (`AppState.fs:639`) replace the two batch failures, and the eval count falls from 44.
+- Acceptance: unfiltered `--summary`.
+
+### 5. Traps in this repo
+
+- `AppState.fs` is line-budgeted (its own comment); keep the discovery change to the existing block.
+- A schema bump invalidates every user's replay cache once; do it only with the measured reason.
+- `WarmupCacheGitIgnoreTests.fs` pins what SageFs writes under `.SageFs/`; the archive branch adds a file there.
+- Wire: `warmup-context` is unchanged by step 1; `Plugin: n/a`.
+
+### 6. Size and order
+
+Closing: an hour (roadmap process, Will). Step 1: a day. Reopening: a week, after the rebase.
+
+### 7. Not now
+
+- Merging the archive branch: it adds a store file, a schema bump and a wired call for no measured effect.
+- Learning anything else from warmup (timings, failing names): `faster-time-to-ready` owns the stage table first.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
