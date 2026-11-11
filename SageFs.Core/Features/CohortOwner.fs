@@ -491,6 +491,45 @@ module CohortOwner =
           (Scope.label scope) (List.length diverged) (int64 first.DivergedSeq) (int64 last.DivergedSeq)
       )
 
+  /// What an owner starting over a ledger does about the landing at the head of the queue.
+  ///
+  /// `replayAuditIn` discards the effects `decide` returned, which is right for history and wrong for the one landing
+  /// whose effect was in flight when the daemon stopped: its git or test work died with the process, nothing posts its
+  /// completion, and only the head may be live (`advanceQueue` starts only a `Queued` head), so every later landing
+  /// waited behind it for good. A `Rebasing` head is re-driven: the rebase runs again from the head it was going onto,
+  /// and its completion is judged as usual. A `Verifying` head cannot be resumed (the state does not say whether the
+  /// affected set, the run or the fast-forward was in flight), so it is settled as inconclusive with the existing
+  /// `VerificationInconclusive` command: a ledger row, so a later replay agrees, and `blockAndPop` moves the queue.
+  [<RequireQualifiedAccess>]
+  type RestartRecovery<'m> =
+    | NothingInFlight
+    | Redrive of CohortEffect<'m>
+    | Settle of CohortCommand<'m>
+
+  /// The `Inconclusive` reason a restart records. The requester's next step is the one every inconclusive landing has:
+  /// request it again.
+  [<Literal>]
+  let restartedDuringVerification =
+    "the daemon restarted while this landing was being verified, so no verdict was recorded; nothing is known to be wrong with the commit"
+
+  let restartRecovery (state: CohortState<'m>) : RestartRecovery<'m> =
+    match state.Queue with
+    | [] -> RestartRecovery.NothingInFlight
+    | headId :: _ ->
+      match Map.tryFind headId state.Landings with
+      | None -> RestartRecovery.NothingInFlight
+      | Some request ->
+        match request.State with
+        | LandingState.Rebasing onto -> RestartRecovery.Redrive(CohortEffect.Rebase(headId, onto, request.Commits))
+        | LandingState.Verifying _ ->
+          RestartRecovery.Settle(CohortCommand.VerificationInconclusive(headId, restartedDuringVerification, state.Scope))
+        // default policy: a head that is Queued is started by the next command's `advanceQueue`, and a settled one is
+        // not live, so nothing was cut off.
+        | LandingState.Queued
+        | LandingState.Blocked _
+        | LandingState.Landed _
+        | LandingState.Withdrawn -> RestartRecovery.NothingInFlight
+
   /// Production entropy: 32 bytes from the OS CSPRNG. Called only here, at
   /// the shell — never from inside `Cohort.decide` (§7.1).
   let productionEntropy () : byte[] = RandomNumberGenerator.GetBytes 32
@@ -552,6 +591,14 @@ module CohortOwner =
           let! next = step owner command
           return! loop next
         }
+        match restartRecovery head.State with
+        | RestartRecovery.NothingInFlight -> ()
+        | RestartRecovery.Redrive effect ->
+          logger.LogInfo(sprintf "[cohort-owner] scope %s: the head landing was rebasing when the owner stopped; rebasing it again" (Scope.label scope))
+          dispatchLandingEffects logger scope performer inbox.Post [ effect ]
+        | RestartRecovery.Settle command ->
+          logger.LogInfo(sprintf "[cohort-owner] scope %s: the head landing was being verified when the owner stopped; recording it inconclusive so the queue moves" (Scope.label scope))
+          postCompletion logger scope inbox.Post command
         loop { Cohort = head.State; NextSeq = initialNextSeq })
     new Handle(scope, mailbox, replyCeiling, (fun () -> frameRef.Value), (fun () -> stateRef.Value), cohortEvents.Publish)
 

@@ -400,3 +400,84 @@ let cohortLandingLoopTests =
       otherState.Scope |> Expect.equal "the other cohort records its own scope, not this one's" other
     }
   ]
+
+/// An owner started over a ledger that ends mid-landing. `replayAuditIn` discards effects, so before this the head
+/// landing's work died with the old owner and nothing ever finished it: the landing stayed `Rebasing` or `Verifying`
+/// and every landing behind it waited for good. The first owner here stands in for the daemon before an upgrade; it is
+/// disposed with its effect still in flight, and the second owner is the daemon after it.
+[<Tests>]
+let cohortOwnerRestartTests =
+  testList "CohortOwner restart with a landing in flight" [
+
+    testTask "WHY — a head landing left Verifying is recorded inconclusive on restart, and the landing behind it starts" {
+      let ledger = InMemory.create<MemberId> ()
+      let stopsInVerification = { frozenAtRebasePerformer with Rebase = fun _ onto _ -> async { return Ok(onto + "-rebased") } }
+      let first = startOwner ledger stopsInVerification
+      let! _ = first.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+      let! _ = first.Commit(CohortCommand.Join(bob, JoinableRole.Implementer, None, machine))
+      let! head = requestLanding first alice "the head landing"
+      let! behind = requestLanding first bob "the landing behind it"
+      do!
+        waitUntil first (defaultDeadline ()) (fun () -> sprintf "%A" (landingOf first head).State) (fun () ->
+          match (landingOf first head).State with
+          | LandingState.Verifying _ -> true
+          | _ -> false)
+      (first :> IDisposable).Dispose()
+
+      use second = startOwner ledger frozenAtRebasePerformer
+      do!
+        waitUntil second (defaultDeadline ()) (fun () -> sprintf "%A" (landingOf second head).State) (fun () ->
+          match (landingOf second head).State with
+          | LandingState.Blocked _ -> true
+          | _ -> false)
+      (landingOf second head).State
+      |> Expect.equal "the cut-off verification is recorded as inconclusive, with the restart named"
+           (LandingState.Blocked(LandingBlocker.Inconclusive CohortOwner.restartedDuringVerification, NextAction.RebaseAndResubmit))
+      match (landingOf second behind).State with
+      | LandingState.Rebasing _ -> ()
+      | other -> failtestf "the landing behind it should have started, it is %A" other
+      // A ledger row, so the next replay agrees with what this owner holds.
+      let replayed = replayIn machine (ledger.ReadAll machine)
+      replayed.Landings.[head].State |> Expect.equal "a replay of the ledger reaches the same verdict" (landingOf second head).State
+    }
+
+    testTask "WHY — a head landing left Rebasing is rebased again on restart and goes on to land" {
+      let ledger = InMemory.create<MemberId> ()
+      let first = startOwner ledger frozenAtRebasePerformer
+      let! _ = first.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+      let! head = requestLanding first alice "the head landing"
+      do!
+        waitUntil first (defaultDeadline ()) (fun () -> sprintf "%A" (landingOf first head).State) (fun () ->
+          match (landingOf first head).State with
+          | LandingState.Rebasing _ -> true
+          | _ -> false)
+      (first :> IDisposable).Dispose()
+
+      use second = startOwner ledger (happyPathPerformer [ TestId "t1" ] [] (fun toSha -> toSha + "-committed"))
+      do!
+        waitUntil second (defaultDeadline ()) (fun () -> sprintf "%A" (landingOf second head).State) (fun () ->
+          match (landingOf second head).State with
+          | LandingState.Landed _ -> true
+          | _ -> false)
+      second.ReadCohortState().Queue |> Expect.equal "the landing left the queue" []
+    }
+
+    testCase "WHY — restartRecovery re-drives a Rebasing head, settles a Verifying one, and leaves the rest alone" <| fun _ ->
+      let state = CohortState.forScope machine
+      let lid = LandingId "l-1"
+      let withHead (landingState: LandingState<MemberId>) =
+        let request =
+          { Id = lid; Requester = alice; Claims = []; Commits = [ "c1" ]; BaseAtQueue = "h1"
+            Statement = (match Statement.tryCreate "s" with Ok s -> s | Error e -> failwith e)
+            State = landingState; FastForwardAttempts = 0; Settlement = LandingSettlement.Unsettled }
+        { state with Landings = Map.add lid request state.Landings; Queue = [ lid ] }
+      CohortOwner.restartRecovery (withHead (LandingState.Rebasing "h1"))
+      |> Expect.equal "a rebase is run again onto the same head" (CohortOwner.RestartRecovery.Redrive(CohortEffect.Rebase(lid, "h1", [ "c1" ])))
+      CohortOwner.restartRecovery (withHead (LandingState.Verifying("h1", "r1", 2, 1)))
+      |> Expect.equal "a verification is settled inconclusive"
+           (CohortOwner.RestartRecovery.Settle(CohortCommand.VerificationInconclusive(lid, CohortOwner.restartedDuringVerification, machine)))
+      CohortOwner.restartRecovery (withHead (LandingState.Landed "x"))
+      |> Expect.equal "a settled head has nothing in flight" CohortOwner.RestartRecovery.NothingInFlight
+      CohortOwner.restartRecovery state
+      |> Expect.equal "an empty queue has nothing in flight" CohortOwner.RestartRecovery.NothingInFlight
+  ]

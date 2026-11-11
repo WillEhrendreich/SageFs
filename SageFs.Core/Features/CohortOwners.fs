@@ -203,7 +203,8 @@ let create (factory: Factory) : Owners =
   // is now registered" one step each, so an owner reaches a hook once: through the snapshot
   // `OnEachOwner` takes, or through the list `OwnerFor` reads, never both and never neither.
   let gate = obj ()
-  let each = ResizeArray<CohortScope -> CohortOwner.Handle -> unit>()
+  let creation = obj ()
+  let each =ResizeArray<CohortScope -> CohortOwner.Handle -> unit>()
 
   let disposeOf (h: CohortOwner.Handle) =
     // `Handle` is `IDisposable`; disposing it releases the mailbox, and it does not throw if
@@ -212,11 +213,16 @@ let create (factory: Factory) : Owners =
 
   { OwnerFor =
       fun scope ->
-        // `GetOrAdd` may run `factory` more than once under contention, so exactly one
-        // Handle per scope is PUBLISHED and every caller gets that one. `factory` must
-        // therefore be free of side effects beyond starting an owner — it is called for
-        // a scope that has none, and a losing call's owner is simply not published.
-        let owner = owners.GetOrAdd(scope, factory)
+        // Exactly one Handle per scope, and `factory` runs once for it. Bare `GetOrAdd` may run its factory more
+        // than once under contention and publish only one result; that was safe while a started owner was inert.
+        // It is not inert any more: it replays the
+        // ledger and, when the head landing was cut off mid-flight by a restart, settles or re-drives it, which appends
+        // a row. A second, unpublished owner doing that would take the published owner's next row number. Creation is
+        // rare (once per repository per daemon), so a lock around it costs nothing; the lookup stays lock-free.
+        let owner =
+          match owners.TryGetValue scope with
+          | true, existing -> existing
+          | false, _ -> lock creation (fun () -> owners.GetOrAdd(scope, factory))
         // Fire the hook exactly ONCE per scope, for the call that created the owner.
         // Firing on every `OwnerFor` would attach another subscriber per request, so one
         // cohort change would redraw the dashboard N times after N requests.
