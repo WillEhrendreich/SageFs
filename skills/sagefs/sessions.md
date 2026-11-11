@@ -46,4 +46,9 @@ Read this when you are starting on a repo, creating or choosing a session, check
    returns once the session is `Ready`. Don't sleep in a loop. Warming
    responses carry elapsed time, work time, and the worker's last progress
    line, and the `wait` field says how the wait ended. If it says `Faulted`,
-   act on the reason rather than waiting for it to change.
+   act on the reason rather than waiting for it to change. If it says
+   `TimedOut`, the session is still warming (one wait lasts at most 60 seconds
+   and a big repo needs several): call again while the progress line keeps
+   changing. Never create a second session and never run `dotnet build` to get
+   around the wait. A repo with many projects or an Arcade layout is covered in
+   `docs/arcade-and-large-repos.md`.

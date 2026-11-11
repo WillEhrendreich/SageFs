@@ -8,26 +8,22 @@ license: MIT
 
 SageFs gives you a live F# REPL with the project already loaded. An eval takes
 milliseconds, a `dotnet build` minutes. So the REPL is the inner loop, and
-`dotnet build` / `test` / `run` is the final gate, run once when you are done,
-never to probe what an API looks like.
+`dotnet build` / `test` / `run` is the final gate, never to probe what an API
+looks like.
 
 ## Before you design anything
 
 **Read `design.md`** before designing a type, signature or module: the house
 standard for what the code should LOOK like, where a mechanically correct change
-can still be the wrong code. The rest of this skill is mechanics, how to DRIVE
-the tool.
-
+can still be the wrong code.
 ## First minute
 
 1. Call `get_daemon_status`. If the tools are missing, SageFs is not connected,
-   so tell the user. If your client lists only tool names and loads each
-   schema on demand (Claude Code does, through its tool search), fetch the core
-   ones in ONE call: get_daemon_status, list_sessions, get_available_projects,
-   create_project_session, get_session_status, send_fsharp_code,
-   hard_reset_fsi_session, stop_session. A client that shows every tool's schema
-   up front has nothing to fetch. If the daemon's
-   version is behind the code you are working on, tell the user. Do not restart
+   so tell the user. If your client loads tool schemas on demand
+   (Claude Code does), fetch the core ones in ONE call: get_daemon_status,
+   list_sessions, get_available_projects, create_project_session,
+   get_session_status, send_fsharp_code, hard_reset_fsi_session, stop_session.
+   If the daemon's version is behind the code you are working on, tell the user. Do not restart
    it yourself: it is theirs and other agents may be on it.
 2. Call `list_sessions`. A session belongs to a working directory (a git
    worktree is its own boundary). Use yours, never create a duplicate.
@@ -35,14 +31,11 @@ the tool.
    `create_project_session` (one `.fsproj`), `create_solution_session` (a
    `.sln` or `.slnx`) or `create_bare_session` (no project). SageFs builds
    missing generated state itself, so do not run a shell build first.
-4. Warmup takes seconds on a small project and longer on a big one (a repo with
-   dozens of projects, see `docs/arcade-and-large-repos.md`). Call
-   `get_session_status` with `wait_seconds=60`: it returns once the session is
-   `Ready`, so no sleeping or polling. 60 is the longest a single wait lasts.
-   If `wait` says `TimedOut`, the session is still warming: call again, as many
-   times as it takes while the reply's progress line keeps changing. Never
-   create a second session and never run `dotnet build` to get around the wait.
-   On `Faulted`, act on the reason it names.
+4. Warmup takes seconds on a small project and minutes on a big repo
+   (`docs/arcade-and-large-repos.md`). Call `get_session_status` with
+   `wait_seconds=60`: it returns once `Ready`, so no sleeping or polling. On
+   `TimedOut` the session is still warming, so call again. On `Faulted`, act on
+   the reason it names.
 
 ## The loop
 
