@@ -86,7 +86,8 @@ page only describes what the code does.
   fingerprint of the connection's handle, never the handle, and `MemberId.display` fingerprints a raw handle a legacy row carries.
 - `ConnectionIdentity.resolve` (`MemberTable.fs:161`) picks the caller: a member token, then the bridge's client key, then the
   transport session, then the name the caller gave.
-- Sub-agents on one MCP connection are one member. A sub-agent that calls `leave_cohort` departs its orchestrator. A member token per
+- Sub-agents on one MCP connection are one member. A sub-agent that calls `leave_cohort` departs its orchestrator, except that a conductor
+  holding claims is refused (`ConductorHoldsClaims`), so the seat and the claims stay put. A member token per
   sub-agent (`SageFs.Core/Capability.fs`, `mint_member`) is the way to tell them apart.
 - The reaper (`cohortReaperCallback`, `SageFs/DaemonMode.fs:4422`) renews a member that evaluated, called or holds a stream, and
   posts `Tick` to every scope's owner, which departs members whose lease lapsed.
