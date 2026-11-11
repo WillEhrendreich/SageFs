@@ -117,6 +117,46 @@ at the time (tool counts in `docs/mcp-tools.md`).
 Item 2 needs the gate: run it with the canary below. Items 3 and 4 get their answer from the same run, because a hit names the
 frame that closed the descriptor.
 
+## Experiment: move the delta children out of the default tier
+
+Proposed 2026-11-11 (hot reload roast 2.1, finding C5). Not run. It is a bisection the experiments above did not do: every hit is in
+the `metadata delta emitter` list, and that list never ran in a process of its own under the gate's load.
+
+The cases that start a child are the `testTask` cases of `SageFs.Tests/MetadataDeltaTests.fs` from the one at `:632` ("a delta takes
+a running process to the next version ...") to the one at `:886` ("a child whose stdout nobody reads ..."), the `DELTA-BENCH` case at
+`:794` among them. Each holds two writable descriptors for its child's whole life (4 to 12 s, `DeltaChild.runReading`), and four
+run at once. The cases above `:632` (closed sets, the differ, the Cecil rewrites) start no child and stay where they are.
+
+Steps:
+
+1. Split the list: keep the child-free cases in `testList "metadata delta emitter"`, and move the child-spawning ones into a new
+   list registered as a dedicated tier: `testList ... |> Integration.register (Integration.Dedicated "--integration-delta-children")`,
+   the shape `SageFs.Tests/DashboardDisconnectIndicatorBrowserTests.fs:479` uses (registration in
+   `SageFs.Tests/TestInfrastructure.fs:470-535`), a runner arm in `SageFs.Tests/Program.fs` that calls
+   `TrustSignal.run "--integration-delta-children"` (the `--integration-disconnect` arm at `Program.fs:444-448` is the pattern), and a
+   `--integration-delta-children --summary` tier stage in `ci-pipeline.fsx` next to `--integration-disconnect` (`:2021`).
+   `TrustSignalTests` fails the fast suite until the pipeline invokes it.
+2. Build and check the split locally: `dotnet build SageFs.Tests -c Release`, `--ratchets`, then the default suite with `--summary`
+   (the moved cases must be gone from it, and `ran=` must drop by their count) and the new tier alone (its `ran=` is their count).
+3. Run the gate with the canary on, through `SAGEFS_PIPELINE_ENV` so only the pipeline and its tiers carry it:
+
+   ```
+   gcc -O1 -g -shared -fPIC -fno-omit-frame-pointer -o ~/.cache/fdshim/fdshim.so docs/fd-canary/fdshim.c -ldl
+   mkdir -p ~/.cache/fdshim/perf
+   SAGEFS_PIPELINE_ENV="LD_PRELOAD=$HOME/.cache/fdshim/fdshim.so;FDSHIM_LOG=$HOME/.cache/fdshim/gate.log;DOTNET_PerfMapEnabled=3;DOTNET_PerfMapJitDumpPath=$HOME/.cache/fdshim/perf" \
+     dotnet fsi scripts/local-gate.fsx -- --keep-going
+   ```
+
+   Repeat until there are as many tier runs as the table above needed for three hits (fifteen to twenty passes), or until a hit.
+4. Read the answer:
+   - The flake follows the list into `--integration-delta-children`: the closer is in the list's own code or the runtime path it
+     drives (`Process.Start` with redirected streams, `DeltaChild.runReading`). Start at dotnet/runtime#107933.
+   - The flake stays in `default` and names a different case: the delta list was the most exposed victim, and the new victim's stack
+     is the next lead.
+   - No hit in either: the move removed the window. Keep the split (the list is integration-shaped anyway: a child process and a
+     20 s to 120 s budget, `TestTimeouts.bigAssemblyDelta`) and record the passes here.
+5. Add a row to the experiments table above with the count of passes and hits, whatever the answer.
+
 ## The canary
 
 `docs/fd-canary/fdshim.c` is an `LD_PRELOAD` library, and `docs/fd-canary/resolve.sh` names the JIT frames in its log from the
