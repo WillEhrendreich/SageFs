@@ -1552,8 +1552,8 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                   // Hard reset failed` recovery below (identical Faulted
                   // publish + error reply + Faulted-phase continuation). The
                   // actual compiler/MSBuild diagnostics (each carries its own
-                  // actionable wording), never a bare exit code.
-                  raise (System.Exception (SageFsError.describe err))
+                  // actionable wording), carried typed so the catch keeps them.
+                  raise (SageFsErrorException err)
               | None ->
                 logger.LogWarning "  ⚠️ No project to build"
             | false -> ()
@@ -1669,7 +1669,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             logger.LogError (sprintf "❌ Hard reset failed: %s" ex.Message)
             let reason = sprintf "Hard reset failed: %s" ex.Message
             publishPhase (Faulted reason) evalStats
-            reply (Error (SageFsError.HardResetFailed ex.Message))
+            reply (Error (SageFsErrorException.recoverOr SageFsError.HardResetFailed ex))
             return (Faulted reason, middleware, evalStats)
         | EvalLevel (outside, reply) ->
           // The check and the reset are this one message, so no eval can start between them, and nothing is cancelled for it:

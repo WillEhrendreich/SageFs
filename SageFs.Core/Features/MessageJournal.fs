@@ -24,6 +24,14 @@ module JournalLevel =
     | JournalLevel.Warn -> 2
     | JournalLevel.Failure -> 3
 
+  /// The level of a recorded eval, from the result text the eval path stored. The history keeps only that text,
+  /// and the eval path marks a failed eval by starting it with "Error:" (Mcp.fs), the same mark the eval
+  /// timeline reads. A warning has no mark of its own there, so an eval that did not fail is Info.
+  let ofEvalResult (result: string) : JournalLevel =
+    match result.StartsWith("Error:", StringComparison.Ordinal) with
+    | true -> JournalLevel.Failure
+    | false -> JournalLevel.Info
+
 /// A single journal entry with timestamp, level, source, and message.
 type JournalEntry = {
   Timestamp: DateTimeOffset
@@ -71,9 +79,14 @@ module Journal =
   let record (level: JournalLevel) (source: string) (message: string) (journal: Journal) : Journal =
     { Buffer = RingBuffer.push (entryNow level source message) journal.Buffer }
 
+  /// Record entries that already carry their own time and level, oldest first, with one copy of the ring.
+  /// A journal built from history uses this, so each entry keeps the moment it happened.
+  let recordEntries (entries: JournalEntry seq) (journal: Journal) : Journal =
+    { Buffer = RingBuffer.pushAll entries journal.Buffer }
+
   /// Record one entry per message, oldest message first, all at one level and
-  /// source. Same result as folding `record` over the messages, with one copy
-  /// of the ring instead of one per message.
+  /// source, every one stamped with the clock now. For messages happening now;
+  /// never for history, whose entries have their own times (`recordEntries`).
   let recordAll (level: JournalLevel) (source: string) (messages: string seq) (journal: Journal) : Journal =
     { Buffer = RingBuffer.pushAll (messages |> Seq.map (entryNow level source)) journal.Buffer }
 

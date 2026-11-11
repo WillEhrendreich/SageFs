@@ -131,6 +131,15 @@
     "suggestedAction": "Run get_session_status or list_sessions to check session state"
   },
   {
+    "case": "SessionRestarting",
+    "fields": {
+      "sessionId": "test",
+      "reason": "test"
+    },
+    "message": "test",
+    "suggestedAction": "Wait: the restart is in progress. Call get_session_status with wait_seconds=60, which returns once the session is Ready, then retry. Do not run hard_reset_fsi_session or create a new session: either starts the restart over"
+  },
+  {
     "case": "WorkerCommunicationFailed",
     "fields": {
       "sessionId": "test",
@@ -213,7 +222,7 @@
       ]
     },
     "message": "Build failed (exit 42):\ntest error",
-    "suggestedAction": "Fix the build errors, then run the app again"
+    "suggestedAction": "Fix the build errors, then repeat the call that built"
   },
   {
     "case": "ScriptLoadFailed",
@@ -377,6 +386,25 @@
     "suggestedAction": "test"
   },
   {
+    "case": "CohortRefused",
+    "fields": {
+      "kind": "ClaimConflict",
+      "reason": "test",
+      "suggestion": "test"
+    },
+    "message": "test",
+    "suggestedAction": "test"
+  },
+  {
+    "case": "ToolFailed",
+    "fields": {
+      "reason": "test",
+      "suggestion": "test"
+    },
+    "message": "test",
+    "suggestedAction": "test"
+  },
+  {
     "case": "Unexpected",
     "fields": {
       "Item": "test"
@@ -416,6 +444,6 @@
       ]
     },
     "message": "Build failed (exit 1):\nsrc/A.fs(10,5): error FS0039: The value is not defined\nsrc/B.fs(3,1): warning FS3370: This construct is deprecated\nMSBUILD : error MSB1009: Project file does not exist.",
-    "suggestedAction": "Fix the build errors, then run the app again"
+    "suggestedAction": "Fix the build errors, then repeat the call that built"
   }
 ]

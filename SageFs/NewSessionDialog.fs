@@ -176,6 +176,9 @@ module DaemonRefusal =
     | SageFsError.SseConnectionError _
     | SageFsError.JsonParseError _
     | SageFsError.CohortActionFailed _
+    | SageFsError.CohortRefused _
+    | SageFsError.SessionRestarting _
+    | SageFsError.ToolFailed _
     | SageFsError.Unexpected _ -> DaemonRefusal.Other
 
   let title = function

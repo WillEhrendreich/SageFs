@@ -108,7 +108,7 @@ let hotReloadToolTests =
     // lists via TestInfrastructure.withEnvVar (Expecto runs lists in
     // parallel; the DevReload.KillSwitch list mutates the same var).
 
-    testCase "enable_hot_reload on an Interactive session directs to Live mode instead of a false patch" <| fun _ ->
+    testCase "enable_hot_reload on an Interactive session directs to the Hot Reload workflow instead of a false patch" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
         let tools = mkTools (Some 40000)
         let result = invokeTool tools "enable_hot_reload" [| box "" |]
@@ -119,7 +119,8 @@ let hotReloadToolTests =
         let steps =
           n.GetProperty("nextSteps").EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> String.concat " "
         Expect.stringContains steps "switch_workflow" "nextSteps directs to switch_workflow"
-        Expect.stringContains steps "workflow=live" "nextSteps directs to create a Live session"
+        Expect.stringContains steps "workflow=hotreload" "nextSteps directs to create a Hot Reload session"
+        Expect.isFalse (steps.Contains "Live mode") "nextSteps never say Live mode: 'live' is an alias, and Live Testing is another workflow"
         [ "the dashboard control", "workflow selector"
           "the VS Code command", "SageFs: Switch Workflow"
           "the Neovim command", ":SageFsWorkflow" ]
@@ -153,7 +154,7 @@ let hotReloadToolTests =
         let n = textJson result
         Expect.equal (outcomeOf result) "AlreadyActive" "structured outcome says hot reload is already on"
         Expect.isTrue (n.GetProperty("patched").GetBoolean()) "a Live session already has hot reload"
-        Expect.stringContains (n.GetProperty("health").GetString()) "Live" "health says the session is in Live mode")
+        Expect.stringContains (n.GetProperty("health").GetString()) "Hot Reload" "health names the Hot Reload workflow")
 
     testCase "disable_hot_reload on an Interactive session reports hot reload was never active" <| fun _ ->
       let tools = mkTools (Some 40000)

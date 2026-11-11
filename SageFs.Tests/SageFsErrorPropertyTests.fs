@@ -159,6 +159,22 @@ let private genSageFsError =
       let! suggestion = genNonEmptyString
       return SageFsError.CohortActionFailed(reason, suggestion)
     }
+    gen {
+      let! kind = Gen.elements (FSharpType.GetUnionCases(typeof<CohortFailureKind>) |> Array.map (fun c -> FSharpValue.MakeUnion(c, [||]) :?> CohortFailureKind) |> Array.toList)
+      let! reason = genNonEmptyString
+      let! suggestion = genNonEmptyString
+      return SageFsError.CohortRefused(kind, reason, suggestion)
+    }
+    gen {
+      let! id = genNonEmptyString
+      let! reason = genNonEmptyString
+      return SageFsError.SessionRestarting(id, reason)
+    }
+    gen {
+      let! reason = genNonEmptyString
+      let! suggestion = genNonEmptyString
+      return SageFsError.ToolFailed(reason, suggestion)
+    }
     Gen.constant (SageFsError.Unexpected(Exception "test"))
     gen {
       let! pending = Gen.choose (0, 1000)
@@ -192,6 +208,7 @@ let private allDuCaseInstances =
         | t when t = typeof<BuildDiagnostic list> -> box [ BuildDiagnostic.ofLine "test error" ]
         | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
         | t when t = typeof<HostCrash> -> box { Exit = ExitedWith 134; Output = "test" }
+        | t when t = typeof<CohortFailureKind> -> box CohortFailureKind.ClaimConflict
         | t -> failwithf "Unhandled field type %s in case %s" t.Name case.Name)
     FSharpValue.MakeUnion(case, fields) :?> SageFsError)
 
@@ -312,12 +329,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 43 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 46 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        43
+        46
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|

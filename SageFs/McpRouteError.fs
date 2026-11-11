@@ -31,13 +31,15 @@ module McpRouteError =
   /// `SageFsError` algebra: a plain `Message` means the session itself could
   /// not be routed to (not found, still warming up, invalid id — the same
   /// "not routable right now" family `SessionNotRoutable` already covers at
-  /// every other resolveSessionId boundary); `TransportFailure` and
-  /// `RestartInProgress` both mean the worker process could not be reached,
-  /// which is exactly what `WorkerCommunicationFailed` describes.
+  /// every other resolveSessionId boundary); `TransportFailure` means the
+  /// worker process could not be reached (`WorkerCommunicationFailed`, whose
+  /// remedy is a hard reset); `RestartInProgress` means the session is coming
+  /// back on purpose, and its remedy is to wait (`SessionRestarting`), never
+  /// to hard reset, which would start the restart over.
   let routeErrorToSageFsError (sid: string) = function
     | Message msg -> SageFsError.SessionNotRoutable msg
     | TransportFailure msg -> SageFsError.WorkerCommunicationFailed (sid, msg)
-    | RestartInProgress msg -> SageFsError.WorkerCommunicationFailed (sid, msg)
+    | RestartInProgress msg -> SageFsError.SessionRestarting (sid, msg)
 
   let innermostException (ex: exn) =
     let rec loop (current: exn) =

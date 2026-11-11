@@ -66,6 +66,111 @@ module BuildDiagnostic =
       | _ -> d.Message)
     |> String.concat "\n"
 
+/// Which refusal the cohort core gave, one case per `Cohort.CohortError` constructor. It travels in the
+/// structured payload next to the text, so an agent branches on `ClaimConflict` versus `NotConductor` without
+/// reading prose.
+[<RequireQualifiedAccess>]
+type CohortFailureKind =
+  | DuplicateJoin
+  | MemberNotPresent
+  | ClaimConflict
+  | NotClaimHolder
+  | UnknownClaim
+  | ClaimNotOrphaned
+  | ClearRefused
+  | DuplicateClaimId
+  | StaleClaimFence
+  | InvalidPurpose
+  | InvalidStatement
+  | UnknownLanding
+  | DuplicateLandingId
+  | NotLandingRequester
+  | LandingNotAtFrontOfQueue
+  | LandingNotInExpectedState
+  | NotConductor
+  | ConductorVacant
+  | DelegateTargetAbsent
+  | DelegateToSelf
+  | SeatTargetAbsent
+  | ConductorSeatTaken
+  | ConductorHolderChanged
+  | ReplaceByHolder
+  | VetoRefused
+  | InvalidVetoReason
+  | LandingAlreadyVetoed
+  | WrongCohortScope
+  | OwnerStepFailed
+  | OwnerUnresponsive
+
+module CohortFailureKind =
+  /// The kind of a cohort refusal. One exhaustive match, so a new `CohortError` case cannot compile without a kind.
+  let ofError (err: Cohort.CohortError<'m>) : CohortFailureKind =
+    match err with
+    | Cohort.CohortError.DuplicateJoin _ -> CohortFailureKind.DuplicateJoin
+    | Cohort.CohortError.MemberNotPresent _ -> CohortFailureKind.MemberNotPresent
+    | Cohort.CohortError.ClaimConflict _ -> CohortFailureKind.ClaimConflict
+    | Cohort.CohortError.NotClaimHolder _ -> CohortFailureKind.NotClaimHolder
+    | Cohort.CohortError.UnknownClaim _ -> CohortFailureKind.UnknownClaim
+    | Cohort.CohortError.ClaimNotOrphaned _ -> CohortFailureKind.ClaimNotOrphaned
+    | Cohort.CohortError.ClearRefused _ -> CohortFailureKind.ClearRefused
+    | Cohort.CohortError.DuplicateClaimId _ -> CohortFailureKind.DuplicateClaimId
+    | Cohort.CohortError.StaleClaimFence _ -> CohortFailureKind.StaleClaimFence
+    | Cohort.CohortError.InvalidPurpose _ -> CohortFailureKind.InvalidPurpose
+    | Cohort.CohortError.InvalidStatement _ -> CohortFailureKind.InvalidStatement
+    | Cohort.CohortError.UnknownLanding _ -> CohortFailureKind.UnknownLanding
+    | Cohort.CohortError.DuplicateLandingId _ -> CohortFailureKind.DuplicateLandingId
+    | Cohort.CohortError.NotLandingRequester _ -> CohortFailureKind.NotLandingRequester
+    | Cohort.CohortError.LandingNotAtFrontOfQueue _ -> CohortFailureKind.LandingNotAtFrontOfQueue
+    | Cohort.CohortError.LandingNotInExpectedState _ -> CohortFailureKind.LandingNotInExpectedState
+    | Cohort.CohortError.NotConductor _ -> CohortFailureKind.NotConductor
+    | Cohort.CohortError.ConductorVacant _ -> CohortFailureKind.ConductorVacant
+    | Cohort.CohortError.DelegateTargetAbsent _ -> CohortFailureKind.DelegateTargetAbsent
+    | Cohort.CohortError.DelegateToSelf _ -> CohortFailureKind.DelegateToSelf
+    | Cohort.CohortError.SeatTargetAbsent _ -> CohortFailureKind.SeatTargetAbsent
+    | Cohort.CohortError.ConductorSeatTaken _ -> CohortFailureKind.ConductorSeatTaken
+    | Cohort.CohortError.ConductorHolderChanged _ -> CohortFailureKind.ConductorHolderChanged
+    | Cohort.CohortError.ReplaceByHolder _ -> CohortFailureKind.ReplaceByHolder
+    | Cohort.CohortError.VetoRefused _ -> CohortFailureKind.VetoRefused
+    | Cohort.CohortError.InvalidVetoReason _ -> CohortFailureKind.InvalidVetoReason
+    | Cohort.CohortError.LandingAlreadyVetoed _ -> CohortFailureKind.LandingAlreadyVetoed
+    | Cohort.CohortError.WrongCohortScope _ -> CohortFailureKind.WrongCohortScope
+    | Cohort.CohortError.OwnerStepFailed _ -> CohortFailureKind.OwnerStepFailed
+    | Cohort.CohortError.OwnerUnresponsive _ -> CohortFailureKind.OwnerUnresponsive
+
+  /// The kind's name on the wire (`fields.kind`).
+  let label (kind: CohortFailureKind) : string =
+    match kind with
+    | CohortFailureKind.DuplicateJoin -> "DuplicateJoin"
+    | CohortFailureKind.MemberNotPresent -> "MemberNotPresent"
+    | CohortFailureKind.ClaimConflict -> "ClaimConflict"
+    | CohortFailureKind.NotClaimHolder -> "NotClaimHolder"
+    | CohortFailureKind.UnknownClaim -> "UnknownClaim"
+    | CohortFailureKind.ClaimNotOrphaned -> "ClaimNotOrphaned"
+    | CohortFailureKind.ClearRefused -> "ClearRefused"
+    | CohortFailureKind.DuplicateClaimId -> "DuplicateClaimId"
+    | CohortFailureKind.StaleClaimFence -> "StaleClaimFence"
+    | CohortFailureKind.InvalidPurpose -> "InvalidPurpose"
+    | CohortFailureKind.InvalidStatement -> "InvalidStatement"
+    | CohortFailureKind.UnknownLanding -> "UnknownLanding"
+    | CohortFailureKind.DuplicateLandingId -> "DuplicateLandingId"
+    | CohortFailureKind.NotLandingRequester -> "NotLandingRequester"
+    | CohortFailureKind.LandingNotAtFrontOfQueue -> "LandingNotAtFrontOfQueue"
+    | CohortFailureKind.LandingNotInExpectedState -> "LandingNotInExpectedState"
+    | CohortFailureKind.NotConductor -> "NotConductor"
+    | CohortFailureKind.ConductorVacant -> "ConductorVacant"
+    | CohortFailureKind.DelegateTargetAbsent -> "DelegateTargetAbsent"
+    | CohortFailureKind.DelegateToSelf -> "DelegateToSelf"
+    | CohortFailureKind.SeatTargetAbsent -> "SeatTargetAbsent"
+    | CohortFailureKind.ConductorSeatTaken -> "ConductorSeatTaken"
+    | CohortFailureKind.ConductorHolderChanged -> "ConductorHolderChanged"
+    | CohortFailureKind.ReplaceByHolder -> "ReplaceByHolder"
+    | CohortFailureKind.VetoRefused -> "VetoRefused"
+    | CohortFailureKind.InvalidVetoReason -> "InvalidVetoReason"
+    | CohortFailureKind.LandingAlreadyVetoed -> "LandingAlreadyVetoed"
+    | CohortFailureKind.WrongCohortScope -> "WrongCohortScope"
+    | CohortFailureKind.OwnerStepFailed -> "OwnerStepFailed"
+    | CohortFailureKind.OwnerUnresponsive -> "OwnerUnresponsive"
+
 /// Unified error type for the entire SageFs system.
 /// Every Result<..., SageFsError> across all layers uses this single DU.
 /// NO wildcard matches in module functions — compiler catches missing cases.
@@ -133,6 +238,10 @@ type SageFsError =
   /// case just carries it instead of it being formatted straight to a
   /// display string with no structure for a caller to branch on).
   | SessionNotRoutable of reason: string
+  /// The session is starting or restarting on purpose, so its worker cannot answer yet. Waiting is the remedy;
+  /// a hard reset would only start the restart over. (`RestartInProgress` used to map onto
+  /// `WorkerCommunicationFailed`, whose advice is to hard reset, beside a message that said not to.)
+  | SessionRestarting of sessionId: string * reason: string
   // ── Worker communication ──
   | WorkerCommunicationFailed of sessionId: string * reason: string
   | WorkerSpawnFailed of reason: string
@@ -185,6 +294,14 @@ type SageFsError =
   /// display is available, so the agent gets an accurate what + actionable next
   /// step instead of a mismatched session/worker error's advice.
   | CohortActionFailed of reason: string * suggestion: string
+  /// A refusal from the `Cohort.decide` core with its kind kept (`CohortFailureKind.ofError`), so the structured
+  /// payload says WHICH refusal it was. `CohortActionFailed` stays for the shell's own refusals (tokens, authority).
+  | CohortRefused of kind: CohortFailureKind * reason: string * suggestion: string
+  // ── MCP tool replies ──
+  /// A tool body that could only hand back display text said it failed ("Error: ..." or a `describeForAgent`
+  /// sentence). `McpTools.classifyEcho` reads that text once at the MCP seam so the call is still reported with
+  /// isError and recorded as a failure. A body that has the typed error returns it instead.
+  | ToolFailed of reason: string * suggestion: string
   | Unexpected of exn
 
 /// The family a `SageFsError` belongs to, which decides its HTTP status class and how a
@@ -204,7 +321,8 @@ type ErrorCategory =
   /// mailbox's admission ceiling; `MemoryPressureRefused`). Nothing about the REQUEST
   /// conflicts with anything: the daemon is handling more concurrent work than its
   /// configured ceiling right now, and the fix is "wait and retry", not "resolve a
-  /// conflict".
+  /// conflict". `SessionRestarting` is here for the same reason: the worker is coming
+  /// back on its own, and the remedy is to wait for it.
   | Overload
 
 module SageFsError =
@@ -296,6 +414,10 @@ module SageFsError =
     | SageFsError.JsonParseError(context, reason) ->
       sprintf "JSON parse error in %s: %s" context reason
     | SageFsError.CohortActionFailed(reason, _) -> reason
+    | SageFsError.CohortRefused(_, reason, _) -> reason
+    // The route builds the whole sentence, session and lifecycle state included (Mcp.fs, the RestartInProgress arm).
+    | SageFsError.SessionRestarting(_, reason) -> reason
+    | SageFsError.ToolFailed(reason, _) -> reason
     | SageFsError.Unexpected exn ->
       sprintf "Unexpected error: %s" exn.Message
 
@@ -347,6 +469,9 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> LogLevel.Information
     | SageFsError.DaemonNotRunning -> LogLevel.Information
     | SageFsError.CohortActionFailed _ -> LogLevel.Information
+    | SageFsError.CohortRefused _ -> LogLevel.Information
+    | SageFsError.SessionRestarting _ -> LogLevel.Information
+    | SageFsError.ToolFailed _ -> LogLevel.Warning
 
   let toHttpStatus = function
     // 404 Not Found
@@ -364,6 +489,9 @@ module SageFsError =
     // holder, not the conductor, scope already claimed, stale fence). 400 not
     // 409: 409 is reserved here for infrastructure conflicts (isInfraError).
     | SageFsError.CohortActionFailed _ -> 400
+    | SageFsError.CohortRefused _ -> 400
+    // The text a tool body wrote carries no family of its own; a refused request is the common meaning.
+    | SageFsError.ToolFailed _ -> 400
     // 409 Conflict
     | SageFsError.PortInUse _ -> 409
     | SageFsError.RestartLimitExceeded _ -> 409
@@ -372,6 +500,8 @@ module SageFsError =
     // 503 Service Unavailable — overloaded, retry later (not the caller's fault)
     | SageFsError.SupervisorBusy _ -> 503
     | SageFsError.MemoryPressureRefused _ -> 503
+    // A restart in progress: the worker is unavailable for now and waiting is the remedy.
+    | SageFsError.SessionRestarting _ -> 503
     // 504 Gateway Timeout
     | SageFsError.WorkerTimeout _ -> 504
     // 502 Bad Gateway
@@ -419,7 +549,9 @@ module SageFsError =
     | SageFsError.UnsafeSessionPath _
     | SageFsError.ProjectFrameworkNotHostable _
     | SageFsError.NeedsRebuild _
-    | SageFsError.CohortActionFailed _ -> ErrorCategory.Client
+    | SageFsError.CohortActionFailed _
+    | SageFsError.CohortRefused _
+    | SageFsError.ToolFailed _ -> ErrorCategory.Client
     | SageFsError.SessionCreationFailed _
     | SageFsError.SessionStopFailed _
     | SageFsError.SessionSwitchFailed _
@@ -451,7 +583,8 @@ module SageFsError =
     | SageFsError.RestartLimitExceeded _
     | SageFsError.DuplicateSession _ -> ErrorCategory.Infra
     | SageFsError.SupervisorBusy _
-    | SageFsError.MemoryPressureRefused _ -> ErrorCategory.Overload
+    | SageFsError.MemoryPressureRefused _
+    | SageFsError.SessionRestarting _ -> ErrorCategory.Overload
 
   /// Client errors: 4xx — the request was malformed or referred to missing resources.
   let isClientError (err: SageFsError) = category err = ErrorCategory.Client
@@ -492,7 +625,8 @@ module SageFsError =
     | SageFsError.EvalFailed _ -> "Fix the code and resubmit"
     | SageFsError.ResetFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.HardResetFailed _ -> "Check that the project builds with 'dotnet build'"
-    | SageFsError.BuildFailed _ -> "Fix the build errors, then run the app again"
+    // A build fails under run_app and under hard_reset_fsi_session rebuild=true, so the advice names neither.
+    | SageFsError.BuildFailed _ -> "Fix the build errors, then repeat the call that built"
     | SageFsError.ScriptLoadFailed _ -> "Check file exists and has valid F# syntax"
     | SageFsError.CheckFailed _ -> "Fix the code and resubmit"
     | SageFsError.CompletionFailed _ -> "Retry or run reset_fsi_session"
@@ -512,6 +646,10 @@ module SageFsError =
     | SageFsError.SseConnectionError _ -> "Check daemon is running and retry"
     | SageFsError.JsonParseError _ -> "Check request payload format"
     | SageFsError.CohortActionFailed(_, suggestion) -> suggestion
+    | SageFsError.CohortRefused(_, _, suggestion) -> suggestion
+    | SageFsError.SessionRestarting _ ->
+      "Wait: the restart is in progress. Call get_session_status with wait_seconds=60, which returns once the session is Ready, then retry. Do not run hard_reset_fsi_session or create a new session: either starts the restart over"
+    | SageFsError.ToolFailed(_, suggestion) -> suggestion
     | SageFsError.Unexpected _ -> "Check the SageFs log for details"
 
   /// Agent-facing error description: compose describe + suggestedAction.
@@ -575,6 +713,9 @@ module SageFsError =
     | SageFsError.SseConnectionError _ -> "SseConnectionError"
     | SageFsError.JsonParseError _ -> "JsonParseError"
     | SageFsError.CohortActionFailed _ -> "CohortActionFailed"
+    | SageFsError.CohortRefused _ -> "CohortRefused"
+    | SageFsError.SessionRestarting _ -> "SessionRestarting"
+    | SageFsError.ToolFailed _ -> "ToolFailed"
     | SageFsError.Unexpected _ -> "Unexpected"
 
   let private unsupportedReasonName (reason: ProjectCompatibility.UnsupportedTfmReason) : string =
@@ -704,6 +845,16 @@ module SageFsError =
     | SageFsError.CohortActionFailed(reason, suggestion) ->
       [ "reason", box reason
         "suggestion", box suggestion ]
+    | SageFsError.CohortRefused(kind, reason, suggestion) ->
+      [ "kind", box (CohortFailureKind.label kind)
+        "reason", box reason
+        "suggestion", box suggestion ]
+    | SageFsError.SessionRestarting(sessionId, reason) ->
+      [ "sessionId", box sessionId
+        "reason", box reason ]
+    | SageFsError.ToolFailed(reason, suggestion) ->
+      [ "reason", box reason
+        "suggestion", box suggestion ]
     // The unnamed field is "Item", as F# reflection has always named it.
     | SageFsError.Unexpected ex -> [ "Item", box ex.Message ]
 
@@ -723,6 +874,15 @@ module SageFsError =
 type SageFsErrorException(error: SageFsError) =
   inherit System.Exception(SageFsError.describe error)
   member _.Error = error
+
+module SageFsErrorException =
+  /// The error an exception carries: a `SageFsErrorException` gives back its own case, and any other exception
+  /// becomes `orElse` of its message. A catch site that rebuilt the case from `ex.Message` lost a `BuildFailed`'s
+  /// diagnostics and exit code.
+  let recoverOr (orElse: string -> SageFsError) (ex: exn) : SageFsError =
+    match ex with
+    | :? SageFsErrorException as typed -> typed.Error
+    | _ -> orElse ex.Message
 
 /// An exception that escaped SageFs's own eval path (the middleware chain), as opposed to a failure FSI reported
 /// about the user's code. It carries the original exception's type and message as data, so a reader that has to

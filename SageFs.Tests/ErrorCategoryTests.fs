@@ -58,6 +58,9 @@ let private golden : (string * ErrorCategory) list =
     "SseConnectionError", ErrorCategory.Gateway
     "JsonParseError", ErrorCategory.Client
     "CohortActionFailed", ErrorCategory.Client
+    "CohortRefused", ErrorCategory.Client
+    "SessionRestarting", ErrorCategory.Overload
+    "ToolFailed", ErrorCategory.Client
     "Unexpected", ErrorCategory.Internal ]
 
 /// One value of every case, built by reflection with a plain argument for each field.
@@ -77,6 +80,7 @@ let private everyError : (string * SageFsError) list =
         | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
         | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
         | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
+        | t when t = typeof<CohortFailureKind> -> box CohortFailureKind.ClaimConflict
         | _ -> null)
     case.Name, FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError)
   |> Array.toList

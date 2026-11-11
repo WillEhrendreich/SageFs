@@ -322,6 +322,14 @@ whose answer is JSON (`nudge_value` is one) is valid JSON on its own. A client t
 the end: read the first block (or `structuredContent`, where a tool has it) and treat any later block as
 the daemon talking. Agents still get the echo, because their client shows every block.
 
+A call that failed says so with `isError: true`, on every tool. Its text is the reason and the next step
+(`<what> → Next: <what to do>`), and `structuredContent` carries `case`, `fields`, `message` and
+`suggestedAction`, so a client branches on `case` without reading the prose. A tool whose body has only text to
+give is reported as `ToolFailed`
+([`McpTools.classifyEcho`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpTools.fs)). A session
+that is restarting on purpose answers `SessionRestarting`, whose next step is to wait with `get_session_status`
+and never to hard reset.
+
 Positions in a reply (`line`, `column`, `endLine`, `endColumn`) are the parser's own: lines count from 1,
 columns from 0 (counted in characters, not bytes), and `endColumn` is one past the last character.
 

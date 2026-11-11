@@ -414,7 +414,14 @@ let tests =
         let tools =
           SageFs.Server.McpTools.SageFsTools(ctx, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFs.Server.McpTools.SageFsTools>.Instance)
         let! _ = tools.reset_hot_reload_state ("App.State.count", info.WorkingDirectory)
-        let! _ = tools.set_reflection_read_mode ("probe-callers", info.WorkingDirectory)
+        let! (refused: bool) =
+          task {
+            try
+              let! _ = tools.set_reflection_read_mode ("probe-callers", info.WorkingDirectory)
+              return false
+            with :? SageFs.SageFsErrorException -> return true
+          }
+        refused |> Expect.isTrue "the worker's 400 reaches the caller as a failed call"
         let! finished = Task.WhenAny(serve, Task.Delay TestTimeouts.patience)
         obj.ReferenceEquals(finished, serve) |> Expect.isTrue "the worker was asked twice"
         seen

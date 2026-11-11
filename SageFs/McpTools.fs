@@ -9,6 +9,7 @@ open SageFs.AppState
 open SageFs.McpTools
 open SageFs.Utils
 open SageFs.McpSessionRouting
+open SageFs.McpEcho
 open System.Text.Json
 open System.Text.Json.Nodes
 
@@ -91,6 +92,11 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   // already claimed, stale fence): the request was invalid for the state, not
   // an internal failure.
   | SageFs.SageFsError.CohortActionFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  | SageFs.SageFsError.CohortRefused _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  // A restart in progress is the session coming back, the same wait as warmup.
+  | SageFs.SageFsError.SessionRestarting _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
+  // A failure a tool body only described in text: it failed, and the text names no finer family.
+  | SageFs.SageFsError.ToolFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   // An exception the algebra had no specific case for. OperationFailed (not
   // the old fallback's InvalidRequest — the caller's request was not
   // necessarily invalid) is the honest "something broke" bucket.
@@ -337,87 +343,25 @@ let echoRecord (ctx: McpContext) (toolName: string) (outcome: Result<string, Sag
   SageFs.EchoGuard.attempt SageFs.EchoSink.Friction (fun () ->
     recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds) :> Task)
 
-let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
-  task {
-    SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-    let sw = System.Diagnostics.Stopwatch.StartNew()
-    let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
-                 ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
-    try
-      let! result = t
-      sw.Stop()
-      // Everything between here and the return decorates the call (counters, audit, log, friction
-      // record, span). Each is best effort (`EchoGuard`): a decoration that throws never replaces
-      // the tool's own result.
-      echoSuccess toolName sw result
-      // The tool body only handed back display text here — no structured
-      // outcome — so a body that reached this line without throwing is
-      // recorded as a clean completion. Tools that can fail without
-      // throwing (session routing, reset/cancel/verify, ...) go through
-      // withEchoOutcome instead, which carries the real SageFsError.
-      do! echoRecord ctx toolName (Ok result) sw
-      SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
-      // Outbound size cap (roast-7 §13): friction/audit recording above kept
-      // the full text; only what actually reaches the agent is bounded.
-      return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
-    with ex ->
-      sw.Stop()
-      echoFailure toolName sw span ex.Message
-      // The exception itself IS the SageFsError case — record it directly
-      // instead of formatting it to text and having classifyFrictionOutcome
-      // re-parse the formatted string back out.
-      do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
-      return raise ex
-  }
-
-let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
-  task {
-    SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-    let sw = System.Diagnostics.Stopwatch.StartNew()
-    let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
-                 ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
-    try
-      let! result = t
-      sw.Stop()
-      echoSuccess toolName sw result
-      SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
-      do! echoRecord ctx toolName (Ok result) sw
-      return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
-    with ex ->
-      sw.Stop()
-      echoFailure toolName sw span ex.Message
-      // See withEcho above — the exception IS the typed case.
-      do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
-      return raise ex
-  }
-
-/// Like `withEcho`, but for a tool body that ALSO reports a structured
-/// `SageFsError` when it did not complete cleanly. Friction is still
-/// classified from the real typed error (never re-parsed from display
-/// text). Unlike the prior behavior, a `Some err` blocker is no longer
-/// returned to the MCP client as ordinary success text — it is raised as a
-/// `SageFsErrorException` so the server's CallToolFilter (McpServer.fs's
-/// `buildErrorResult`) turns it into a structured `IsError=true` result
-/// carrying the algebra's case/message/suggestedAction (sagefs-roast.md
-/// Finding #2: an agent previously could not even reliably detect this kind
-/// of failure, let alone act on a stable case token). `None` means the tool
-/// completed cleanly and its text is returned as-is.
-let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageFs.SageFsError option>) : Task<string> =
+/// The one place a tool call is instrumented and recorded from how it went. A body that threw keeps its own
+/// exception (recorded as `Unexpected`); otherwise the call settles as its text or its typed error, and the caller
+/// decides how the error reaches the client (`withEchoOutcome` raises it, the structured wrappers set isError on
+/// the result they build). Either way the friction store records the real outcome.
+let withEchoSettled (ctx: McpContext) (toolName: string) (t: Task<EchoResult>) : Task<Result<string, SageFs.SageFsError>> =
   task {
     SageFs.Instrumentation.mcpToolInvocations.Add(1L)
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
                  ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
     // Awaiting `t` itself throwing (a genuinely unexpected exception) is
-    // handled separately from the tool reporting a classified `blocker` —
-    // the classified-failure `raise` below must NOT be caught by this same
-    // function's own unexpected-exception handling, or it would be
-    // re-recorded as SageFsError.Unexpected and double-counted.
+    // handled separately from the tool reporting a classified failure, so a
+    // caller's own `raise` of that failure is never re-recorded here as
+    // SageFsError.Unexpected and double-counted.
     let! awaited =
       task {
         try
-          let! result, blocker = t
-          return Ok(result, blocker)
+          let! result = t
+          return Ok result
         with ex -> return Error ex
       }
     match awaited with
@@ -426,23 +370,38 @@ let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageF
       echoFailure toolName sw span ex.Message
       do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
       return raise ex
-    | Ok(result, blocker) ->
+    | Ok echo ->
       sw.Stop()
-      SageFs.EchoGuard.attemptSync SageFs.EchoSink.ToolCounters (fun () ->
-        Log.info ">> %s" toolName
-        Log.debug "%s" (result.Replace("\r\n", "\n").Replace("\n", "\r\n")))
-      let outcome = match blocker with Some err -> Error err | None -> Ok result
+      let outcome = match echo with EchoResult.Failed err -> Error err | EchoResult.Answered text -> Ok text
       do! echoRecord ctx toolName outcome sw
-      match blocker with
-      | None ->
-        SageFs.EchoGuard.attemptSync SageFs.EchoSink.ToolCounters (fun () ->
-          SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-          auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success))
+      match echo with
+      | EchoResult.Answered text ->
+        echoSuccess toolName sw text
         SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
-        return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
-      | Some err ->
+        // Outbound size cap (roast-7 §13): the friction and audit records above kept the full text.
+        return Ok (SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes text)
+      | EchoResult.Failed err ->
         echoFailure toolName sw span (SageFs.SageFsError.describe err)
-        return raise (SageFs.SageFsErrorException(err))
+        return Error err
+  }
+
+/// Like `withEcho`, but for a tool body that ALSO reports a structured
+/// `SageFsError` when it did not complete cleanly. Friction is still
+/// classified from the real typed error (never re-parsed from display
+/// text). A `Some err` blocker is raised as a `SageFsErrorException` so the
+/// server's CallToolFilter (McpServer.fs's `buildErrorResult`) turns it into
+/// a structured `IsError=true` result carrying the algebra's
+/// case/message/suggestedAction (sagefs-roast.md Finding #2). `None` means the
+/// tool completed cleanly and its text is returned as-is.
+let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageFs.SageFsError option>) : Task<string> =
+  task {
+    let echo = task {
+      let! text, blocker = t
+      return match blocker with Some err -> EchoResult.Failed err | None -> EchoResult.Answered text
+    }
+    match! withEchoSettled ctx toolName echo with
+    | Ok text -> return text
+    | Error err -> return raise (SageFs.SageFsErrorException(err))
   }
 
 /// `withEchoOutcome` for a tool whose result carries a secret shown once (`mint_member`). The tool hands back
@@ -461,49 +420,37 @@ let withEchoSecret (ctx: McpContext) (toolName: string) (t: Task<string * string
     return revealed.Value
   }
 
-/// `withEchoOutcome` sibling matching `withEchoNoAwaitRecord`'s statement
-/// order (succeedSpan before the friction record await) for the one caller
-/// (hard_reset_fsi_session, rebuild=true) that used that ordering.
+/// The names hard_reset_fsi_session (rebuild=true) and the echo tests call. They once copied the wrapper with the
+/// span closed before the friction record; every wrapper now settles through `withEchoSettled`.
 let withEchoOutcomeNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string * SageFs.SageFsError option>) : Task<string> =
+  withEchoOutcome ctx toolName t
+
+/// `withEchoOutcome` for a body that says how it went with an `EchoResult`: a failure reaches the client with
+/// isError and its own case, and the friction store records it as one.
+let withEchoResult (ctx: McpContext) (toolName: string) (t: Task<EchoResult>) : Task<string> =
   task {
-    SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-    let sw = System.Diagnostics.Stopwatch.StartNew()
-    let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
-                 ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
-    // See withEchoOutcome above — the classified-failure `raise` below must
-    // not be caught by this function's own unexpected-exception handling.
-    let! awaited =
-      task {
-        try
-          let! result, blocker = t
-          return Ok(result, blocker)
-        with ex -> return Error ex
-      }
-    match awaited with
-    | Error ex ->
-      sw.Stop()
-      echoFailure toolName sw span ex.Message
-      do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
-      return raise ex
-    | Ok(result, blocker) ->
-      sw.Stop()
-      match blocker with
-      | None ->
-        echoSuccess toolName sw result
-        SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
-        do! echoRecord ctx toolName (Ok result) sw
-        return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
-      | Some err ->
-        echoFailure toolName sw span (SageFs.SageFsError.describe err)
-        do! echoRecord ctx toolName (Error err) sw
-        return raise (SageFs.SageFsErrorException(err))
+    match! withEchoSettled ctx toolName t with
+    | Ok text -> return text
+    | Error err -> return raise (SageFs.SageFsErrorException(err))
   }
+
+/// The wrapper for a body that hands back display text only. The text is read once (`classifyEcho`), so a body
+/// that wrote "Error: ..." is still reported with isError and recorded as a failure. A body that threw keeps its
+/// own exception.
+let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
+  withEchoResult ctx toolName (task {
+    let! text = t
+    return classifyEcho text
+  })
+
+let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
+  withEcho ctx toolName t
 
 /// What a hot reload tool call decided. A closed set, so an agent branches on
 /// a token instead of reading the `health` prose.
 [<RequireQualifiedAccess>]
 type HotReloadOutcome =
-  /// enable_hot_reload on a Live session: it is already on.
+  /// enable_hot_reload on a Hot Reload session: it is already on.
   | AlreadyActive
   /// enable_hot_reload on an Interactive or LiveTesting session.
   | RequiresLiveMode
@@ -511,7 +458,7 @@ type HotReloadOutcome =
   | DisabledByEnvVar
   /// disable_hot_reload on a session that never had it.
   | NeverActive
-  /// disable_hot_reload on a Live session: no per-session off-switch.
+  /// disable_hot_reload on a Hot Reload session: no per-session off-switch.
   | RuntimeDisableUnavailable
   /// reset_hot_reload_state with no binding: the kept list was returned.
   | Listed
@@ -582,9 +529,15 @@ module HotReloadReply =
 /// structured result around it.
 let withEchoReply (ctx: McpContext) (toolName: string) (t: Task<HotReloadReply>) : Task<ModelContextProtocol.Protocol.CallToolResult> =
   task {
-    let! text = withEcho ctx toolName (task { let! reply = t in return reply.Text })
+    let! settled = withEchoSettled ctx toolName (task { let! reply = t in return classifyEcho reply.Text })
     let! reply = t
-    return HotReloadReply.toCallToolResult { reply with Text = text }
+    match settled with
+    | Ok text -> return HotReloadReply.toCallToolResult { reply with Text = text }
+    | Error _ ->
+      // A refusal keeps its outcome token and text, and says it failed.
+      let result = HotReloadReply.toCallToolResult reply
+      result.IsError <- System.Nullable true
+      return result
   }
 
 /// A structured result with the REPL's freshness added as a field. The state is a field either way, so a client never has to read
@@ -625,7 +578,14 @@ let withEchoRunTests (ctx: McpContext) (freshness: SageFs.ReplFreshness) (t: Tas
       | SageFs.McpRunTests.RunTestsOutcome.NoEngine ->
         "Error: run_tests needs the SageFs daemon. This process has no live-testing engine to ask.", None, true
     // The tests ran in the REPL's FSI host, which runs the build from before a delta the app took. Said after the receipt, and as a field.
-    let! shown = withEcho ctx "run_tests" (Task.FromResult (SageFs.ReplFreshness.annotate freshness text))
+    let annotated = SageFs.ReplFreshness.annotate freshness text
+    let echo =
+      match isError, classifyEcho annotated with
+      | false, _ -> EchoResult.Answered annotated
+      | true, (EchoResult.Failed _ as failed) -> failed
+      | true, EchoResult.Answered _ -> EchoResult.Failed (SageFs.SageFsError.ToolFailed(annotated, EchoFailureText.noNextStep))
+    let! settled = withEchoSettled ctx "run_tests" (Task.FromResult echo)
+    let shown = match settled with Ok shown -> shown | Error _ -> annotated
     let result = ModelContextProtocol.Protocol.CallToolResult()
     result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = shown))
     structured
@@ -647,9 +607,15 @@ let withEchoAnswer
   (t: Task<SageFs.Features.ToolAnswers.ToolAnswer<SageFs.Features.ToolAnswers.Measurement>>)
   : Task<ModelContextProtocol.Protocol.CallToolResult> =
   task {
-    let! text = withEcho ctx toolName (task { let! answer = t in return SageFs.McpAnalysis.textOf answer })
+    let! settled = withEchoSettled ctx toolName (task { let! answer = t in return classifyEcho (SageFs.McpAnalysis.textOf answer) })
     let! answer = t
     let result = ModelContextProtocol.Protocol.CallToolResult()
+    let text =
+      match settled with
+      | Ok text -> text
+      | Error _ ->
+        result.IsError <- System.Nullable true
+        SageFs.McpAnalysis.textOf answer
     result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = text))
     use doc = System.Text.Json.JsonDocument.Parse(SageFs.McpAnalysis.structuredOf answer)
     result.StructuredContent <- System.Nullable(doc.RootElement.Clone())
@@ -1335,12 +1301,12 @@ true`. The env var is the process-wide kill switch for hot reload.""")>]
             | SageFs.DevReload.Degraded r -> sprintf "Degraded: %s" r
             | SageFs.DevReload.Disabled -> "Disabled"
         // Hot reload cannot be retrofitted onto a running Interactive session.
-        // Live mode installs the DevReload Harmony patches when the FSI host starts AND
+        // The Hot Reload workflow installs the DevReload Harmony patches when the FSI host starts AND
         // starts FSI with `--multiemit-` (see SessionWorkflow.fsiArgs) — that
         // flag is what lets Harmony detour re-eval'd methods, and it can only be
         // set when the session (its FSI process) is created. So the honest answer
-        // depends on the session's actual workflow: a Live session already has
-        // hot reload; an Interactive session must switch to Live (which recreates
+        // depends on the session's actual workflow: a Hot Reload session already has
+        // hot reload; an Interactive session must switch to Hot Reload (which recreates
         // the FSI process) to get it. The old reflection-into-the-daemon approach
         // could never work — DevReloadInjector lives in the session's FSI host
         // process, not the daemon — and reported a misleading "architecture is broken" error.
@@ -1355,21 +1321,21 @@ true`. The env var is the process-wide kill switch for hot reload.""")>]
             if disabledByEnvVar then
                 SageFs.DevReload.DevReloadHealthTracker.transition SageFs.DevReload.Disabled
                 return resultJson HotReloadOutcome.DisabledByEnvVar false workerPort "Disabled (SAGEFS_DEVRELOAD env var)" true
-                    [| "unset SAGEFS_DEVRELOAD or set it to '1', then start the session in Live mode" |]
+                    [| "unset SAGEFS_DEVRELOAD or set it to '1', then start the session in the Hot Reload workflow" |]
             else
                 match workflow with
                 | SageFs.WorkflowTypes.SessionWorkflow.HotReload _ ->
-                    return resultJson HotReloadOutcome.AlreadyActive true workerPort "Active (session is in Live mode)" false
-                        [| "Hot reload is already on — this session was created in Live mode."
+                    return resultJson HotReloadOutcome.AlreadyActive true workerPort "Active (the session runs the Hot Reload workflow)" false
+                        [| "Hot reload is already on: this session was created in the Hot Reload workflow."
                            "Start your web app (run_app, or eval webapp.Run()); connected browsers auto-refresh on save."
                            "Edit any watched .fs file to see the reload fire." |]
                 | SageFs.WorkflowTypes.SessionWorkflow.Interactive
                 | SageFs.WorkflowTypes.SessionWorkflow.LiveTesting ->
                     let modeLabel = SageFs.WorkflowTypes.SessionWorkflow.label workflow
                     return resultJson HotReloadOutcome.RequiresLiveMode false workerPort (sprintf "Not available: this session is in %s mode" modeLabel) false
-                        [| "Hot reload requires Live mode, which is configured when the session's FSI process starts and cannot be turned on afterward."
-                           "Switch this session to Live mode, which recreates the session, so REPL definitions and cell state are lost. Pick Hot Reload in the dashboard's workflow selector, run SageFs: Switch Workflow in VS Code or :SageFsWorkflow in Neovim, or call switch_workflow with target=live."
-                           "Or start a fresh Live session: create_project_session or create_solution_session with workflow=live." |]
+                        [| "Hot reload needs the Hot Reload workflow, which is set when the session's FSI process starts and cannot be turned on afterward."
+                           "Switch this session to the Hot Reload workflow, which recreates the session, so REPL definitions and cell state are lost. Pick Hot Reload in the dashboard's workflow selector, run SageFs: Switch Workflow in VS Code or :SageFsWorkflow in Neovim, or call switch_workflow with target=hotreload."
+                           "Or start a fresh Hot Reload session: create_project_session or create_solution_session with workflow=hotreload." |]
         })
         |> withEchoReply ctx "enable_hot_reload"
 
@@ -1417,7 +1383,7 @@ WORKFLOW:
                 let modeLabel = SageFs.WorkflowTypes.SessionWorkflow.label workflow
                 return resultJson HotReloadOutcome.NeverActive true (sprintf "Not active: this session is in %s mode, so hot reload was never on" modeLabel) [||]
             | SageFs.WorkflowTypes.SessionWorkflow.HotReload _ ->
-                return resultJson HotReloadOutcome.RuntimeDisableUnavailable false "Active: this session is in Live mode; a per-session runtime off-switch is not wired up"
+                return resultJson HotReloadOutcome.RuntimeDisableUnavailable false "Active: this session runs the Hot Reload workflow, and there is no per-session runtime off-switch"
                     [| "To turn hot reload off, switch this session to Interactive mode, which recreates the session, so REPL state is lost. Pick REPL in the dashboard's workflow selector, run SageFs: Switch Workflow in VS Code or :SageFsWorkflow in Neovim, or call switch_workflow with target=interactive."
                        "To disable hot reload daemon-wide, start the daemon with SAGEFS_DEVRELOAD=0." |]
         })
@@ -1549,7 +1515,10 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
                         match el.TryGetProperty "unavailable" with
                         | true, reason -> return sprintf "Error: %s" (reason.GetString())
                         | false, _ -> return sprintf "Error: %s" (SageFs.Features.KeptState.ReflectionReadsError.describe why)
-                | false, _ -> return "Error: this worker doesn't report reflection reads. It's older than the build that watches them."
+                | false, _ ->
+                    return
+                      sprintf "Error: this worker doesn't report reflection reads. It's older than the build that watches them.%sRun hard_reset_fsi_session with rebuild=true, so the worker runs the current build"
+                        EchoFailureText.nextMarker
             | false ->
                 use content = new System.Net.Http.StringContent(SageFs.Json.serialize SageFs.Json.standard {| mode = mode |}, System.Text.Encoding.UTF8, "application/json")
                 let! resp = keptStateClient.PostAsync(workerUrl + "/hotreload/reflection-mode", content)
@@ -1560,7 +1529,18 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
                     match SageFs.Features.KeptState.ReflectionReadsJson.parse doc.RootElement with
                     | Ok report -> return sprintf "Switched. %s" (describe report)
                     | Error why -> return sprintf "Switched, but %s" (SageFs.Features.KeptState.ReflectionReadsError.describe why)
-                | false -> return "Error: " + doc.RootElement.GetProperty("message").GetString()
+                | false ->
+                    // A worker's error body may carry no `message`; the status code still says what happened.
+                    let message =
+                      match doc.RootElement.ValueKind with
+                      | System.Text.Json.JsonValueKind.Object ->
+                        match doc.RootElement.TryGetProperty "message" with
+                        | true, m -> Some (m.GetString())
+                        | false, _ -> None
+                      | _ -> None
+                    match message with
+                    | Some m -> return "Error: " + m
+                    | None -> return sprintf "Error: the worker refused the mode change (HTTP %d) and said why in no message." (int resp.StatusCode)
         })
         |> withEcho ctx "set_reflection_read_mode"
 
