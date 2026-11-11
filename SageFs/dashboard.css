@@ -3704,6 +3704,14 @@ h2 {
   margin-left: 0.5rem;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
+  /* A target of its own size: this was a 42x15px text button, the smallest on the page. 1.5rem is the 24px minimum a pointer
+     target needs, and it grows with the font. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.5rem;
+  min-width: 2.75rem;
+  padding: 0 0.5rem;
 }
 
 .session-card-help[open] > summary {

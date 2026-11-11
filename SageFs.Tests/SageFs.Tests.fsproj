@@ -1014,6 +1014,7 @@
         <!-- Before the browser runner, which lists the journeys this file adds. -->
         <Compile Include="DashboardPanelVisibilityTests.fs" />
         <Compile Include="DashboardNoSessionLinesTests.fs" />
+        <Compile Include="DashboardControlNamesTests.fs" />
         <Compile Include="DashboardPanelContextBrowserTests.fs" />
         <!-- Movable panels: the pure layout and its store, the page drawn from a layout, then the browser matrix (before the runner, which lists it). -->
         <Compile Include="PaneLayoutTests.fs" />

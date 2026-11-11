@@ -488,6 +488,30 @@ let toggleManualProject (current: string) (path: string) : string =
 /// and a later rule gave the same button a second label.
 let buttonWord (word: string) : XmlNode = Elem.span [ Attr.class' "session-btn-word" ] [ textEnc word ]
 
+/// The three buttons on a session card that take a session down, least to most final.
+[<RequireQualifiedAccess>]
+type TeardownButton =
+  | Stop
+  | Close
+  | Delete
+
+module TeardownButton =
+  /// The word drawn on the button.
+  let word (button: TeardownButton) : string =
+    match button with
+    | TeardownButton.Stop -> "Stop"
+    | TeardownButton.Close -> "Close"
+    | TeardownButton.Delete -> "Delete"
+
+  /// The accessible name and the tooltip. It opens with the word on the button, because a screen-reader user says and hears
+  /// the same word a sighted user reads: the names used to be "Stop", "Dispose" and "Purge" over buttons that read Stop, Close
+  /// and Delete.
+  let name (button: TeardownButton) : string =
+    match button with
+    | TeardownButton.Stop -> "Stop — unload the session and keep its saved state, so it can be resumed"
+    | TeardownButton.Close -> "Close — end the session; no separate saved state remains, and Delete removes the manifest entry"
+    | TeardownButton.Delete -> "Delete — end the session and remove its saved binaries and manifest entry; this cannot be undone, so it asks first"
+
 /// Small color-coded auto-open state icon for a session card.
 /// Green = auto-open ON (namespaces/modules will be opened during warmup),
 /// dim/red = OFF (skipped). The tooltip spells out the state and action;
@@ -816,6 +840,10 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
       ]
   ]
 
+/// The accessible name of the eval-stats toggle. It opens with the word on the button, so a person who says "click timing"
+/// to a screen reader finds it.
+let timingButtonName = "Timing: show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
+
 /// Render eval stats: just the eval count by default, with all the perf detail
 /// (avg/min/max, sparkline, P50/P95) behind a ▥ toggle — perf numbers are noise
 /// unless you're chasing a slowdown, so they stay hidden until asked for.
@@ -824,7 +852,10 @@ let renderEvalStats (stats: EvalStatsView) =
     textEnc (evaluationsText stats.Count)
     Elem.button
       [ Attr.class' "perf-toggle-btn"
-        Attr.create "aria-label""Show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
+        Attr.create "aria-label" timingButtonName
+        Attr.create "aria-expanded" "false"
+        Ds.attr' ("aria-expanded", sprintf "$%s ? 'true' : 'false'" Signals.PerfStatsOpen)
+        Ds.preserveAttr "aria-expanded"
         Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
       // A word: the chart glyph drew as a row of empty boxes in the page's font, and three reviewers took it for a missing character.
       [ textEnc "timing" ]
@@ -2300,16 +2331,16 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
-                  Attr.create "aria-label""Stop — unload the session (saved memory kept)"
-                  Attr.create "title" "Stop — unload the session (saved memory kept)"
+                  Attr.create "aria-label" (TeardownButton.name TeardownButton.Stop)
+                  Attr.create "title" (TeardownButton.name TeardownButton.Stop)
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" sid)) ]
-                [ Text.raw "■"; buttonWord "Stop" ]
+                [ Text.raw "■"; buttonWord (TeardownButton.word TeardownButton.Stop) ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
-                  Attr.create "aria-label""Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
-                  Attr.create "title" "Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
+                  Attr.create "aria-label" (TeardownButton.name TeardownButton.Close)
+                  Attr.create "title" (TeardownButton.name TeardownButton.Close)
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
-                [ Text.raw "⌫"; buttonWord "Close" ]
+                [ Text.raw "⌫"; buttonWord (TeardownButton.word TeardownButton.Close) ]
               // Purge is the irreversible teardown level — it deletes binaries
               // AND the manifest entry, not just the running session — and it
               // sits 28px from Stop with no other affordance distinguishing
@@ -2319,10 +2350,10 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               // severity the label already claims.
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
-                  Attr.create "aria-label""Purge — dispose and delete binaries + manifest entry (corrupt state)"
-                  Attr.create "title" "Purge — dispose and delete binaries + manifest entry (corrupt state)"
-                  Ds.onEvent ("click", sprintf "if(confirm('Purge session %s? This deletes its saved binaries and manifest entry. This cannot be undone.')){%s}" sid (Ds.post (sprintf "/dashboard/session/purge/%s" sid))) ]
-                [ textEnc (Glyphs.text Glyph.Remove); buttonWord "Delete" ]
+                  Attr.create "aria-label" (TeardownButton.name TeardownButton.Delete)
+                  Attr.create "title" (TeardownButton.name TeardownButton.Delete)
+                  Ds.onEvent ("click", sprintf "if(confirm('Delete session %s? This deletes its saved binaries and manifest entry. This cannot be undone.')){%s}" sid (Ds.post (sprintf "/dashboard/session/purge/%s" sid))) ]
+                [ textEnc (Glyphs.text Glyph.Remove); buttonWord (TeardownButton.word TeardownButton.Delete) ]
             ]
             // What the three that take a session down do, in words on the card: three reviewers saw Stop, Dispose and Purge side by
             // side with no hint of how they differ, and a tooltip is not on screen for a person who does not hover.
@@ -2568,14 +2599,20 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
         // badge — §4.1's "the dashboard cannot see the workflow at all")
         // rather than as its own flex child, so it never adds a second
         // overflow surface.
-        Elem.div
-          [ Attr.class' "tabline-info"
-            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:0.857rem;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
-          // The word "Session:" drops out below 560px (dashboard.css), leaving the id and the workflow switcher whole.
-          Elem.span [ Attr.class' "tabline-session-label" ] [ textEnc "Session: " ]
-          textEnc snap.SessionId
+        match snap.SessionId with
+        | "" ->
+          // No session in view: the cell would read "Session:" with nothing after it, and the badge beside it already says
+          // "No session". Only the switcher's empty morph target stays, so the page keeps the element a later push fills.
           renderWorkflowSwitcher snap.WorkflowLabel snap.SessionId
-        ]
+        | sessionId ->
+          Elem.div
+            [ Attr.class' "tabline-info"
+              Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:0.857rem;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
+            // The word "Session:" drops out below 560px (dashboard.css), leaving the id and the workflow switcher whole.
+            Elem.span [ Attr.class' "tabline-session-label" ] [ textEnc "Session: " ]
+            textEnc sessionId
+            renderWorkflowSwitcher snap.WorkflowLabel sessionId
+          ]
         // The duplicate #eval-stats id (this wrapper AND renderEvalStats's own
         // root both used to carry it — an invalid-HTML morph-target hazard in
         // an app whose whole render model is "one #main, one morph") is fixed
