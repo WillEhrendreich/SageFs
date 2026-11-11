@@ -14,6 +14,7 @@ open SageFs.WarmUp
 open SageFs.Features.CellDependenciesReport
 open SageFs.Utils
 open SageFs.McpSessionRouting
+open SageFs.McpSessionState
 open SageFs.McpRouteError
 open SageFs.McpAnalysisViews
 
@@ -96,8 +97,6 @@ module McpTools =
     match ctx.SessionMap.TryGetValue(resolvedKey agent) with
     | true, sid -> sid
     | _ -> ""
-
-  let featureStates = Collections.Concurrent.ConcurrentDictionary<string, Features.FeatureHooks.FeaturePushState ref>()
 
   let featureStateForSession (ctx: McpContext) sessionId =
     match currentTransportSessionId.Value with
@@ -219,17 +218,6 @@ module McpTools =
   let reaperIsConnected (tracker: AgentActivityTracker.Tracker) (connectionId: string) : bool =
     AgentActivityTracker.getPresence tracker connectionId |> Option.isSome
 
-  /// Per-session compilation context state (evaluated modules, file cache).
-  let compilationStates =
-    Collections.Concurrent.ConcurrentDictionary<string, Middleware.CompilationContext.CompilationState>()
-
-  /// Per-session TypeLoadException diagnostic.
-  /// When a TypeLoadException poisons an FSI session, the diagnostic string is stored here
-  /// so that targeted_verify and get_fsi_status can report the compromised type identity.
-  /// Cleared on hard_reset_fsi_session (which creates a fresh FSI session).
-  let typeIdentityDiagnostics =
-    Collections.Concurrent.ConcurrentDictionary<string, string>()
-
   /// Sessions whose rebuild was requested through a tool and whose restart call has not answered yet,
   /// with when it was asked for. The manager records a rebuild as in progress a moment AFTER the request
   /// is posted, and a status call that lands in that moment would read a session with no rebuild running.
@@ -237,7 +225,6 @@ module McpTools =
   /// queued behind the request, so by the time it is looked at the rebuild is on the record.
   let rebuildsRequested =
     Collections.Concurrent.ConcurrentDictionary<string, DateTime>()
-
 
   // Session working-directory routing/matching helpers moved to
   // SageFs/McpSessionRouting.fs (pure, testable; roast-8 §2 god-file split).
@@ -2248,6 +2235,7 @@ module McpTools =
       | Result.Ok msg ->
         // Release every agent routed to the session so it no longer claims occupancy.
         evictSessionEntries ctx sessionId
+        releaseSessionState sessionId
         return msg, None
       | Result.Error err -> return SageFsError.describeForAgent err, Some err
     }

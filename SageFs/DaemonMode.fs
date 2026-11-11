@@ -2328,6 +2328,7 @@ let run
           OnSessionRemoved =
             fun sid ->
               SessionOwners.release (WorkerProtocol.SessionId.value sid)
+              McpSessionState.releaseSessionState (WorkerProtocol.SessionId.value sid)
               // A throwaway worker built for this session's confirmation goes with it.
               ConfirmWorkers.sessionRemoved sid
           OnAppOutput = fun sid stream line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) stream line
