@@ -2,6 +2,111 @@
 
 Roadmap item: `jupyter-kernel-that-works` (Later, REPL). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` was read on that commit. The plan body under "Resume here" is
+sound; this section pins today's facts, orders the commits, and answers two of its open questions.
+
+### 1. Outcome
+
+Today `sagefs --jupyter <conn.json>` answers `execute_request` with a result on IOPub and a reply of `{}`; nothing installs
+it; tab completion and interrupt do nothing. Afterwards: `sagefs jupyter install` writes a kernelspec, a notebook picks
+"F# (SageFs)", a cell runs and shows its value, completion and interrupt work, errors carry `ename`/`evalue`/`traceback`,
+and the word "experimental" leaves `Readme.md:459` and `:463`.
+
+Outcome gate: `SageFs.Tests/JupyterKernelSocketTests.fs:131`, `Integration.hostList "the Jupyter kernel over a real socket"`,
+grown into the matrix in "What done looks like" (message type by daemon state), one `testTask` per cell. The roadmap text and
+`Readme.md:463` say nothing opens a ZMQ socket; that has been false since 09717cec, and the one socket case PASSED in the
+0.6.945 release gate (`--integration-host[1/5]`, 93 of 93, Trusted; `~/.local/share/sagefs-gate/checkout-8431b56a.tiers/integration-host-1of5.log`).
+Step 1 of the plan body ("confirm the socket test passes") is answered. Linux proven; macOS and Windows unproven, and the
+kernelspec directory differs per OS (step 6).
+
+### 2. Where the code is today
+
+- `SageFs/JupyterKernel.fs` (640 lines): `ExecuteOutput.MimeType: string:246`, `ImplementationVersion = "0.5.0":309`,
+  `ExecuteReplyContent:275`, `CompleteReplyContent:281`, `handleExecuteRequest:352`, `handleCompleteRequest:374`,
+  `handleIsComplete:380`, `KernelSpec:388` with `generate:396`, `Router.route:430`. The `{}` replies: execute `:459`, complete
+  `:464` (result bound to `_result`), is_complete `:472`, unknown `:486`. `KernelLifecycle.processMessage` serialises at
+  `:600-631`; `renderKernelSpecJson:634` is called from tests only.
+- `SageFs/JupyterTransport.fs` (216): `processSocket:147`, shared `state = ref KernelState.initial:197` written from the shell
+  loop `:211` and the control loop `:216` with no lock.
+- `SageFs/JupyterDaemonBridge.fs` (290): `/exec` decode `:64`, session proxy `:178`, completions answered `NotOffered:279-286`
+  because `/exec` has no completion endpoint. `Timeouts.jupyterSessionWarmup` at `Timeouts.fs:923` (600 s).
+- `SageFs/Program.fs`: `CliCommand.Jupyter:147`, parsed `:188-191`, run `:917-933` (prints the "start the daemon first" hint).
+  `CliCommand.Check:130` is the neighbour for a new `JupyterInstall` case.
+- `SageFs/DaemonClient.fs:294` `runSseListener` reads `data: ` lines (`:314`); `McpStdioBridge.fs:448` `drainSse` is a second
+  SSE reader. Phase B uses the first; do not write a third.
+- Tests: `JupyterKernelTests.fs:47` (lists `ExecuteRequest handling:197`, `CompleteRequest handling:255`, `IsComplete
+  handling:282`, `Kernel spec:347`), `JupyterDaemonBridgeTests.fs`, the socket test (fixed sleep `Task.Delay
+  TestTimeouts.jupyterKernelSubscribe` at `:185`, 500 ms, `TestTimeouts.fs:152`; `jupyterKernelExec` 120 s at `:148`).
+- `ArchitectureTests.fs:403-405` forbids `JupyterKernel` in Core. NetMQ 4.0.2.2 at `Directory.Packages.props:112`.
+- This machine has no `jupyter` on PATH; `python3` and `uv` (mise) are. The manual frontend check needs
+  `uvx --from jupyterlab jupyter lab` or a venv; nothing in the suite depends on Python.
+- `[not verified]`: jupyter_core's kernelspec directories per OS; whether VS Code renders `application/json` as a tree; what
+  `nbclient` does with a `{}` `execute_reply`.
+
+### 3. Steps
+
+One commit each. New test files are `<Compile Include>` lines in `SageFs.Tests/SageFs.Tests.fsproj` before `Program.fs`
+(`:1194`); `JupyterKernelSocketTests.fs` is at `:831`.
+
+1. RED, domain: `JupyterKernelTests.fs` "ExecuteRequest handling": "an execute_request is answered with status ok and the
+   execution count" and "a failing execute is answered with status error, ename, evalue and traceback". Parse the reply JSON
+   through `SageFs.Json`. Red because of `:459`. Green: build the reply from the `ExecuteReplyContent` already computed.
+2. RED, domain: "CompleteRequest handling" and "IsComplete handling": the reply carries matches, cursor_start, cursor_end,
+   and the four spec statuses. Green at `:464` and `:472`.
+3. Domain: `ReplyContent` DU (`ExecuteOk | ExecuteError | Complete | IsComplete | Interrupt | Shutdown | KernelInfo`) with one
+   `toWire`; `Router.route` returns it; `Raw "{}"` survives only at `:486`. `MimeType` DU with `toWire`; `ExecuteOutput.Data:
+   Map<MimeType, string>`. `ImplementationVersion` from the assembly, not `"0.5.0"`.
+4. RED, domain then edge: "execute_input precedes busy-result-idle with the code and the count"; "an interrupt_request calls
+   the cancel function once and replies ok". Bridge function on `POST /api/cancel-eval`.
+5. RED, domain: `KernelSpec.installDir` table over (platform, `JUPYTER_PATH`, `--user`/`--prefix`), paths via `Path.Combine`;
+   confirm the defaults against jupyter_core's docs first and write them into the test. Then the writer (temp dir, idempotent,
+   read-only target is an `Error` with the path). Edge: `CliCommand.JupyterInstall` beside `Check:130`; a `check` line.
+   File-disjoint from 1 to 4 except `Program.fs`.
+6. Socket test: replace `:185`'s sleep with "send `kernel_info_request` until the subscriber sees a status broadcast", then
+   grow the matrix. The daemon-down cell expects a stated error naming the port, never a hang.
+7. Sim in `SageFs.Tests` (Simulation references Core only): fake daemon, faults, the six invariants, and the twin (today's
+   `{}` router) shown to fail the reply-status invariant.
+8. Edge: the `state` ref at `JupyterTransport.fs:197`: one writer (a channel the two loops post to) or a lock. Smaller wins.
+9. Docs: `Readme.md:459,463`, `docs/coming-from-jupyter.md`, after 6 is green in a full gate. Roadmap text via the roadmap process.
+10. Phase B: SSE reader on `GET /events?sessionId=`, `ValueTreeJson.ofBinding`, `application/json` output, manual check.
+
+`DECISION:` ship phase A and drop "experimental" before phase B (recommend yes). `DECISION:` `sagefs jupyter install` as its
+own command (recommend) or under `check --fix`. `DECISION:` a JS/TS MIME renderer for VS Code if measurement says so
+(recommend no for now).
+
+### 4. How to check it
+
+- Inner loop: SageFs session on `SageFs.Tests`; eval `Router.route` with the fake handlers from `JupyterKernelTests.fs` and
+  read the reply; `run_tests` filtered to `JupyterKernel`.
+- Lane: `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Socket inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary --filter-test-list "Jupyter kernel over a real socket"`.
+- Acceptance: unfiltered `--summary` and unfiltered `--integration-host --summary`, `TRUST ... verdict=Trusted`.
+- Manual, once, recorded in the commit: `jupyter console --kernel sagefs` and a JupyterLab cell against the installed spec.
+
+### 5. Traps in this repo
+
+- SAGE-005: `KernelSpec` has four string fields (`:388-393`); `installDir` takes platform and env as DUs, not two strings.
+- Closed string sets (`MimeType`, kernel status, reply status) are DUs with one `toWire`; `MimeType: string` is the open fault.
+- JSON goes through `SageFs.Json` profiles, never `sprintf` of a new shape (the existing `sprintf` JSON at `:600-631` is what
+  step 3 retires).
+- Timing: the 500 ms subscribe sleep is the trap step 6 removes; no new `Task.Delay` in the socket test.
+- Wire: none of the daemon's endpoints change, `Plugin: n/a`, unless phase B adds an endpoint.
+- No new NuGet package: NetMQ is already in; no Python test dependency.
+- Linux only: the kernelspec path table is tested per platform value, not run per platform.
+
+### 6. Size and order
+
+M for phase A (about a week), M for phase B. Order: 1, 2, 3 serial; 5 in parallel with them; 4 after 3; 6 after 4 and 5;
+7 after 3; 8 any time; 9 after a green gate. First commit: step 1's two red tests.
+
+### 7. Not now
+
+- `text/html` tables for records; decide after the value tree is in front of Will.
+- A VS Code MIME renderer (JS/TS, a different stack).
+- A notebook over a live session (`a-notebook-over-a-live-session`) builds on phase B.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -12,7 +117,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Size | M, then M for the value tree |
 | Branch and worktree | none yet |
 | Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: an `execute_request` is answered with `status` ok. Then take the steps below in order. |
+| Next action | Step 1 of the body (does the socket test pass) is answered: yes, in the 0.6.945 gate. Write the first failing test: an `execute_request` is answered with `status` ok (Work order step 1). Then take the steps in order. |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
@@ -22,9 +127,9 @@ A person with .NET and Jupyter installed runs one command (`sagefs jupyter insta
 
 ## What exists today
 
-The roadmap line and `Readme.md:463` say nothing opens a ZMQ socket. That is stale on master. `SageFs.Tests/JupyterKernelSocketTests.fs` (224 lines, added by commit 09717cec on 2026-10-21) starts a daemon, starts `sagefs --jupyter <connection.json>` as a process, connects a NetMQ `DealerSocket` to the shell port and a `SubscriberSocket` to the iopub port, sends a signed `execute_request` for `1 + 1`, and asserts an `execute_result` containing `val it: int = 2` and no `error`. It registers as `Integration.hostList`, so it runs under `--integration-host`. I did not run it, so I can say it exists and what it asserts, not that it passes. `docs/progress.md:549` records an earlier manual run with a real `jupyter_client` evaluating `1 + 1`.
+The roadmap line and `Readme.md:463` say nothing opens a ZMQ socket. That is stale on master. `SageFs.Tests/JupyterKernelSocketTests.fs` (224 lines, added by commit 09717cec on 2026-10-21) starts a daemon, starts `sagefs --jupyter <connection.json>` as a process, connects a NetMQ `DealerSocket` to the shell port and a `SubscriberSocket` to the iopub port, sends a signed `execute_request` for `1 + 1`, and asserts an `execute_result` containing `val it: int = 2` and no `error`. It registers as `Integration.hostList`, so it runs under `--integration-host`. It passed in the 0.6.945 release gate (`--integration-host[1/5]`, Trusted, read 2026-11-11). `docs/progress.md:549` records an earlier manual run with a real `jupyter_client` evaluating `1 + 1`.
 
-Code (all in the daemon project, not Core; `ArchitectureTests.fs:413` forbids `JupyterKernel` in Core):
+Code (all in the daemon project, not Core; `ArchitectureTests.fs:403-405` forbids `JupyterKernel` in Core):
 - `SageFs/JupyterKernel.fs` (640 lines): message types, `WireProtocol` (HMAC), `Router.route`, `FsiBridge`, `KernelLifecycle.processMessage`, `KernelSpec.generate` and `KernelLifecycle.renderKernelSpecJson`.
 - `SageFs/JupyterTransport.fs` (216 lines): five NetMQ sockets, `parseFrames`, `buildReplyFrames`, `buildIOPubFrames`, the shell and control loops (`Async.RunSynchronously` per message on a dedicated thread, commented as deliberate).
 - `SageFs/JupyterDaemonBridge.fs` (290 lines): `makeSessionProxy` sends code to the daemon's `/exec`, creates a session for the kernel's working directory when none exists, waits `Timeouts.jupyterSessionWarmup` (600 s, `SAGEFS_JUPYTER_WARMUP_SECONDS`) for it. `Program.fs:732` wires it and passes `Environment.CurrentDirectory`, so a notebook opened in a project folder gets that project's session.
