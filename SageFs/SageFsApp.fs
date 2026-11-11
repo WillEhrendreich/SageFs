@@ -1004,7 +1004,9 @@ module SageFsUpdate =
       // across two checkouts of one repo) can never clobber each other.
       let model', outcome =
         tryUpdateLiveTestingState sessionId (fun cycle ->
-          let allResults = nonEmptyBatches |> List.collect Array.toList
+          // A run the code was edited under judged older code: its verdicts never become the rows.
+          let batches = nonEmptyBatches |> List.map (Features.LiveTesting.SupersededResults.mark cycle.TestState.RunPhases)
+          let allResults = batches |> List.collect Array.toList
           // Each result is marked with what the run it belongs to ran against, BEFORE the rows are
           // computed from it, so a row never shows a verdict with the wrong provenance.
           let provenance = Features.LiveTesting.RunBasis.provenanceOf cycle.RunBasis
@@ -1024,23 +1026,23 @@ module SageFsUpdate =
           let merged, changedEntries =
             Features.LiveTesting.LiveTesting.mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries
               stamped
-              nonEmptyBatches
+              batches
           let mergedWithHistory = Features.LiveTesting.RequestedRuns.stampResults sessionId allResults merged
           let refresh =
             match Array.isEmpty changedEntries with
             | true -> LiveTestingStatusRefresh.KeepExisting
             | false -> LiveTestingStatusRefresh.PatchChangedEntries changedEntries
           let cycle', timings = finalizeLiveTestingState refresh cycle mergedWithHistory
-          cycle', (timings, changedEntries)) model
+          cycle', (timings, changedEntries, batches)) model
       mergeSw.Stop()
       Instrumentation.liveTestingBufferedMergeMs.Record(mergeSw.Elapsed.TotalMilliseconds)
       let pendingResults =
-        PendingRunSummary.addBatches nonEmptyBatches model.PendingRunSummary
+        PendingRunSummary.addBatches (outcome |> Option.map (fun (_, _, batches) -> batches) |> Option.defaultValue nonEmptyBatches) model.PendingRunSummary
       applySw.Stop()
       Instrumentation.liveTestingBufferedApplyMs.Record(applySw.Elapsed.TotalMilliseconds)
       match outcome with
       | None -> model, []
-      | Some (timings, changedEntries) ->
+      | Some (timings, changedEntries, _) ->
         match timings with
         | Some phaseTimings when applySw.Elapsed.TotalMilliseconds >= 100.0 ->
           Utils.Log.warn
@@ -1740,6 +1742,8 @@ module SageFsUpdate =
           Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
             runIds Features.LiveTesting.RunTrigger.FileSave targetSession lt
           |> List.map SageFsEffect.TestCycle
+        // A busy session owes this run: the save that asked for it will not ask again.
+        let lt = Features.LiveTesting.LiveTestCycleState.queueAffectedWhenBusy runIds Features.LiveTesting.RunTrigger.FileSave targetSession lt
         match Array.isEmpty quarantinedIds with
         | true -> { model with LiveTesting = lt }, effects
         | false ->

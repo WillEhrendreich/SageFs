@@ -524,3 +524,71 @@ let noEmptyEscapeTests =
         |> Expect.equal "a script no test reaches is genuinely unaffected" SelectionPrecision.NoImpactedTests
       | None -> failtest "expected a decision"
   ]
+
+// ---------------------------------------------------------------------------
+// A run the session is busy for is owed, and a run the code was edited under is not a verdict.
+// A save is the last event of an edit, so a run dropped because the session was busy is never asked for again.
+// ---------------------------------------------------------------------------
+
+let private scriptRefs : SymbolReference list =
+  [ { SymbolFullName = "Script.add"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Script.fsx"; Line = 1 } ]
+
+let private scriptTest = mkTest "Script.Tests.adds" TestCategory.Unit
+
+/// A session running a test that reaches `Script.add`, typing in `Script.fsx`.
+let private busyWithScript () : LiveTestCycleState =
+  let testFile : SymbolReference list =
+    [ { SymbolFullName = "Script.Tests.adds"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Script.Tests.fs"; Line = 1 }
+      { SymbolFullName = "Script.add"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Script.Tests.fs"; Line = 2 } ]
+  { LiveTestCycleState.empty with
+      TestState =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = [| scriptTest |]
+            SessionDiscovery = Map.ofList [ "s1", DiscoveryProgress.Completed ]
+            RunPhases = Map.ofList [ "s1", TestRunPhase.Running (RunGeneration.next RunGeneration.zero) ] }
+      DepGraph =
+        SymbolGraphBuilder.updateGraph LiveTestingDefaults.TestModuleIdentifier LiveTestingDefaults.Framework testFile "Script.Tests.fs" TestDependencyGraph.empty
+      LastTrigger = RunTrigger.Keystroke
+      ActiveFile = Some "Script.fsx"
+      LatestContent = Some "let add a b = a - b"
+      LatestAnalysisIdentity = Some (AnalysisIdentity.ofContent "let add a b = a - b") }
+
+let private runEnds (state: LiveTestCycleState) =
+  LiveTestCycleState.promoteQueuedRebuild (Some "s1") { state with TestState = { state.TestState with RunPhases = Map.ofList [ "s1", TestRunPhase.Idle ] } }
+
+let private ranTests (effects: TestCycleEffect list) =
+  effects
+  |> List.collect (function
+    | TestCycleEffect.RunAffectedTests req -> req.Tests |> Array.toList |> List.map (fun tc -> tc.Id)
+    | _ -> [])
+
+[<Tests>]
+let owedRunTests =
+  testList "Live testing owes a run the session was busy for" [
+    testCase "WHY — a script keystroke during a run starts its tests when that run ends, because nothing else will ask again" <| fun _ ->
+      let effects, state = LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Script.fsx", scriptRefs)) (busyWithScript ())
+      effects |> Expect.isEmpty "nothing starts while the session is busy"
+      runEnds state |> fst |> ranTests |> Expect.equal "the owed run starts" [ scriptTest.Id ]
+
+    testCase "WHY — a save the worker hook reported during a run starts its tests when that run ends" <| fun _ ->
+      let state = LiveTestCycleState.queueAffectedWhenBusy [| scriptTest.Id |] RunTrigger.FileSave (Some "s1") (busyWithScript ())
+      runEnds state |> fst |> ranTests |> Expect.equal "the owed run starts" [ scriptTest.Id ]
+
+    testCase "a hook save on an idle session owes nothing: it runs at once" <| fun _ ->
+      let idle = busyWithScript () |> fun s -> { s with TestState = { s.TestState with RunPhases = Map.empty } }
+      (LiveTestCycleState.queueAffectedWhenBusy [| scriptTest.Id |] RunTrigger.FileSave (Some "s1") idle).QueuedRebuild
+      |> Expect.isNone "nothing is queued"
+
+    testCase "WHY — results of a run the code was edited under are stale, never the row, because they judged older code" <| fun _ ->
+      let gen = RunGeneration.next RunGeneration.zero
+      let edited = Map.ofList [ "s1", TestRunPhase.RunningButEdited gen ]
+      let passed : TestRunResult =
+        { TestId = scriptTest.Id; TestName = scriptTest.FullName; Result = TestResult.Passed System.TimeSpan.Zero; Timestamp = System.DateTimeOffset.UnixEpoch; Output = None }
+      SupersededResults.mark edited [| passed |]
+      |> Array.map (fun r -> r.Result)
+      |> Expect.equal "the verdict is withheld" [| TestResult.NoResult NoResultReason.CodeEdited |]
+      SupersededResults.mark (Map.ofList [ "s1", TestRunPhase.Running gen ]) [| passed |]
+      |> Expect.equal "a run nobody edited under keeps its verdicts" [| passed |]
+  ]
+

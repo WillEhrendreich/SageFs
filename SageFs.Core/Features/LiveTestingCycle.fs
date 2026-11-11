@@ -14,6 +14,20 @@ open SageFs.Measures
 // per-session cycle state. Daemon-only. The isolated FSI host compiles LiveTestingTypes.fs and never
 // this file, so what lives here costs the host nothing.
 
+/// Results that arrive after an edit marked their run superseded (`TestRunPhase.RunningButEdited`) judged older code.
+module SupersededResults =
+  /// Each verdict becomes `NoResult CodeEdited`: the row goes stale instead of showing it, it is no flake sample,
+  /// and a receipt counts it as not reported. The run the edit queued gives the real verdict.
+  let mark (phases: Map<string, TestRunPhase>) (batch: TestRunResult array) : TestRunResult array =
+    match phases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
+    | false -> batch
+    | true ->
+      batch
+      |> Array.map (fun r ->
+        match r.Result with
+        | TestResult.NoResult _ -> r
+        | _ -> { r with Result = TestResult.NoResult NoResultReason.CodeEdited })
+
 /// What a coverage reading taken after a test may change in the stored per-test bitmaps.
 module CoverageReading =
   /// A reading that hit nothing never replaces or creates a bitmap. A run against evaluated code is blind to that
@@ -637,6 +651,9 @@ type QueuedMeans =
   /// Evaluate exactly this text in the live session, then run the tests against what was evaluated. The text is
   /// the one the held-back check was about, so the run is judged against what was saved or typed.
   | EvaluateThenRun of content: string
+  /// Run the tests against what the session holds now: a script that was evaluated, or a save the worker's hook
+  /// already reloaded. Nothing needs evaluating first.
+  | RunOnly
 
 /// A run the session owes: an edit's check found the session busy, so nothing was started, and the edit is the
 /// last thing that will ask for this run. `LiveTestCycleState.promoteQueuedRebuild` starts it when the busy run ends.
@@ -858,6 +875,17 @@ module LiveTestCycleState =
                   SessionId = queued.SessionId
                   InstrumentationMaps = queued.InstrumentationMaps } } ],
         { s with QueuedRebuild = None }
+    | Some ({ Means = QueuedMeans.RunOnly } as queued)
+        when queued.SessionId = targetSession
+             && queued.AnalysisIdentity = s.LatestAnalysisIdentity ->
+        [ TestCycleEffect.RunAffectedTests
+            { Tests = queued.Tests
+              Trigger = queued.Trigger
+              TreeSitterElapsed = queued.TreeSitterElapsed
+              FcsElapsed = queued.FcsElapsed
+              SessionId = queued.SessionId
+              InstrumentationMaps = queued.InstrumentationMaps } ],
+        { s with QueuedRebuild = None }
     | Some queued
         when queued.SessionId = targetSession
              && queued.AnalysisIdentity = s.LatestAnalysisIdentity ->
@@ -1024,6 +1052,20 @@ module LiveTestCycleState =
                   SessionId = req.SessionId
                   InstrumentationMaps = req.InstrumentationMaps
                 }
+          // A script keystroke runs its tests against what was evaluated; that run is owed too.
+          | TestCycleEffect.RunAffectedTests req
+              when TestRunPhase.isSessionRunning req.SessionId state.TestState.RunPhases ->
+                Some {
+                  Means = QueuedMeans.RunOnly
+                  Tests = req.Tests
+                  Trigger = req.Trigger
+                  FilePath = filePath
+                  AnalysisIdentity = analysisIdentity
+                  TreeSitterElapsed = req.TreeSitterElapsed
+                  FcsElapsed = req.FcsElapsed
+                  SessionId = req.SessionId
+                  InstrumentationMaps = req.InstrumentationMaps
+                }
           | _ ->
               None)
       with
@@ -1155,6 +1197,34 @@ module LiveTestCycleState =
             SessionId = targetSession
             InstrumentationMaps = sessionMaps
           } ]
+
+  /// The hook's run when the session is busy: kept as owed (`QueuedMeans.RunOnly`) so the run that ends starts it,
+  /// because the save that asked for it will not ask again. Returns the state unchanged when nothing is owed.
+  let queueAffectedWhenBusy
+    (affectedIds: TestId array)
+    (trigger: RunTrigger)
+    (targetSession: string option)
+    (s: LiveTestCycleState)
+    : LiveTestCycleState =
+    match TestRunPhase.isSessionRunning targetSession s.TestState.RunPhases with
+    | false -> s
+    | true ->
+      let idle = { s with TestState = { s.TestState with RunPhases = Map.empty } }
+      match triggerExecutionForAffected affectedIds trigger targetSession idle with
+      | [ TestCycleEffect.RunAffectedTests req ] ->
+        { s with
+            QueuedRebuild =
+              Some
+                { Means = QueuedMeans.RunOnly
+                  Tests = req.Tests
+                  Trigger = req.Trigger
+                  FilePath = s.ActiveFile |> Option.defaultValue ""
+                  AnalysisIdentity = s.LatestAnalysisIdentity
+                  TreeSitterElapsed = req.TreeSitterElapsed
+                  FcsElapsed = req.FcsElapsed
+                  SessionId = req.SessionId
+                  InstrumentationMaps = req.InstrumentationMaps } }
+      | _ -> s
 
   /// Filter tests by optional criteria for explicit MCP-triggered runs.
   /// All filters are AND'd. None = no filter = match all.

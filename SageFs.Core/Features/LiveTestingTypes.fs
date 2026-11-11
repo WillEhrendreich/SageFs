@@ -323,6 +323,8 @@ type NoResultReason =
   | TransportFailed of message: string
   /// The run was cancelled — superseded by a newer run, or the daemon stopped.
   | RunCancelled
+  /// The code was edited while the run was in flight, so what it reported judged older code.
+  | CodeEdited
 
 module NoResultReason =
   /// Plain-language cause, for run summaries and per-test detail.
@@ -334,6 +336,7 @@ module NoResultReason =
     | NoResultReason.TransportFailed message ->
       sprintf "the connection to the worker failed: %s" message
     | NoResultReason.RunCancelled -> "the run was cancelled before it reported"
+    | NoResultReason.CodeEdited -> "the code was edited while it ran, so its result judged older code"
 
 [<RequireQualifiedAccess>]
 type TestResult =
