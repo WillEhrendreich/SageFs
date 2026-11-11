@@ -2,6 +2,76 @@
 
 Roadmap item: `repl-benchmark-against-other-tools` (Next, Docs). Plan written 2026-11-07 against master 4827ab9a.
 
+## Work order
+
+Written 2026-11-11 against master `8975e898`. Every `path:line` below was read at that commit. The plan under this section is the design; this section is what to do on Monday morning with only the repo.
+
+### 1. Outcome
+
+Will can open `docs/repl-server-comparison.md` and say, with the machine, the load, both versions and the run count printed on the page, where SageFs is ahead of FsiMcp and where it is behind, and each loss links to the plan that closes it. The gate: `dotnet fsi scripts/repl-bench.fsx` on a quiet machine writes one record per scenario per tool and renders the page; `BenchRecordTests` refuses a record with no machine, load or version; a stale-page ratchet fails when the page and the records disagree; and an `--integration-host` case runs the harness end to end against SageFs plus a stub stdio server written in the test project. Linux only. The harness never runs on CI (a shared runner is not quiet). FsiMcp on Windows and macOS is unproven and stays so.
+
+### 2. Where the code is today
+
+- Nothing of the item exists: no `SageFs.Bench/`, no `SageFs.Tests/BenchRecordTests.fs`, no `docs/repl-server-comparison.md`, no `scripts/repl-bench.fsx` (checked).
+- The model for a throwaway daemon is `scripts/machine-bench.fsx`: options at `:11-30`, `/proc/loadavg` read into the machine profile at `:211`, `systemd-run --user --scope` wrapping under `--memory-cap` at `:375`, and it already drives live testing over HTTP at `:645-677`. Its logic is in the script, which `AGENTS.md` says not to repeat: the new logic goes in a project.
+- Sandboxes: `build/TierCost.fs:55` (systemd-run argv), `build/TierPlan.fs:342` `isolatedArgv` (the plan's `:350` is stale), `SageFs.Demos/Sandbox.fs:1-5` (bwrap argv as pure data).
+- MCP SDK: `SageFs/SageFs.fsproj:286-287` references `ModelContextProtocol` and `.AspNetCore`; `Directory.Packages.props:78` pins `1.0.0-rc.1`. `SageFs.Tests` reaches the client through the SageFs project reference and uses `HttpClientTransport` (`SageFs.Tests/EvalReachesRunningAppTests.fs:42-45`). No stdio client anywhere in the tree (grep `StdioClientTransport`: nothing). Whether the SDK's stdio transport drains the child's stderr is `[not verified]`; the package source is in `~/.nuget/packages/modelcontextprotocol.core/1.0.0-rc.1/`.
+- Tool-list figures live in `SageFs.Tests/RatchetBudgets.fs:462-464`: full catalog 38,286 characters, 74 tools; the nine-tool starter list 5,395. The measurement is `SageFs.Tests/ToolListBudgetTests.fs:50-54` (`characters`, `weight`). The table below (72 tools, 111,052 characters) is the 2026-11-07 reading and is stale by two diets.
+- `SageFs/AgentGuidance.fs:34-39` `firstMinute` is four tool calls (the table below says five).
+- Host crash detection is `SageFs.Core/FsiHostCrash.fs`; `cancel_eval` is a registered tool. `profile` is a registered tool too, so the table's "Profile tool: none found" row is stale.
+- Sibling plan statuses, read from each `Resume here`: `eval-cost-line`, `eval-output-for-an-llm`, `session-options`, `one-command-stdio-setup`, `eval-hang-and-stack-overflow` are Done; `profile-tool` is In progress (both modes built); `small-default-tool-list` is Done as an opt-in. The page measures these rows itself.
+- Test plumbing to copy: `SageFs.Tests/TestInfrastructure.fs:462-475` (`Integration.Runner`, `register`), `:508` (`hostListConcurrent`), `:774` (`Ratchet.register`); the project references at `SageFs.Tests/SageFs.Tests.fsproj:1221-1224`; a sim with a twin at `SageFs.Simulation/DeltaRouteSim.fs:36-50` and its tests `SageFs.Tests/ExpectoCasesSimTests.fs`; a stale-page ratchet at `SageFs.Tests/RoadmapDocTests.fs:51-55`.
+- `dnx` is installed (`~/.local/share/dotnetup/dotnet/dnx`); `dotnet --list-sdks` ends in 11.0.100. Whether a .NET 10 SDK is also installed (FsiMcp's README asks for it) is `[not verified]`; run the full `dotnet --list-sdks` before step 7.
+- `SageFs.Tests/LatencyStats.fs:27-54` already has `Summary`, `summarize` (nearest rank) and `Machine`, in the test project. The `live-testing-numbers-on-bigger-projects` plan moves them into Core as `LatencyRecord.fs`. Do not write a third copy.
+
+### 3. Steps
+
+Each step is one commit, RED test first. Pure steps are marked.
+
+0. **Measurement, no code.** Can this machine be quiet, and what is the run-to-run spread? Conditions: no other agents (`sagefs call list_sessions` shows only yours), no gate (`dotnet fsi scripts/gate-tail.fsx -- --status` shows nothing running), `cat /proc/loadavg` first field under 1.0. Then `dotnet build SageFs -c Release` and run twice: `dotnet fsi scripts/machine-bench.fsx --sagefs SageFs/bin/Release/net11.0 --runs 10 --skip-lt --skip-reset --label quiet-trial --out <scratch>/trial-N.json`. Compare the p50 of each stage between the two runs. If any stage differs by more than 20 percent, write that in `Resume here` and stop until the machine is quieter; no page can be published from it. Record the load and the spread either way.
+1. **RED** `SageFs.Tests/BenchRecordTests.fs`: `WHY - a result with no machine, no load average, or no tool version is refused, so no number reaches the page without them`. Compile-red. **Green**: new project `SageFs.Bench/SageFs.Bench.fsproj` (net11.0, references `SageFs.Core` for `SageFs.Json`), added to `SageFs.slnx`; `SageFs.Bench/Record.fs` with `Scenario` (closed DU, the nine scenarios, one `describe`), `ToolUnderTest { Name; Version; Commit; Author; Link; HowRun }`, `MachineReading { Machine; Load1Before; Load1During }`, `Record`, and `Record.create : ... -> Result<Record, RecordRefusal>`. Register: `<ProjectReference Include="..\SageFs.Bench\SageFs.Bench.fsproj" />` after `SageFs.Tests.fsproj:1222`, `<Compile Include="BenchRecordTests.fs" />` in the pure block. Pure. Commit the `.fsproj` files whole.
+2. **RED** tests 5 and 6 (quietness refuses over the limit naming the number; median and spread of sorted values, an empty set reads "not measured"). **Green**: `SageFs.Bench/Quiet.fs` (`judge : load1 -> cores -> Result<unit, NotQuiet>`, the limit a named constant with its reason) and statistics. DECISION below on where `summarize` lives. Pure.
+3. **RED** tests 2, 3, 4 (every scenario has a result or a reason; every tool names author and link; stale-page ratchet). **Green**: `SageFs.Bench/Page.fs`, `render : Record list -> string`. The ratchet is registered with `Ratchet.register` so `--ratchets` runs it. Pure.
+4. **RED** the simulation `SageFs.Simulation/BenchDriverSim.fs` (test 7) with a twin that reads stderr after the call, plus `SageFs.Tests/BenchDriverSimTests.fs`. **Green**: `SageFs.Bench/StdioDriver.fs`. Before writing it, read the SDK's stdio transport in the nuget cache. If it drains stderr on its own thread and lets you read until a given id, wrap it; if not, own driver per `AGENTS.md` rule 5. Register the sim in `SageFs.Simulation/SageFs.Simulation.fsproj` next to `DeltaRouteSim.fs` and the tests in `SageFs.Tests.fsproj`. Edge code with a pure core (the protocol state machine is the pure part).
+5. **RED** test 8: a stub stdio MCP server (a small console project under `SageFs.Tests/fixtures/`, answers `initialize`, `tools/list`, one `tools/call`) and an outcome case registered with `Integration.register Integration.Runner.Host` so `--integration-host` runs it: the harness drives SageFs (its own daemon, data dir and port pair, as `machine-bench.fsx` does) and the stub through every scenario and writes records that pass test 1. Edge.
+6. `scripts/repl-bench.fsx`: argument parsing and calls into `SageFs.Bench`, nothing else. Writes records under `docs/benchmarks/repl/` and the page. Also run the token count (scenario 7) only when an API key is present; otherwise the cell reads "not measured: no API key".
+7. **The run.** Needs the three DECISIONs below answered. Install FsiMcp v0.4.3 the way Will picks, in the sandbox the plan describes, on a quiet machine (step 0 conditions). Five runs per scenario per tool, alternating order; raise the count if step 0's spread says so. Commit the records and the page together.
+8. Roadmap landmark (`SageFs.Bench/Record.fs`), re-read the FsiMcp table column at v0.4.3 and correct it, and set `Resume here` to Done.
+
+### 4. How to check it
+
+- REPL first: a session on `SageFs.Tests` (`create_project_session`), `send_fsharp_code` the record and page functions, run `BenchRecordTests` and the sim tests by list name with `run_tests`.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (the page ratchet and the tool-list budget run here).
+- Inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary --filter-test-list "Bench"` (the list names must contain "Bench"; a filter that matches nothing exits 0, read `ran=`).
+- Acceptance: the unfiltered `--summary` for steps 1 to 4 and 6, and `--integration-host --summary` for step 5. Step 7 is accepted by the page itself: load, versions, run count and the stub-free records in the commit.
+
+### 5. Traps in this repo
+
+- SAGE-005: `Record.create` must not take two `string`s for version and commit in a row; wrap them (`Version of string`, `Commit of string`).
+- `RatchetBudgets.toolList` only goes down: this item adds no tool, so it must not move. A new ratchet (the page) is a new budget row.
+- No new NuGet package without discussion: the stub server and the driver use the SDK already pinned, or plain `System.Text.Json` through `SageFs.Json` profiles.
+- Child-process tests apply `SpawnEnvironment.apply psi` (`SageFs.Tests/DashboardBrowserRunner.fs:741` is the model) or the child inherits the harness's environment.
+- No timing-sensitive tests: the sim and the unit tests never time anything; only the run times anything.
+- `TrustSignalTests` fails the fast suite if a registered tier is not invoked by `ci-pipeline.fsx`: do not invent a `--bench` tier. Use `--integration-host` for test 8.
+- Commit `SageFs.Tests.fsproj`, `SageFs.Simulation.fsproj` and `SageFs.slnx` whole, with a pathspec, never `git add -A`.
+- Linux only: `/proc/loadavg`, `systemd-run`, `unshare` are Linux; `Quiet.judge` returns `NotQuiet.NoReading` elsewhere.
+
+### 6. Size and order
+
+Steps 1 to 3 are a day, pure. Step 4 is one to two days (the SDK read decides). Step 5 is a day. Step 6 half a day. Step 7 is an afternoon on a quiet machine plus Will's go. About a week for one person; steps 2 and 3 can run in parallel with step 4 (different files). First commit: step 0's measurement written into `Resume here`, then step 1's RED test.
+
+### 7. Not now
+
+- Re-measuring `docs/repl-loop-benchmarks.md` (decision 4 below) waits until the harness exists; the old page stays a dated record.
+- Closing the "behind" rows is the sibling plans' job; this page only reports them.
+- A second rival, or FsiMcp's next release, is a re-run of step 7.
+- Windows and macOS runs: no machine.
+
+### DECISIONs for Will (this section's additions)
+
+- Where `summarize` lives: in `SageFs.Core/LatencyRecord.fs` from the numbers plan (shared, one copy) or in `SageFs.Bench/Stats.fs`. Recommendation: land the Core module first (its step 2, a pure day) and have Bench depend on it.
+- How FsiMcp is run, your go for the timed run, and whether to send Onur Gumus the page first: unchanged from "Decisions for Will" below. Recommendation unchanged: build from the pinned commit of v0.4.3 so the source and the binary match.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -47,6 +117,8 @@ Read from FsiMcp's source and README at commit 8e6cb8f (package 0.3.0), from one
 | Author's claim, not reproduced | "in a real 9-step debugging session, 8.8 s against 27.2 s for rerunning scripts; follow-up questions 8 to 40 ms" | the published check figure is 21 to 25 ms on a loaded machine (`docs/repl-loop-benchmarks.md`) | this item |
 
 Update, 2026-11-10: the FsiMcp column above was read at 0.3.0 on 2026-11-07 and is a release behind. The latest release is v0.4.3 (2026-11-08; v0.4.0 came the evening of 2026-11-07, v0.4.2 the next morning), and its README lists eight tools: `load_project`, `eval`, `typecheck`, `check_project`, `reset`, `profile`, `bindings` and `measure`. The README also says `dnx FsiMcp --yes` runs it with no install. Nobody has run 0.4.3's `tools/list`, so 5,606 and 5,616 characters belong to 0.3.0 only, and the tool count is now 8. Re-read the column against the release before the next benchmark run.
+
+Update, 2026-11-11: the SageFs column is stale too. `SageFs.Tests/RatchetBudgets.fs:462-464` records the full catalog at 38,286 characters and 74 tools (the nine-tool opt-in starter list is 5,395), so the 72 and 111,052 above are two diets old. `profile` is a registered tool (`profile-tool` plan: both modes built), so the "none found in the tree" row is wrong now. `AgentGuidance.firstMinute` (`SageFs/AgentGuidance.fs:34-39`) is four steps, not five. `eval-cost-line`, `eval-output-for-an-llm`, `session-options` and `one-command-stdio-setup` report Done in their plans. None of this has been measured head to head; the page does that.
 
 How the tool-list figures were made, and what they leave out, is in `small-default-tool-list.md`. The FsiMcp figures come from a running 0.3.0 server (`tools/list` result 5,616 characters, 7 tools, 2026-11-07), and they match the count read from its source, 5,606 for the `tools` array. Nothing else of FsiMcp has been run: no eval, no load, no timing.
 
