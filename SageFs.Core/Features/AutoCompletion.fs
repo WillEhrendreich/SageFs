@@ -276,7 +276,7 @@ module FsCompletions =
           | ToolTipElement.Group e -> e
           | _ -> [])
         |> Seq.tryHead
-        |> Option.map _.MainDescription
+        |> Option.map _.MainDescription.Parts
         |> Option.defaultValue [||]
 
       {
