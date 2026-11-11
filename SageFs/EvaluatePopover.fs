@@ -66,7 +66,7 @@ let render (keyboardHelp: XmlNode) : XmlNode =
             Attr.type' "button"
             testid "evaluate-close"
             Attr.create "aria-label" "Close Evaluate"
-            Sink.onEvent ("click", sprintf "document.getElementById('%s').open = false" DomIds.EvaluateSection) ]
+            Sink.onEvent (DomEvent.Click, sprintf "document.getElementById('%s').open = false" DomIds.EvaluateSection) ]
           [ Text.raw "✕" ]
       ]
       Elem.div [ Attr.id DomIds.KeyboardHelpWrapper; Ds.show "$helpVisible" ] [ keyboardHelp ]
@@ -76,8 +76,8 @@ let render (keyboardHelp: XmlNode) : XmlNode =
             Attr.id DomIds.EvalTextarea
             Ds.bind Signals.Code
             Attr.create "placeholder" "Enter F# code... (Alt+Enter to eval, ;; auto-appended)"
-            Sink.onEvent ("keydown", keydownScript)
-            Sink.onEvent ("input.debounce_300ms", sprintf "var t=event.target; var c=t.value[t.selectionStart-1]; $%s = t.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
+            Sink.onEvent (DomEvent.KeyDown, keydownScript)
+            Sink.onEvent (DomEvent.InputDebounced "300ms", sprintf "var t=event.target; var c=t.value[t.selectionStart-1]; $%s = t.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
             Attr.create "spellcheck" "false" ]
           []
         Elem.div
@@ -114,7 +114,7 @@ let render (keyboardHelp: XmlNode) : XmlNode =
               [ Attr.type' "file"
                 Attr.accept ".fs,.fsx,.fsi"
                 Attr.style "display: none;"
-                Sink.onEvent ("change", sprintf "var i=event.target; var f=i.files[0]; if(f){var r=new FileReader(); r.onload=function(){var ta=document.getElementById('%s'); ta.value=r.result; ta.dispatchEvent(new Event('input'))}; r.readAsText(f); i.value=''}" DomIds.EvalTextarea) ]
+                Sink.onEvent (DomEvent.Change, sprintf "var i=event.target; var f=i.files[0]; if(f){var r=new FileReader(); r.onload=function(){var ta=document.getElementById('%s'); ta.value=r.result; ta.dispatchEvent(new Event('input'))}; r.readAsText(f); i.value=''}" DomIds.EvalTextarea) ]
             Text.enc (Glyphs.lead Glyph.Folder + "Load File") ]
       ]
       Elem.div [ Attr.id DomIds.EvalResult ] []

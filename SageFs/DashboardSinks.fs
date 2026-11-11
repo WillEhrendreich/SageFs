@@ -95,6 +95,40 @@ module Encode =
   /// A single-quoted JS string literal holding `text`.
   let jsString (text: string) : string = "'" + jsInner text + "'"
 
+/// A browser event a dashboard element listens for. `InputDebounced` carries Datastar's debounce window, such as "300ms".
+type DomEvent =
+  | Click
+  | DoubleClick
+  | Change
+  | Input
+  | KeyDown
+  | Scroll
+  | Close
+  | PointerMove
+  | PointerUp
+  | InputDebounced of window: string
+
+module DomEvent =
+  /// The event name Datastar reads after `data-on:`.
+  let name (event: DomEvent) : string =
+    match event with
+    | Click -> "click"
+    | DoubleClick -> "dblclick"
+    | Change -> "change"
+    | Input -> "input"
+    | KeyDown -> "keydown"
+    | Scroll -> "scroll"
+    | Close -> "close"
+    | PointerMove -> "pointermove"
+    | PointerUp -> "pointerup"
+    | InputDebounced window -> "input.debounce_" + window
+
+/// A CSS class name, as `Sink.classWhen` toggles it.
+type CssClass = CssClass of string
+
+/// An HTML attribute name, as `Sink.attrExpr` binds it.
+type AttrName = AttrName of string
+
 module Sink =
   /// An attribute whose value is outside text.
   let attr (name: string) (value: UserText) : XmlAttribute =
@@ -118,11 +152,11 @@ module Sink =
   let post (url: string) : string = "@post(" + Encode.jsString url + ")"
 
   /// An event handler. The expression is attribute-encoded whole; any outside text in it went in through `jsArg`.
-  let onEvent (event: string, expr: string) : XmlAttribute = Ds.onEvent (event, Encode.attrValue expr)
+  let onEvent (event: DomEvent, expr: string) : XmlAttribute = Ds.onEvent (DomEvent.name event, Encode.attrValue expr)
 
   /// An event handler with Datastar's modifiers (a debounce, say).
-  let onEventWith (event: string, expr: string, modifiers: OnEventModifier list) : XmlAttribute =
-    Ds.onEvent (event, Encode.attrValue expr, modifiers)
+  let onEventWith (event: DomEvent, expr: string, modifiers: OnEventModifier list) : XmlAttribute =
+    Ds.onEvent (DomEvent.name event, Encode.attrValue expr, modifiers)
 
   /// A click handler, as `onEvent ("click", expr)`.
   let onClick (expr: string) : XmlAttribute = Ds.onClick (Encode.attrValue expr)
@@ -131,7 +165,7 @@ module Sink =
   let show (expr: string) : XmlAttribute = Ds.show (Encode.attrValue expr)
 
   /// Set the class `name` while `expr` is true.
-  let classWhen (name: string, expr: string) : XmlAttribute = Ds.class' (name, Encode.attrValue expr)
+  let classWhen (CssClass name, expr: string) : XmlAttribute = Ds.class' (name, Encode.attrValue expr)
 
   /// Keep the attribute `name` equal to `expr`.
-  let attrExpr (name: string, expr: string) : XmlAttribute = Ds.attr' (name, Encode.attrValue expr)
+  let attrExpr (AttrName name, expr: string) : XmlAttribute = Ds.attr' (name, Encode.attrValue expr)

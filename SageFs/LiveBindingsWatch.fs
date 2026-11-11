@@ -121,7 +121,7 @@ let render (rows: WatchRowView list) : XmlNode =
           Attr.create "spellcheck" "false"
           testid "live-watch-input"
           Ds.bind WatchSignals.Input
-          Sink.onEvent ("keydown", (sprintf "if (event.key === 'Enter') { event.preventDefault(); %s }" add)) ]
+          Sink.onEvent (DomEvent.KeyDown, (sprintf "if (event.key === 'Enter') { event.preventDefault(); %s }" add)) ]
       button "Add" "Add the expression to the Watch tab" "live-watch-add" add ]
     Elem.div [ Attr.class' "live-watch-note"; testid "live-watch-note"; Attr.create "role" "status"; Ds.text (sprintf "$%s" WatchSignals.Note) ] []
     Elem.div [ Attr.class' "live-watch-help" ] [ textEnc RunsCodeWords ]

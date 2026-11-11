@@ -121,7 +121,7 @@ let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list
         Elem.div
           [ Attr.class' "comp-item"
             Attr.style (sprintf "padding:2px 6px;cursor:pointer;%s" (match i with | 0 -> "background:var(--bg-selection)" | _ -> ""))
-            Sink.onEvent ("click", sprintf "window._insertComp(%s,%d)" (Sink.jsArg (UserText.ofString item.ReplacementText)) cursorPos) ]
+            Sink.onEvent (DomEvent.Click, sprintf "window._insertComp(%s,%d)" (Sink.jsArg (UserText.ofString item.ReplacementText)) cursorPos) ]
           [ textEnc item.DisplayText
             Elem.span [ Attr.style "opacity:0.5;font-size:0.857em;margin-left:4px;" ] [
               textEnc (sprintf "(%s)" (Features.AutoCompletion.CompletionKind.label item.Kind))
@@ -197,7 +197,7 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
         // Setting `$workflowTarget` puts it in @post's default payload (the
         // current signal set), the same way the cursor tracker's
         // `$cursorPos = ...` already works.
-        Sink.onEvent ("change", sprintf "$%s = event.target.value; @post('/dashboard/switch-workflow')" Signals.WorkflowTarget) ]
+        Sink.onEvent (DomEvent.Change, sprintf "$%s = event.target.value; @post('/dashboard/switch-workflow')" Signals.WorkflowTarget) ]
       (WorkflowSwitch.options |> List.map (fun w ->
         let lbl = WorkflowTypes.SessionWorkflow.label w
         Elem.option
@@ -842,7 +842,7 @@ let renderEvalStats (stats: EvalStatsView) =
         Attr.create "aria-expanded" "false"
         Ds.attr' ("aria-expanded", sprintf "$%s ? 'true' : 'false'" Signals.PerfStatsOpen)
         Ds.preserveAttr "aria-expanded"
-        Sink.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
+        Sink.onEvent (DomEvent.Click, sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
       // A word: the chart glyph drew as a row of empty boxes in the page's font, and three reviewers took it for a missing character.
       [ textEnc "timing" ]
     Elem.span [ Attr.class' "eval-perf-detail meta"; Sink.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
@@ -1034,7 +1034,7 @@ let renderOutputForSession (sessionId: string) (evalsFinished: int) (lines: Outp
       Sink.signal Signals.OutputFeedSession (UserText.ofString sessionId)
       Sink.signalNumber Signals.OutputFeedEvals (int64 evalsFinished)
       Sink.signalNumber Signals.OutputFeedRev (int64 (OutputFollow.contentRev lines))
-      Sink.onEvent ("scroll", OutputFollow.scrollExpr)
+      Sink.onEvent (DomEvent.Scroll, OutputFollow.scrollExpr)
       Ds.onInit OutputFollow.resizeFollowExpr
       Ds.effect OutputFollow.followEffectExpr ] [
     Elem.div
@@ -1317,7 +1317,7 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
             Attr.create "aria-label" "Quick Start — create a new session in a temporary directory"
             Ds.indicator Signals.TempLoading
             Ds.onClick (Ds.post "/dashboard/session/create-temp")
-            Sink.onEvent ("keydown", sprintf "if(event.key==='Enter'||event.key===' '){event.preventDefault();%s}" (Ds.post "/dashboard/session/create-temp")) ]
+            Sink.onEvent (DomEvent.KeyDown, sprintf "if(event.key==='Enter'||event.key===' '){event.preventDefault();%s}" (Ds.post "/dashboard/session/create-temp")) ]
           [ Elem.h3 [] [
               Elem.span [ Ds.show "$tempLoading" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
               Elem.span [ Ds.show "!$tempLoading" ] [ textEnc (Glyphs.lead Glyph.Go) ]
@@ -1491,7 +1491,7 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
   let filterBtn (label: string) (value: string) (count: int) (color: string) =
     Elem.button
       [ Attr.class' "test-filter-btn"
-        Sink.onEvent ("click", sprintf "$testFilter = '%s'" value)
+        Sink.onEvent (DomEvent.Click, sprintf "$testFilter = '%s'" value)
         Sink.show (sprintf "$testFilter !== '%s'" value)
         Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.857rem;border-radius:0;cursor:pointer;margin-right:2px;" color color) ]
       [ textEnc (sprintf "%s %d" label count) ]
@@ -1661,7 +1661,7 @@ let rec private renderCoverageLevels
     | Some pid ->
       Elem.div
         [ Attr.style "cursor:pointer;font-size:0.857rem;color:var(--fg-blue);margin-bottom:2px;user-select:none;"
-          Sink.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral pid)) ]
+          Sink.onEvent (DomEvent.Click, sprintf "$%s = %s" drillSignal (jsStringLiteral pid)) ]
         [ Text.raw "← back" ]
   let body =
     match node.Children with
@@ -1695,7 +1695,7 @@ let rec private renderCoverageLevels
                     "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;cursor:pointer;"
                     r.X r.Y r.W r.H color)
                 Sink.attr "aria-label"(UserText.ofString title)
-                Sink.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral child.Id)) ]
+                Sink.onEvent (DomEvent.Click, sprintf "$%s = %s" drillSignal (jsStringLiteral child.Id)) ]
               [ match showLabel with
                 | true ->
                   Elem.div
@@ -2194,7 +2194,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                        // with the old worker), so it is an explicit button, never an
                        // on-change surprise.
                        Sink.onEvent
-                         ("change",
+                         (DomEvent.Change,
                           sprintf "document.getElementById(%s).removeAttribute('disabled')" (Sink.jsArg (UserText.ofString (sprintf "project-apply-%s" sid)))) ]
                      (choices
                       |> List.map (fun (value, text, isSelected) ->
@@ -2211,7 +2211,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                        Attr.create "aria-label" "Load the selected project — restarts this session, losing its REPL bindings"
                        Attr.create "title" "Load the selected project — restarts this session, losing its REPL bindings"
                        Sink.onEvent
-                         ("click",
+                         (DomEvent.Click,
                           sprintf
                             "@post(%s + encodeURIComponent(document.getElementById(%s).value))"
                             (Sink.jsArg (UserText.ofString (sprintf "/dashboard/session/set-project/%s?project=" (Uri.EscapeDataString sid))))
@@ -2311,7 +2311,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.create "aria-label""Run the selected project with hot reload"
                       Attr.create "title" "Run the selected project with hot reload"
                       Sink.onEvent
-                        ("click",
+                        (DomEvent.Click,
                          sprintf
                            "@post(%s + encodeURIComponent(document.getElementById(%s).value))"
                            (Sink.jsArg (UserText.ofString (sprintf "/dashboard/run-app/%s/" (Uri.EscapeDataString sid))))
@@ -2342,7 +2342,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Sink.attr "aria-label" (UserText.ofString (TeardownButton.name TeardownButton.Delete))
                   Sink.attr "title" (UserText.ofString (TeardownButton.name TeardownButton.Delete))
                   Sink.onEvent
-                    ("click",
+                    (DomEvent.Click,
                      sprintf
                        "if(confirm(%s)){%s}"
                        (Sink.jsArg (UserText.ofString (sprintf "Delete session %s? This deletes its saved binaries and manifest entry. This cannot be undone." sid)))
@@ -2697,14 +2697,14 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
           Attr.id DomIds.DockResize
           Ds.onEvent ("pointerdown", "event.preventDefault(); $dockResizing = true; event.target.setPointerCapture(event.pointerId)")
           Sink.onEvent (
-            "pointermove",
+            DomEvent.PointerMove,
             sprintf
               "if(!$%s)return; var h=Math.max(80,Math.min(Math.round(innerHeight*0.8),innerHeight-event.clientY)); $%s=h+'px'"
               Signals.DockResizing
               Signals.DockHeight
           )
           Sink.onEvent (
-            "pointerup",
+            DomEvent.PointerUp,
             sprintf
               "if(!$%s)return; $%s=false; try{localStorage.setItem('sagefs.dockHeight',$%s)}catch(e){}"
               Signals.DockResizing
@@ -2712,7 +2712,7 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
               Signals.DockHeight
           )
           Sink.onEvent (
-            "dblclick",
+            DomEvent.DoubleClick,
             sprintf "$%s='%s'; try{localStorage.removeItem('sagefs.dockHeight')}catch(e){}" Signals.DockHeight Signals.DockHeightDefault
           )
         ] []
@@ -3391,7 +3391,7 @@ let rec renderCohortPanelCore
                     testid "cohort-seat"
                     Sink.attr "data-member" (UserText.ofString name)
                     Sink.onEvent
-                      ("click",
+                      (DomEvent.Click,
                        sprintf
                          "if(confirm(%s)){%s}"
                          (Sink.jsArg (UserText.ofString question))
@@ -3427,7 +3427,7 @@ let rec renderCohortPanelCore
                       Sink.attr "data-member" (UserText.ofString name)
                       Sink.attr "data-holder" (UserText.ofString holderId)
                       Sink.onEvent
-                        ("click",
+                        (DomEvent.Click,
                          sprintf
                            "if(confirm(%s)){%s}"
                            (Sink.jsArg (UserText.ofString question))
@@ -3789,14 +3789,14 @@ let renderCohortScrubControl (viewingSeq: int64<ledgerSeq> option) (latestSeq: i
           Sink.attr "max" (UserText.ofString (string latestInt))
           Sink.attr "value" (UserText.ofString (string currentInt))
           Attr.style "flex: 1 1 100px; min-width: 60px;"
-          Sink.onEvent ("change", sprintf "var v=event.target.value; @post('%s', {%s: v})" scrubEndpoint Signals.CohortViewingSeq)
+          Sink.onEvent (DomEvent.Change, sprintf "var v=event.target.value; @post('%s', {%s: v})" scrubEndpoint Signals.CohortViewingSeq)
         ] []
         match viewingSeq with
         | Some _ ->
           Elem.button [
             Attr.class' "session-btn"
             Attr.create "title" "Back to live"
-            Sink.onEvent ("click", sprintf "@post('%s', {%s: ''})" scrubEndpoint Signals.CohortViewingSeq)
+            Sink.onEvent (DomEvent.Click, sprintf "@post('%s', {%s: ''})" scrubEndpoint Signals.CohortViewingSeq)
           ] [ textEnc (Glyphs.text Glyph.Skip) ]
         | None -> Elem.div [] []
         Elem.button [

@@ -731,8 +731,8 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
             Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
             // While the handle moves the box reads where it would land: set here, from the handle's own value, so no reactive effect
             // is involved (an effect that wrote the box overflowed the stack in the browser).
-            Sink.onEvent ("input", (sprintf "$%s = Number(event.target.value); document.getElementById(%s).value = %s" steps (jsText (TweakSignals.readoutId key)) landing))
-            Sink.onEventWith ("change", stageAndPost key place { Verb = "steps"; ValueJs = sprintf "String(Number($%s || 0))" steps }, settled) ]
+            Sink.onEvent (DomEvent.Input, (sprintf "$%s = Number(event.target.value); document.getElementById(%s).value = %s" steps (jsText (TweakSignals.readoutId key)) landing))
+            Sink.onEventWith (DomEvent.Change, stageAndPost key place { Verb = "steps"; ValueJs = sprintf "String(Number($%s || 0))" steps }, settled) ]
         // Under the track: the lowest, the step and the highest. It is also the button that opens the range editor.
         editor ]
       // The value is a box: type a number and press Enter to write it, Escape to put back what the file holds. The step buttons and the
@@ -752,7 +752,7 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
           Ds.indicator (TweakSignals.busyOf key)
           Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
           Sink.onEvent (
-            "keydown",
+            DomEvent.KeyDown,
             (
               sprintf
                 "if (event.key === 'Enter') { event.preventDefault(); %s } else if (event.key === 'Escape') { event.target.value = %s; $%s = 0; event.target.blur() }"
@@ -851,7 +851,7 @@ let toggle (key: RowKey) (place: SourceRef) (value: bool) (label: string) : XmlN
          Ds.bind signal
          Ds.indicator (TweakSignals.busyOf key)
          Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-         Sink.onEvent ("change", stageAndPost key place { Verb = "set"; ValueJs = "event.target.checked ? 'true' : 'false'" }) ]
+         Sink.onEvent (DomEvent.Change, stageAndPost key place { Verb = "set"; ValueJs = "event.target.checked ? 'true' : 'false'" }) ]
        @ (match value with
           | true -> [ Attr.create "checked" "" ]
           | false -> []))
@@ -877,7 +877,7 @@ let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testN
         Ds.indicator (TweakSignals.busyOf key)
         Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
         Sink.onEvent (
-          "keydown",
+          DomEvent.KeyDown,
           (
             sprintf
               "if (event.key === 'Enter') { event.preventDefault(); %s } else if (event.key === 'Escape') { $%s = %s; event.target.blur() }"

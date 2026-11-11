@@ -345,9 +345,24 @@ let sinkTests =
     testProperty "WHY - an expression through Sink.onEvent reaches Datastar unchanged" <| fun (generated: string) ->
       for text in textCases generated do
         let expr = sprintf "if(confirm(%s)){%s}" (Sink.jsArg (UserText.ofString text)) (Sink.post "/dashboard/x?y=1")
-        renderedValue (Sink.onEvent ("click", expr)) |> Expect.equal "the handler is the expression" expr
+        renderedValue (Sink.onEvent (DomEvent.Click, expr)) |> Expect.equal "the handler is the expression" expr
         renderedValue (Sink.onClick expr) |> Expect.equal "the click is the expression" expr
         renderedValue (Sink.show expr) |> Expect.equal "the show is the expression" expr
+        renderedValue (Sink.classWhen (CssClass "on", expr)) |> Expect.equal "the class condition is the expression" expr
+        renderedValue (Sink.attrExpr (AttrName "title", expr)) |> Expect.equal "the attribute expression is the expression" expr
+
+    testCase "WHY - each DomEvent names the browser event Datastar listens for, and a debounce carries its window" <| fun _ ->
+      [ DomEvent.Click; DomEvent.DoubleClick; DomEvent.Change; DomEvent.Input; DomEvent.KeyDown; DomEvent.Scroll
+        DomEvent.Close; DomEvent.PointerMove; DomEvent.PointerUp; DomEvent.InputDebounced "300ms" ]
+      |> List.map DomEvent.name
+      |> Expect.equal "the event names"
+           [ "click"; "dblclick"; "change"; "input"; "keydown"; "scroll"; "close"; "pointermove"; "pointerup"
+             "input.debounce_300ms" ]
+
+    testCase "WHY - Sink.onEvent writes the same attribute Datastar writes for the event's name" <| fun _ ->
+      let tokens attr = markupTokens (renderNode (Elem.div [ attr ] []))
+      tokens (Sink.onEvent (DomEvent.InputDebounced "250ms", "f()"))
+      |> Expect.equal "the debounced input attribute" (tokens (Falco.Datastar.Ds.onEvent ("input.debounce_250ms", "f()")))
 
     testCase "WHY - Sink.post puts the URL in a literal, so a quote in it cannot end the call" <| fun _ ->
       Sink.post "/a/b'c" |> Expect.equal "the quote is escaped" "@post('/a/b\\'c')"

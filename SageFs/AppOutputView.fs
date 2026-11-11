@@ -76,7 +76,7 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       testid testId
       // The value rides the URL. `@post`'s second argument is fetch options, so a `{value: ...}` there is dropped before it reaches
       // the handler, which reads `Request.Query["value"]`: every toggle then read false and every filter fell back to "both".
-      Sink.onEvent ("click", sprintf "@post('/dashboard/app-output/%s?value=%b')" target (not isOn))
+      Sink.onEvent (DomEvent.Click, sprintf "@post('/dashboard/app-output/%s?value=%b')" target (not isOn))
     ] [ textEnc (if isOn then onLabel else offLabel) ]
 
   let streamChoice (value: string) (label: string) (wanted: OutputStreamFilter) =
@@ -88,7 +88,7 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       Sink.attr "aria-label" (UserText.ofString (sprintf "Show %s" label))
       Sink.attr "aria-pressed" (UserText.ofString (if chosen then "true" else "false"))
       testid (sprintf "app-output-stream-%s" value)
-      Sink.onEvent ("click", sprintf "@post('/dashboard/app-output/stream?value=%s')" value)
+      Sink.onEvent (DomEvent.Click, sprintf "@post('/dashboard/app-output/stream?value=%s')" value)
     ] [
       // The chosen stream carries a mark as well as a fill, so the choice never rests on colour alone.
       match chosen with

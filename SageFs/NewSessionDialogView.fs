@@ -91,9 +91,9 @@ let directoryField : XmlNode =
           Sink.attr "list" (UserText.ofString DomIds.DirSuggestions)
           Sink.attr "placeholder" (UserText.ofString workingDirPlaceholder)
           Ds.bind Signals.NewSessionDir
-          Sink.onEvent (sprintf "input.debounce_%s" SuggestDebounce, Ds.post "/dashboard/dir-suggest")
-          Sink.onEvent ("change", Sink.post NewSessionNames.DiscoverRoute)
-          Sink.onEvent ("keydown", sprintf "if(evt.key==='Enter'){evt.preventDefault();%s}" (Sink.post NewSessionNames.DiscoverRoute)) ]
+          Sink.onEvent (DomEvent.InputDebounced SuggestDebounce, Ds.post "/dashboard/dir-suggest")
+          Sink.onEvent (DomEvent.Change, Sink.post NewSessionNames.DiscoverRoute)
+          Sink.onEvent (DomEvent.KeyDown, sprintf "if(evt.key==='Enter'){evt.preventDefault();%s}" (Sink.post NewSessionNames.DiscoverRoute)) ]
       Elem.button
         [ Attr.type' "button"
           Attr.class' "eval-btn nsd-find"
@@ -292,7 +292,7 @@ let frame (state: NewSessionDialog) (body: XmlNode list) (foot: XmlNode list) : 
       Sink.attr "aria-labelledby" (UserText.ofString NewSessionNames.TitleId)
       Ds.preserveAttr "open"
       Ds.effect openEffectExpr
-      Sink.onEvent ("close", onCloseExpr) ]
+      Sink.onEvent (DomEvent.Close, onCloseExpr) ]
     [ yield head
       match body with
       | [] -> ()
