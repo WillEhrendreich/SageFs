@@ -1423,20 +1423,12 @@ module Cohort =
               | ClaimState.Held _
               | ClaimState.Orphaned _
               | ClaimState.Released _ -> None)
-          // Someone else's claim refuses first. A claim of the caller's own over the very same scope is the same claim
-          // asked for again: a retry after `OwnerUnresponsive`, or a sub-agent on its orchestrator's connection, which is
-          // the same member. That renews the member's lease and leaves the claim as it is (same id, same fence), where it
-          // used to be refused as a conflict naming the caller as the holder. An own claim over a DIFFERENT overlapping
-          // scope still refuses: granting it would hold two overlapping claims at once (property 1).
-          let ownSameScope =
-            overlapping
-            |> List.tryFind (fun (c, holder) -> holder = who && c.Scope = scope)
-          match overlapping |> List.tryFind (fun (_, holder) -> holder <> who), ownSameScope with
+          // Another member's claim refuses first. The caller's own claim over the same scope is that claim asked for again
+          // (a retry, or a sub-agent on its orchestrator's connection): the lease renews, the claim keeps id and fence.
+          match overlapping |> List.tryFind (fun (_, holder) -> holder <> who), overlapping |> List.tryFind (fun (c, _) -> c.Scope = scope) with
           | Some(_, holder), _ -> Error(CohortError.ClaimConflict(scope, holder))
           | None, Some _ ->
-            let record = state.Members.[who]
-            let renewed = { state with Members = Map.add who { record with LastRenewal = clock } state.Members }
-            Ok(renewed, [ CohortEvent.LeaseRenewed who ], [])
+            Ok({ state with Members = Map.add who { state.Members.[who] with LastRenewal = clock } state.Members }, [ CohortEvent.LeaseRenewed who ], [])
           | None, None ->
           match overlapping with
           | (_, holder) :: _ -> Error(CohortError.ClaimConflict(scope, holder))
@@ -1833,17 +1825,10 @@ module Cohort =
             // the rebased head (which is always a fresh commit and never equals
             // the base, which would misfire HeadMoved on every real landing).
             if base' <> state.IntegrationHead then
-              // Roast-2day/roast-2day-cmd §1: this arm used to set Blocked and
-              // stop, WITHOUT popping the queue or calling `advanceQueue` — a
-              // concurrent `SetIntegrationHead` (the conductor re-seeding the
-              // integration ref mid-verification, e.g. F4 in
-              // cohort-dogfood-findings.md) parked the ENTIRE serial queue
-              // behind this one landing forever, with no in-band recovery but
-              // the requester's own `WithdrawLanding`. `blockAndPop` (above)
-              // closes it: the landing is still recorded Blocked(HeadMoved) with
-              // NextAction.RebaseAndResubmit — nothing about the diagnosis
-              // changes — but every OTHER member's queued landing is now free
-              // to advance instead of waiting on this one's requester.
+              // This arm used to Block without popping, so a concurrent `SetIntegrationHead` (F4 in
+              // cohort-dogfood-findings.md) parked the whole serial queue behind one landing. `blockAndPop` records
+              // Blocked(HeadMoved) with RebaseAndResubmit and lets every other landing advance. Git has already moved
+              // here: docs/plans/cohort-landing-checks-before-git-moves.md.
               let advanced, advEvents, advEffects =
                 blockAndPop state id req (LandingBlocker.HeadMoved(base', state.IntegrationHead)) NextAction.RebaseAndResubmit
               Ok(advanced, advEvents, advEffects)
