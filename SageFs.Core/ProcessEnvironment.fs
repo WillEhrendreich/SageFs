@@ -21,6 +21,25 @@ open System
 open System.Collections
 open System.Diagnostics
 
+/// The variable the daemon hands a worker its per-spawn secret in (`WorkerAuth`). Named here because this module
+/// compiles before `WorkerAuth` and must strip it.
+let workerSecretEnvVar = "SAGEFS_WORKER_SECRET"
+
+/// The credentials SageFs reads from an environment. `sagefs mcp` reads the operator and member tokens from its own
+/// environment and sends them as headers; a worker reads its secret. Nothing else SageFs spawns needs them, and the FSI
+/// host is where the model's own code runs, so a child that inherited one would let an eval print it into a tool
+/// result. The worker gets its own secret back as an explicit override, which wins over this list.
+let credentialVariables : string list =
+  [ Capability.CapabilityTransport.operatorEnvVar
+    Capability.CapabilityTransport.bridgeEnvVar
+    workerSecretEnvVar ]
+
+/// Remove the credentials, and only them, from a spawn that must otherwise inherit everything: the daemon `sagefs mcp`
+/// starts needs the person's `DOTNET_ROOT` to find its runtime, so it cannot take the whole poison list.
+let removeCredentials (psi: ProcessStartInfo) : unit =
+  for key in credentialVariables do
+    psi.Environment.Remove key |> ignore
+
 /// The variable names to strip from every spawned process's environment, unless
 /// the caller deliberately wants one back (an explicit override wins — see
 /// `sanitize`). Add a newly-discovered poisoner here, not at a call site.
@@ -38,6 +57,7 @@ let poisonedVariables : string list =
     // an override). Every process the worker spawns would inherit it: the MSBuild and compiler nodes of the save's
     // own build, and the FSI host, where it costs speed and means nothing.
     "DOTNET_MODIFIABLE_ASSEMBLIES" ]
+  @ credentialVariables
 
 /// Pure: what a child process's environment should be, given the parent's own
 /// environment and whatever explicit overrides this particular child needs.

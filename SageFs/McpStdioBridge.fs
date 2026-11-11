@@ -418,7 +418,9 @@ let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
           RedirectStandardError = true
         )
       // The daemon inherits this process's environment, which holds only what a person set: it works out its own
-      // settings snapshot and tier, from the same files.
+      // settings snapshot and tier, from the same files. The credentials this bridge sends are the exception: the
+      // daemon needs neither, and everything it starts would inherit them, down to the FSI host an eval runs in.
+      SageFs.ProcessEnvironment.removeCredentials psi
       psi.ArgumentList.Add("--mcp-port")
       psi.ArgumentList.Add(string mcpPort)
       ownerArguments (DaemonPort.configured ()) mcpPort (Process.GetCurrentProcess().Id)

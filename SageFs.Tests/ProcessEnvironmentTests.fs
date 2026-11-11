@@ -84,6 +84,44 @@ let private echoVariable (variable: string) : ProcessStartInfo =
     psi.ArgumentList.Add(sprintf "echo \"$%s\"" variable)
     psi
 
+/// The bridge reads the operator and member tokens from its own environment, and the daemon it starts, the worker and
+/// the FSI host the user's code runs in all used to inherit them: `System.Environment.GetEnvironmentVariable
+/// "SAGEFS_OPERATOR_TOKEN"` in an eval printed the operator credential into a tool result.
+let private credentialVariables =
+  [ Capability.CapabilityTransport.operatorEnvVar
+    Capability.CapabilityTransport.bridgeEnvVar
+    ProcessEnvironment.workerSecretEnvVar ]
+
+[<Tests>]
+let credentialTests =
+  testList "ProcessEnvironment credentials" [
+    testCase "WHY - sanitize drops the operator and member tokens, so the worker and the FSI host never hold a credential the model's code can print" <| fun _ ->
+      let parent = credentialVariables |> List.map (fun k -> k, "sfo_secret") |> Map.ofList |> Map.add "PATH" "/usr/bin"
+      let result = ProcessEnvironment.sanitize parent []
+      credentialVariables |> List.filter result.ContainsKey |> Expect.isEmpty "no credential survives sanitize"
+      result.ContainsKey "PATH" |> Expect.isTrue "an innocent variable stays"
+
+    testCase "WHY - removeCredentials drops the tokens from the daemon sagefs mcp starts and keeps DOTNET_ROOT, which the daemon needs to find its runtime" <| fun _ ->
+      let psi = ProcessStartInfo()
+      for variable in credentialVariables do psi.Environment.[variable] <- "sfo_secret"
+      psi.Environment.["DOTNET_ROOT"] <- "/opt/dotnet"
+      ProcessEnvironment.removeCredentials psi
+      credentialVariables |> List.filter psi.Environment.ContainsKey |> Expect.isEmpty "no credential is left"
+      psi.Environment.["DOTNET_ROOT"] |> Expect.equal "the runtime location stays" "/opt/dotnet"
+
+    testCase "WHY - a real child process started after applyTo does not see a token its parent held" <| fun _ ->
+      for variable in credentialVariables do
+        let psi = echoVariable variable
+        psi.RedirectStandardOutput <- true
+        psi.UseShellExecute <- false
+        psi.Environment.[variable] <- "sfo_inherited-credential"
+        ProcessEnvironment.applyTo psi []
+        use proc = Process.Start psi
+        let output = proc.StandardOutput.ReadToEnd()
+        proc.WaitForExit(TestTimeouts.briefPatience) |> ignore
+        output.Contains "inherited-credential" |> Expect.isFalse (sprintf "the child never sees %s" variable)
+  ]
+
 /// A throwaway fixture project for the current SDK, built by a real `dotnet` whose environment the case sets for
 /// that CHILD only: the shared test process is never written to.
 module FixtureBuild =
