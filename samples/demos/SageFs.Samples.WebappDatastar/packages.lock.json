@@ -42,7 +42,7 @@
       },
       "FSharp.Core": {
         "type": "CentralTransitive",
-        "requested": "[11.0.101-preview7.26359.118, )",
+        "requested": "[11.0.101, )",
         "resolved": "6.0.0",
         "contentHash": "fbv1UwJ2LXVcFCt+GGDPu0sIYA5C6gdDvAupDj3iLQF3clRkua/6J33f+FiGQa8P1tEa+zmz3wrjoTnXZ1UiYg=="
       }

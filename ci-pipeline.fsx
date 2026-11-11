@@ -2205,7 +2205,7 @@ let sagefsPipeline = pipeline "sagefs" {
     timeoutForStep 1500
     run (fun _ ->
       async {
-        let sdks = [ "10.0.100", "net10.0"; "11.0.100-rc.1.26425.128", "net11.0" ]
+        let sdks = [ "10.0.100", "net10.0"; "11.0.100", "net11.0" ]
         let smokeScript = Path.Combine(rootDir, "scripts", "smoke-test.fsx")
         // The script's own defaults (15 s to a healthy daemon, 45 s to a Ready session) are for a quiet machine;
         // the gate's tail can still be a loaded one (a session went Ready in 31 s at load 80), and a slow

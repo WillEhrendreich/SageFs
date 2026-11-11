@@ -28,15 +28,12 @@
          choice. -->
     <PackageVersion Include="Fantomas.Core" Version="8.0.0-alpha-002" />
     <PackageVersion Include="FsCheck" Version="3.3.2" />
-    <!-- Paired with the FSharp.Core preview7 pin further down (~:86) as the
-         same F# 11 compiler-generation milestone, required for the F#
-         nullness analysis (CheckNulls) this repo enables solution-wide (see
-         Directory.Build.props: "requires the newer FCS/SDK"). No stable
-         43.13.101 has shipped yet (nuget.org: latest stable is 43.12.401;
-         43.13.101 exists only as preview7/rc1 builds) — a newer
-         43.13.101-rc1.26425.128 is now available and should be considered at
-         the next FCS/FSharp.Core upgrade. -->
-    <PackageVersion Include="FSharp.Compiler.Service" Version="43.13.101-preview7.26381.103" />
+    <!-- Paired with the FSharp.Core pin further down as the same F# 11
+         compiler generation, required for the F# nullness analysis
+         (CheckNulls) this repo enables solution-wide (see Directory.Build.props:
+         "requires the newer FCS/SDK"). Stable 43.13.101 is on nuget.org as of
+         2026-11-10, the day .NET 11 shipped. -->
+    <PackageVersion Include="FSharp.Compiler.Service" Version="43.13.101" />
     <PackageVersion Include="FSharp.Data.Adaptive" Version="1.2.26" />
     <PackageVersion Include="FSharp.SystemTextJson" Version="1.4.36" />
     <PackageVersion Include="FsToolkit.ErrorHandling" Version="5.2.0" />
@@ -116,15 +113,12 @@
     <PackageVersion Include="Fable.Promise" Version="3.2.0" />
     <PackageVersion Include="Fable.Node" Version="1.2.0" />
     <PackageVersion Include="Fable.Browser.Dom" Version="2.16.0" />
-    <!-- Paired with the FSharp.Compiler.Service preview7 pin above (~:39) —
-         both ship from the dotnet/fsharp release train and need to stay on
-         the same F# 11 generation for consistent nullness-analysis (CheckNulls)
-         behavior (Directory.Build.props: "requires the newer FCS/SDK").
-         Verified 2026-09-12 on nuget.org: a stable "11.0.100" exists, but no
-         stable "11.0.101" has shipped yet (only preview4/5/7 and now
-         rc1.26425.128 builds do) — this pin trades the older stable patch for
-         the newer preview needed to match FCS's date-stamped preview7 build. -->
-    <PackageVersion Include="FSharp.Core" Version="11.0.101-preview7.26359.118" />
+    <!-- Paired with the FSharp.Compiler.Service pin above: both ship from the
+         dotnet/fsharp release train and stay on the same F# 11 generation for
+         consistent nullness-analysis (CheckNulls) behavior
+         (Directory.Build.props: "requires the newer FCS/SDK"). Stable 11.0.101
+         is on nuget.org as of 2026-11-10. -->
+    <PackageVersion Include="FSharp.Core" Version="11.0.101" />
     <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Sdk" Version="17.14.40608" />
     <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" />
     <!-- VS Extension Tests -->
