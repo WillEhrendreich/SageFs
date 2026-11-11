@@ -34,7 +34,7 @@ A session involves three processes: the daemon (shared by all sessions), a worke
  +-------------------------------------------------+
  | worker  (SageFs.Host + SageFs.Core)             |  Ionide.ProjInfo + MSBuild evaluate your project,
  |  loads the project's metadata                   |  Cecil instruments a shadow copy of your DLLs,
- |  shadow-copies + instruments your assemblies    |  SageFs's own FCS (43.13.101-preview7)
+ |  shadow-copies + instruments your assemblies    |  SageFs's own FCS (43.13.101)           
  |  builds the FSI command line                    |  NEVER runs your code
  +-------------------------------------------------+
         |  FsiProtocol: one JSON object per line, loopback TCP,

@@ -85,7 +85,7 @@ This started as an experiment in how far agentic development could go, and it's 
 - [Test and coverage marks](#-test-and-coverage-marks)
 - [Live Testing Cost Comparison](#live-testing-cost-comparison)
 - [Under the Hood](#under-the-hood)
-- [Repository Map](#repository-map--where-things-live)
+- [Repository Map](#repository-map-where-things-live)
 - [Coming from Another Language?](#coming-from-another-language)
 - [Visual Demos](#-visual-demos)
 - [Contributing](#contributing)
@@ -520,7 +520,7 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 | **Code that doesn't compile** | Build errors go to the Output window | **Nothing is evaluated or run and your last results stay, marked as blocked, with the file and error count.** Tree-sitter still finds where your tests are in broken code |
 | **Why those tests ran** | Impacted tests are detected, the mechanism isn't documented | **Every selection says why** (exact dependency match, coverage approximation, fallback) and a failure says how long ago it last passed and what changed |
 | **Editors** | Visual Studio only | **VS Code · Neovim · Web dashboard · MCP clients** |
-| **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
+| **Frameworks** | MSTest · xUnit · NUnit | **Expecto** is driven end to end. xUnit v2 and v3, NUnit, MSTest and TUnit share one attribute path that no real assembly has exercised yet ([details](#5-enable-live-testing)) · extensible |
 | **Price** | ~$250/month | **Free, MIT licensed** |
 
 Where Visual Studio is still ahead: it debugs several tests at once, it runs every result against a real build (mine confirms after two quiet seconds, and never for an unsaved buffer), it pauses on battery and while you debug, it has a memory cap and a right-click playlist, and it has been shipping since 2017. The plan for each, or the reason I didn't copy it, is in [how live testing works](docs/how-live-testing-works.md#compared-with-visual-studio-live-unit-testing), and what's queued is on the [roadmap](docs/roadmap.md).
@@ -538,7 +538,7 @@ Each stage is progressively slower and progressively more certain, so you get a 
 
 What's measured is the end-to-end path rather than the individual stages. The `--integration-lt` tier starts a daemon, opens the FromCSharp sample, and times keystroke-to-verdict and save-to-green over 20 edits each after 2 warm-up edits (the figures are in the table above, with the machine they came from), and it fails if the 95th percentile passes 3 s. Those figures say nothing about a large solution. There is one real, currently-enforced millisecond budget on pure logic: `CoverageViewTests.fs`'s "hot path is tight" test asserts 100 coverage-view projections over 200 tests complete in under 100ms, and it runs in the default suite, not gated behind anything. `LiveTestingCycleTests.fs` has a second one (`cycleBenchmarkTests`, `[Benchmark]`-tagged) that the default suite filters out and no CI stage runs. Both measure pure decision functions (no FSI, no compiler, no real test execution in the loop), so treat them as a floor on the domain logic, not a promise about wall-clock save-to-green latency. Any *end-to-end* speed number you see about SageFs is an anecdote until something gates it.
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing: 1419 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line; restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it). That figure counts property declarations in the source, not test cases, and the grep gave 1419 on 2026-11-10. The `13067+` badge at the top counts runnable cases in the default suite. It was last stamped on 2026-10-05 (`6e91ecd2`), 924 commits ago, and nothing re-derives it on its own, so it is out of date until someone runs the restamp.
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing: 1422 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line; restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it). That figure counts property declarations in the source, not test cases, and the grep gave 1422 on 2026-11-10. The `13067+` badge at the top counts runnable cases in the default suite. It was last stamped on 2026-10-05 (`6e91ecd2`), 946 commits ago, and nothing re-derives it on its own, so it is out of date until someone runs the restamp.
 
 </details>
 
@@ -614,7 +614,7 @@ One case goes the other way round. A session with a startup profile (`.SageFs/in
 SageFs persists the daemon's session registry and per-session test caches to compact binary files for near-instant cold starts. The files are raw binary with CRC-32C integrity checking, no JSON parsing and no database.
 
 - **Daemon manifest** (`.sagefm`, v1): the durable session registry (which sessions existed, their projects, and working directories, plus which was active), replayed on startup to rebuild your sessions.
-- **Test cache files** (`.sagetc`, written as format version 3): test outcomes and durations, each test's coverage bitmap, and the flaky-detection history. [The format](docs/binary-format-spec.md#3-sagetc--test-cache-format) is written down next to the code that reads it.
+- **Test cache files** (`.sagetc`, written as format version 3): test outcomes and durations, each test's coverage bitmap, and the flaky-detection history. [The format](docs/binary-format-spec.md#3-sagetc-test-cache-format) is written down next to the code that reads it.
 
 Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs. The formats are verified by property-based tests covering format corruption, round-trips, and write isolation.
 

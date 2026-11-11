@@ -31,7 +31,7 @@ package carries a build for each, and `dotnet` picks the one that matches your
 SDK). Check with `dotnet --version`. Sessions can be on .NET 10 or .NET 11. Each
 session's host builds with whichever SDK `dotnet --version` reports in your
 project's folder, and runs on that SDK's runtime. That's your `global.json`
-pin if you have one, otherwise the newest SDK installed. So if an 11 preview
+pin if you have one, otherwise the newest SDK installed. So if a .NET 11 SDK
 is installed and you want a project on 10, pin it.
 
 ### Daemon won't start / times out

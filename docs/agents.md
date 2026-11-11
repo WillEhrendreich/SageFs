@@ -246,7 +246,7 @@ pull it back, from least to most enforced:
 > agent. `sagefs status` prints when it started, a daemon that's been up since
 > before your last build is serving old code, and the agent was right that
 > something was wrong, just not about what. See
-> [stale daemon](TROUBLESHOOTING.md#stale-daemon--the-one-that-wastes-the-most-time).
+> [stale daemon](TROUBLESHOOTING.md#stale-daemon-the-one-that-wastes-the-most-time).
 
 - **Tell it.** "Back to the REPL" or "mandate 1". The skill tells the agent
   what those mean: stop, say where it left the loop, and resume from the REPL.

@@ -16,7 +16,7 @@ The harness is Linux only (it needs bubblewrap). Everything must be in place bef
 |---|---|---|
 | `bwrap` (bubblewrap) | every lemming, and every oracle that runs lemming-written code, runs inside it | `command -v bwrap` |
 | `git`, `ss`, `ps`, `timeout` | the lemming's working repo, the port and process checks, the time limit the sandbox applies | `command -v git ss ps timeout` |
-| the .NET SDK in `global.json` (11.0.100-rc.1 or later, prerelease allowed) | runs the `.fsx` entry points, builds `LemRun`, `LemScore` and `LemMatrix` on first use, and runs the lemming's tests | `dotnet --version` |
+| the .NET SDK in `global.json` (11.0.100 or a later 11.0.1xx feature band, no prerelease needed) | runs the `.fsx` entry points, builds `LemRun`, `LemScore` and `LemMatrix` on first use, and runs the lemming's tests | `dotnet --version` |
 | `cmdc` (Command Code), installed **under `~/.local/share/mise`** and logged in | the lemming itself. The sandbox binds only that toolchain, so a `cmdc` installed anywhere else is refused (exit 4) | `readlink -f "$(command -v cmdc)"`, and `~/.commandcode/auth.json` must exist |
 | a built master dev dll at `<main checkout>/SageFs/bin/Release/net11.0/SageFs.dll` | the `sagefs mcp` bridge each lemming runs (or set `SAGEFS_LEMMING_BIN`, see below) | `dotnet build SageFs/SageFs.fsproj -c Release` in the main checkout |
 | a running shared SageFs daemon on port 37749 | see the next section | `curl -s localhost:37749/health` |

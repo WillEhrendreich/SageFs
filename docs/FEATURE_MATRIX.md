@@ -33,7 +33,9 @@ Live testing is the capability I've put the most proof behind: a CI integration 
 real session, edits a source file on disk, and asserts the affected test flips to failing without anyone asking
 for a rerun. That's not a claim in a README, it's a test that runs on every push. Rough edges remain around
 session switching and test discovery timing. I'm not going to pretend those are solved yet. Expecto has the
-best coverage; xUnit (including v3), NUnit, MSTest, and TUnit are also detected.
+best coverage and is the only framework driven end to end. xUnit (including v3), NUnit, MSTest, and TUnit share one
+attribute path that is tested only with made-up attributes, so for those four discovery and runs are expected to work
+and unproven.
 
 Live testing is also a workflow, not only a toggle. See [Workflow Modes](workflow-modes.md).
 

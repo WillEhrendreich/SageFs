@@ -21,7 +21,8 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
      * AttributeDiscovery.discoverWithRunner: Discovery + execution closures
      * ReflectionExecutor.executeMethod: Invoke via MethodInfo.Invoke
      * ExpectoExecutor: Custom reflection-based Expecto runner
-   - Frameworks Supported: Expecto, xUnit (incl. xUnit v3), NUnit, MSTest, TUnit
+   - Frameworks: Expecto is driven end to end. xUnit (incl. xUnit v3), NUnit, MSTest and TUnit share one attribute path
+     that is tested only with made-up attributes, so for those four it is expected to work and unproven
    - Key Type: DiscoveryResult { Tests: TestCase list; RunTest: TestCase → Async<TestResult> }
 
 2. Coverage Instrumentation (IL-Level):

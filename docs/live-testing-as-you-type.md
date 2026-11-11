@@ -40,7 +40,7 @@ here is a promise about your project: the end-to-end figures in the table below 
 | **Coverage per line** | Per-line, from instrumented binaries of the real build | Per-line with the exact tests that reach it, from instrumented project outputs; tests of an instrumented project run one at a time |
 | **What a result ran against** | A real build | Each row says: evaluated code, a real build, a real build that agreed, or one that disagreed and why. A real build of the saved text confirms the eval after the editing goes quiet |
 | **Pause, include, exclude** | Pause on battery and debug, playlist, ignore file, memory caps | Pause and an include or exclude set; the rest is not copied, see [decisions.md](decisions.md) |
-| **Frameworks** | xUnit, NUnit, MSTest | + Expecto, TUnit, extensible; FsCheck `[<Property>]` tests are discovered and shown in the live panel |
+| **Frameworks** | xUnit, NUnit, MSTest | Expecto is driven end to end. xUnit, NUnit, MSTest and TUnit share one attribute path that is tested only with made-up attributes, so for those four it is expected to work and unproven. Extensible; FsCheck `[<Property>]` tests are discovered and shown in the live panel |
 | **Clients** | Visual Studio only | Neovim, VS Code, web dashboard, MCP |
 | **Platform** | Windows only (ProjFS) | A cross-platform .NET package, though my CI runs on Linux only |
 | **Cost** | ~$250/month Enterprise license | Free, MIT |

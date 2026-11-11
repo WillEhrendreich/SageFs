@@ -15,7 +15,7 @@ Welcome. SageFs is open source and I'm glad of any help, whether that's a typo, 
 
 ### Prerequisites
 
-- The .NET SDK that `global.json` pins, which is a .NET 11 release candidate (`11.0.100-rc.1.26425.128`, with `allowPrerelease` on) as I write this. The repo builds for `net11.0` by default, and the shipped tool (`SageFs`, `SageFs.Core`, `SageFs.Host`) multi-targets `net10.0;net11.0` so a .NET 10 user can install it. Get the SDK from [dotnet.microsoft.com/download/dotnet/11.0](https://dotnet.microsoft.com/download/dotnet/11.0)
+- The .NET SDK that `global.json` pins, which is the stable .NET 11 SDK (`11.0.100`, with `allowPrerelease` off; `rollForward` is `latestFeature`, so a later 11.0.1xx feature band also works). The repo builds for `net11.0` by default, and the shipped tool (`SageFs`, `SageFs.Core`, `SageFs.Host`) multi-targets `net10.0;net11.0` so a .NET 10 user can install it. Get the SDK from [dotnet.microsoft.com/download/dotnet/11.0](https://dotnet.microsoft.com/download/dotnet/11.0)
 - Git
 - An editor: VS Code with Ionide, Neovim, Rider, or your preference
 
