@@ -104,3 +104,52 @@ module CohortLedger =
       { Append = typed.Append
         ReadAll = typed.ReadAll
         Scopes = typed.Scopes }
+
+  /// A read of the whole ledger that costs a lookup when nothing was appended.
+  ///
+  /// The dashboard reads the cohort ledger on every push of every open tab, and the SQLite port opens a connection and
+  /// scans every row of the scope each time (one 10,000-row ledger and three tabs is thirty scans per model change). The
+  /// ledger is append-only and the owner is its only writer, so a count of appends is a complete change marker: this wrapper
+  /// bumps one per scope on `Append` and keeps the last list read for a scope until that scope's count moves.
+  module ReadCache =
+
+    /// `inner` with `ReadAll` answered from the last read of the scope while no entry has been appended to it since.
+    /// `Append` goes to `inner` first, so a read that sees the new count also sees the durable row; the cache is dropped
+    /// only after the append returned.
+    ///
+    /// A read that raced an append (the count moved while `inner.ReadAll` ran) is returned to its caller and not kept, so a
+    /// list that may lack the new row is never served to the next one.
+    let wrap<'m> (inner: LedgerPort<'m>) : LedgerPort<'m> =
+      let sync = obj ()
+      let appended = System.Collections.Generic.Dictionary<string, int64>()
+      let cache = System.Collections.Generic.Dictionary<string, int64 * LedgerEntry<'m> list>()
+      let appendsTo (key: string) : int64 =
+        match appended.TryGetValue key with
+        | true, count -> count
+        | false, _ -> 0L
+      let append (entry: LedgerEntry<'m>) : unit =
+        let key = Scope.label (Cohort.scopeOf entry.Command)
+        inner.Append entry
+        lock sync (fun () ->
+          appended.[key] <- appendsTo key + 1L
+          cache.Remove key |> ignore)
+      let readAll (scope: CohortScope) : LedgerEntry<'m> list =
+        let key = Scope.label scope
+        let marker, hit =
+          lock sync (fun () ->
+            let marker = appendsTo key
+            match cache.TryGetValue key with
+            | true, (seen, entries) when seen = marker -> marker, Some entries
+            | _ -> marker, None)
+        match hit with
+        | Some entries -> entries
+        | None ->
+          let fresh = inner.ReadAll scope
+          lock sync (fun () ->
+            match appendsTo key = marker with
+            | true -> cache.[key] <- (marker, fresh)
+            | false -> ())
+          fresh
+      { Append = append
+        ReadAll = readAll
+        Scopes = inner.Scopes }
