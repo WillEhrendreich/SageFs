@@ -161,7 +161,7 @@ The short version, for people who read the last page of the book first:
 2. `sagefs check` tells you what's missing, with a fix next to each failure.
 3. Run `sagefs` in a terminal and leave it there, or run it as a [service](#run-it-as-a-service-linux).
 4. Open `http://localhost:37750/dashboard`, or point your editor or agent at it (step 4 below).
-5. `sagefs status` says whether the daemon is up. Exit code 1 means it isn't.
+5. `sagefs status` says whether the daemon is up. Exit code 0 means up and healthy, 1 not running, 3 up with a failed component (it names which), 4 wedged (a process holds the port and never answers).
 
 ### 1. Install SageFs (30 seconds)
 
@@ -171,7 +171,9 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or
 dotnet tool install --global SageFs
 ```
 
-To update later: run `sagefs stop` first, then `dotnet tool update --global SageFs`. A running daemon holds the installed executable, and on Windows the update then fails with "The file exists" (see [Troubleshooting](docs/TROUBLESHOOTING.md)). If the update says "already installed" when you know a newer version is out, add `--version X.Y.Z` because `dotnet tool update` resolves through NuGet's search index, which lags the package store by a few minutes.
+Run the install from a folder whose `dotnet --version` is the SDK you want SageFs on, such as your home directory. Inside a project whose `global.json` pins an older SDK (8 or 9), the install runs under that SDK and NuGet refuses the package. The build you get is fixed at install time: with only SDK 10 installed you get the net10.0 build, which cannot load a net11.0 project, and `dotnet tool update` keeps that build. `sagefs --version` says which one you have (`SageFs version 0.6.945.0 (net10.0, .NET 11.0.0)`). To move to the net11.0 build after installing SDK 11: `sagefs stop`, `dotnet tool uninstall --global SageFs`, then `dotnet tool install --global SageFs` from a folder where `dotnet --version` prints 11.x.
+
+To update later: run `sagefs stop` first (with the [service](#run-it-as-a-service-linux), `systemctl --user stop sagefs`), then `dotnet tool update --global SageFs`. A running daemon holds the installed executable, and on Windows the update then fails with "The file exists" (see [Troubleshooting](docs/TROUBLESHOOTING.md)). If the update says "already installed" when you know a newer version is out, add `--version X.Y.Z` because `dotnet tool update` resolves through NuGet's search index, which lags the package store by a few minutes.
 
 ### 2. Check your environment (optional)
 
@@ -212,6 +214,8 @@ fi
 
 [`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. A user unit doesn't read your shell profile, so without help the daemon and everything it starts get systemd's default `PATH`, and an `init.fsx` that runs `npm` (or a script that calls `dotnet`) can't find it. So the install writes the `PATH` of the shell you run it in to a drop-in, `~/.config/systemd/user/sagefs.service.d/path.conf`, beside the unit. The unit itself stays the same for everyone, so it holds no `PATH` of its own. A `PATH` with a `"`, `%`, `\` or line break in it would come out of the drop-in changed, so the install stops instead. To make the daemon see a `PATH` change, such as a new tool or another node version from nvm, run the install again: it rewrites the drop-in and restarts the service. The unit runs the daemon from `~/.local/state/sagefs`, which systemd creates (`StateDirectory=`), and not from your home directory: a request that names no directory falls back to the daemon's cwd, and SageFs refuses to watch a home directory, so a daemon started in `$HOME` would give you sessions with no hot reload and no live testing ([`FileWatcher.fs`](SageFs.Core/FileWatcher.fs), `classifyWatchRoot`). When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
 
+The supervisor starts a new daemon whenever the old one is gone, so `sagefs stop` gets you a fresh one, and it says so (exit code 3). To stop the service, run `systemctl --user stop sagefs`; `systemctl --user disable sagefs` keeps it from starting at login. To restart it, say after `dotnet tool update --global SageFs`, run `systemctl --user restart sagefs`. If the daemon crashes over and over, the watchdog gives up and exits 1, and after three give-ups in ten minutes systemd marks the unit failed; fix the cause (`journalctl --user -u sagefs`), then `systemctl --user reset-failed sagefs` and `systemctl --user restart sagefs`.
+
 ### Run it as a service (macOS)
 
 On a Mac, launchd does the babysitting. launchd expands no variables in a plist, `~` included, so the install fills in your home directory, your .NET folder and your `PATH` as it copies the file. Run it from the repo root:
@@ -234,7 +238,11 @@ fi
 
 [`contrib/launchd/io.github.willehrendreich.sagefs.plist`](contrib/launchd/io.github.willehrendreich.sagefs.plist) is a user agent, the macOS counterpart of the systemd unit. It runs `~/.dotnet/tools/sagefs --supervised`, starts it at login, and launchd restarts the supervisor if it crashes. `sagefs status` shows it, and its console output goes to `~/Library/Logs/sagefs/`. It sets `DOTNET_ROOT` to the folder that holds the real `dotnet` on your PATH, because launchd doesn't read your shell profile. If `dotnet` isn't on your PATH, or your macOS is older than 12.3 and has no `realpath`, the install stops and says so instead of writing a plist that can't start. It also sets `PATH` to the `PATH` of the shell you run the install in. Otherwise the daemon and everything it starts get launchd's default, `/usr/bin:/bin:/usr/sbin:/sbin`, and an `init.fsx` that runs `npm` (or a script that calls `dotnet`) can't find it. A `PATH` with a `|`, `&`, `<`, `\` or line break in it can't be copied into the plist, so the install stops instead. If you move or upgrade .NET to a different folder, or want the daemon to see a `PATH` change, such as a new tool or another node version from nvm, run the install again. `launchctl kickstart -k` doesn't reread the plist. The install unloads the old agent before it writes the new plist, because launchd keeps a loaded agent's settings until it is unloaded. The agent runs the daemon from `~/Library/Application Support/sagefs-daemon` for the same reason the Linux unit stays out of your home directory. launchd doesn't create a working directory, which is what the `mkdir` is for.
 
-The supervisor starts a new daemon whenever the old one is gone, so `sagefs stop` gets you a fresh one. To stop the service, run `launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs`. To restart it, say after `dotnet tool update --global SageFs`, run `launchctl kickstart -k gui/$(id -u)/io.github.willehrendreich.sagefs`.
+The supervisor starts a new daemon whenever the old one is gone, so `sagefs stop` gets you a fresh one, and it says so (exit code 3). To stop the service, run `launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs`. To restart it, say after `dotnet tool update --global SageFs`, run `launchctl kickstart -k gui/$(id -u)/io.github.willehrendreich.sagefs`.
+
+### Uninstall
+
+`sagefs uninstall` lists what SageFs left on this machine (a running daemon, the systemd unit and its drop-in or the launchd agent, the agent skill, the data and log folders) and prints the command that removes each, ending with `dotnet tool uninstall --global SageFs`. It changes nothing unless asked: `--remove-service` removes the unit or agent, `--stop` stops the daemon and its FSI workers, and `--purge-data --yes` (both flags) deletes the skill and the data folders. The full list of folders is in [Troubleshooting](docs/TROUBLESHOOTING.md#uninstall-and-where-sagefs-keeps-things).
 
 ### 4. Connect your editor
 

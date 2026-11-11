@@ -143,6 +143,41 @@ dotnet tool update --global SageFs
 sagefs
 ```
 
+Under the systemd service the watchdog starts the old binary again five seconds
+after `sagefs stop` (which says so and exits 3), so stop the unit instead:
+
+```bash
+systemctl --user stop sagefs
+dotnet tool update --global SageFs
+systemctl --user start sagefs
+```
+
+On macOS with the launchd agent, `launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs`
+before the update and `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist`
+after it. An agent's `sagefs mcp` bridge also starts a new daemon on its next
+request; `sagefs stop` names any it finds.
+
+### A net11.0 project is refused: "no global.json can fix this"
+
+The package carries a net10.0 and a net11.0 build of SageFs, and `dotnet tool
+install` picks one by the SDK it runs under. A tool installed before SDK 11 was
+on the machine is the net10.0 build, it stays that build through `dotnet tool
+update`, and it cannot load a project that targets net11.0. `sagefs --version`
+says which build you have: `SageFs version 0.6.945.0 (net10.0, .NET 11.0.0)`.
+To move to the net11.0 build, install the .NET 11 SDK, then:
+
+```bash
+sagefs stop                               # or: systemctl --user stop sagefs
+dotnet tool uninstall --global SageFs
+cd ~                                      # a folder where `dotnet --version` prints 11.x
+dotnet tool install --global SageFs
+sagefs --version                          # now says net11.0
+```
+
+Run the install outside any folder whose `global.json` pins an older SDK: the
+install runs under the pinned SDK, which picks the older build, or, for SDK 8 or
+9, refuses the package.
+
 If `dotnet tool update` reports "already installed" when you know a newer
 version is published, pass the version explicitly:
 
@@ -256,6 +291,31 @@ the last 20 of those lines are added to the failure reason under a `stderr:`
 heading. That reason is the session's fault reason, and the daemon log has it too
 (`Worker spawn failed for session ...`). The buffer is not read after startup, so
 a worker that dies later leaves its story in its worker log and nowhere else.
+
+### Uninstall, and where SageFs keeps things
+
+`sagefs uninstall` finds what is on this machine and prints the command that
+removes each piece, in the order that works (the service first, since it would
+start the daemon again; the tool last). With no flags it changes nothing.
+`--remove-service` removes the systemd unit and its drop-in or the launchd agent,
+`--stop` stops the daemon and its FSI workers, and `--purge-data --yes` deletes
+the skill and the data folders. `--purge-data` without `--yes` deletes nothing.
+
+What it looks for:
+
+| What | Where |
+|---|---|
+| State: sessions, settings, `operator.token`, worker logs, friction and cohort stores | `~/.SageFs` (or `SAGEFS_DATA_DIR`) |
+| Daemon log | `~/.local/share/SageFs` on Linux, `~/Library/Application Support/SageFs` on macOS, `%LOCALAPPDATA%\SageFs` on Windows |
+| Config | `~/.config/SageFs` (`%APPDATA%\SageFs` on Windows) |
+| Agent skill | `~/.claude/skills/sagefs` |
+| systemd unit and drop-in, its working directory | `~/.config/systemd/user/sagefs.service`, `sagefs.service.d/`, `~/.local/state/sagefs` |
+| launchd agent, its logs and working directory | `~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist`, `~/Library/Logs/sagefs`, `~/Library/Application Support/sagefs-daemon` |
+| Building SageFs from source only | `~/.local/state/sagefs-install`, `~/.local/share/sagefs-gate` |
+
+Each project you opened keeps a `.SageFs` folder with a warmup cache and its
+`.gitignore`. Uninstall leaves those alone; delete them by hand if you want them
+gone.
 
 ### When health says Degraded
 
