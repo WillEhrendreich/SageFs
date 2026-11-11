@@ -259,6 +259,16 @@ module McpCohortTools =
       return result |> Result.map (fun _ -> sprintf "%s left the cohort." (MemberTable.MemberId.display who))
     }
 
+  /// The claim `who` holds over exactly `scope`, if any: what a repeat `acquire_claim` renewed.
+  let heldClaimOver (state: Cohort.CohortState<MemberTable.MemberId>) (who: MemberTable.MemberId) (scope: Cohort.ClaimScope) =
+    state.Claims
+    |> Map.tryPick (fun _ claim ->
+      match claim.State with
+      | Cohort.ClaimState.Held holder when holder = who && claim.Scope = scope -> Some claim
+      | Cohort.ClaimState.Held _
+      | Cohort.ClaimState.Orphaned _
+      | Cohort.ClaimState.Released _ -> None)
+
   let acquireClaim (ctx: McpContext) (agentName: string) (scope: string) (purpose: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       match parseClaimScope scope with
@@ -283,7 +293,17 @@ module McpCohortTools =
           |> Result.bind (fun (events, _) ->
             match events |> List.tryPick (function Cohort.CohortEvent.ClaimAcquired(cid, _, _, fence) -> Some(cid, fence) | _ -> None) with
             | Some(Cohort.ClaimId cid, fence) -> Ok (sprintf "Acquired claim %s over %s (fence=%d)." cid scope (int64 fence))
-            | None -> Error (SageFsError.Unexpected (exn "acquire_claim committed with no ClaimAcquired event")))
+            | None ->
+              // The caller asked again for a claim it holds over this very scope: the cohort renewed its lease and
+              // left the claim as it was, so the answer names that claim and the fence release_claim needs.
+              let held =
+                SageFs.McpTools.cohortOwnerFor ctx workingDirectory
+                |> Option.bind (fun owner -> heldClaimOver (owner.ReadCohortState()) who claimScope)
+              match held with
+              | Some claim ->
+                let (Cohort.ClaimId cid) = claim.Id
+                Ok (sprintf "You already hold claim %s over %s (fence=%d); your lease is renewed." cid scope (int64 claim.Fence))
+              | None -> Error (SageFsError.Unexpected (exn "acquire_claim committed with neither a new claim nor one the caller holds")))
     }
 
   let releaseClaim (ctx: McpContext) (agentName: string) (Cohort.ClaimId claimId) (fence: int64) (workingDirectory: string option) : Task<Result<string, SageFsError>> =

@@ -197,3 +197,24 @@ let toolBodyTests =
       text |> Expect.stringContains "says why no member can fill it" "delegate_conductor"
     }
   ]
+
+let claimIdAndFence (text: string) : string * string =
+  let m = System.Text.RegularExpressions.Regex.Match(text, @"claim (\S+) over \S+ \(fence=(\d+)\)")
+  if not m.Success then failtestf "no claim id and fence in %s" text
+  m.Groups.[1].Value, m.Groups.[2].Value
+
+[<Tests>]
+let claimToolTests =
+  testList "acquire_claim and leave_cohort say what the caller already holds" [
+
+    testTask "WHY — asking again for a claim you hold answers with that claim and its fence, and renews the lease" {
+      let! ctx, _ = scene ()
+      let! first = McpCohortTools.acquireClaim ctx "bob" "file:src/A.fs" "edit A" wd
+      let firstId, firstFence = claimIdAndFence (ok "the first acquire_claim" first)
+      let! again = McpCohortTools.acquireClaim ctx "bob" "file:src/A.fs" "edit A" wd
+      let text = ok "the repeat acquire_claim" again
+      text |> Expect.stringContains "says the caller already holds it" "already hold"
+      claimIdAndFence text |> Expect.equal "names the same claim and the fence release_claim needs" (firstId, firstFence)
+      text |> Expect.stringContains "says the lease is renewed" "renewed"
+    }
+  ]
