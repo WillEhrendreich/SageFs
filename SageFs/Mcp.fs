@@ -269,7 +269,7 @@ module McpTools =
                          | WorkerProtocol.SessionLifecycleStatus.Starting _
                          | WorkerProtocol.SessionLifecycleStatus.Restarting _ -> true
                          | _ -> false) ->
-            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
+            return Result.Error (Message (formatSessionResolution (WarmingUp (sessionId, i.Status))))
           | _ ->
             return Result.Error (Message (sprintf "Session '%s' not found" sessionId))
         | Some send ->
