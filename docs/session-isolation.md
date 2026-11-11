@@ -399,16 +399,18 @@ module SessionResumeTests
 
 | File | What Changes |
 |------|-------------|
-| `SageFs.Core/Mcp.fs:907-924` | `switchSession`: remove Elm dispatch |
+| `SageFs/Mcp.fs` (`switchSession`, was `SageFs.Core/Mcp.fs:907-924`) | `switchSession`: remove Elm dispatch |
 | `SageFs/Dashboard.fs:131-155` | Connection monitor JS: reconnection logic |
 | `SageFs/Dashboard.fs:266` | Banner HTML: remove `Ds.show` |
 | `SageFs/Dashboard.fs:907+` | `createStreamHandler`: per-connection session |
 | `SageFs/Dashboard.fs:1436+` | `createEndpoints`: eval/reset routing |
 | `SageFs/DaemonMode.fs:33` | `activeSessionId` → `defaultSessionId` (semantic rename) |
 | `SageFs/DaemonMode.fs:126` | `resumeSessions`: add callback parameter |
-| `SageFs.Tests/McpSessionIsolationTests.fs` | NEW: MCP isolation tests |
-| `SageFs.Tests/DashboardSessionIsolationTests.fs` | NEW: Dashboard isolation tests |
+| `SageFs.Tests/SessionIsolationTests.fs` | MCP isolation tests (`module McpSessionIsolation`, planned here as `McpSessionIsolationTests.fs`), plus reset, cycle and working-directory isolation |
+| `SageFs.Tests/SessionBindingIsolationOutcomeTests.fs` | outcome gate: one session cannot read another's bindings |
 
-(File paths and line numbers above are as they were when this was designed.
-`Mcp.fs` in particular has since moved to `SageFs/Mcp.fs`. Treat this
-table as the historical map, not a live index.)
+(File paths and line numbers above are as they were when this was designed,
+except the two test rows, which name the files that exist today. The planned
+`DashboardSessionIsolationTests.fs` was never written as a file. `Mcp.fs` has
+moved to `SageFs/Mcp.fs`. Treat this table as the historical map, not a live
+index.)

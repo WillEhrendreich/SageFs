@@ -326,7 +326,6 @@ Not sure where to start? Here are some areas where help is especially welcome:
 - **Snapshot tests**: add Verify snapshot tests for rendered output
 - **Bug fixes**: check the issue tracker for bugs labeled `good-first-issue`
 - **Error messages**: make diagnostics clearer and more helpful
-- **FSI quirks**, `SageFs.Core/FsiRewrite.fs` is ~25 lines and handles FSI edge cases. PRs welcome
 
 ## Architecture Overview
 

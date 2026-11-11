@@ -62,8 +62,9 @@ Have (all measured or in-tree):
 - id-indexed, byte-budgeted eval history with per-event summaries of about 310 characters and cell
   recall (`SageFs.Core/Features/EvalStore.fs:1`; measured 2026-10-24, see section 7);
 - version-keyed SSE dedup (`SageFsSseDedup.fs:40`);
-- content hashes for rendered graphs (`SageFs/DocsRender.fs` hash field; and the cohort list content
-  hashes decision in `docs/decisions.md`);
+- content hashes for rendered graphs (this note first cited `SageFs/DocsRender.fs`, which is not in the tree
+  or in git history, so the hash field is unverified; the cohort list content hashes decision is in
+  `docs/decisions.md`);
 - bounded replies with an explicit notice (`SageFs.Core/Features/EvalResultSummary.fs`, capped at
   4,000 characters, pinned by `SageFs.Tests/EvalResultSummaryTests.fs`).
 
