@@ -153,9 +153,8 @@ module ManifestReader =
       let storedCrc = br.ReadUInt32()
 
       // W15(R10): The stored CRC covers the ENTIRE file (header + payload) with bytes [36..39]
-      // zeroed. It is a whole-file integrity check, not a header-only check.
-      // Naming it "header CRC" in the error message is misleading — payload corruption also
-      // triggers this error. Rename to "file integrity CRC".
+      // zeroed, so payload corruption also trips it. The error message below says
+      // "File integrity CRC" for that reason and never calls it a header CRC.
       let forCrc = Array.copy data
       forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
       let computedCrc = Crc32.computeAll forCrc
