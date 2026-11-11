@@ -163,11 +163,15 @@ let runtimeFactsTests = testList "runtime facts the Harmony fork and the delta r
     match SageFs.Features.MetadataDelta.DeltaApply.featureProbe SageFs.Features.MetadataDelta.DeltaApply.capabilitiesMethodName with
     | Result.Ok features ->
       features |> Expect.contains (sprintf "%s reports the capability every delta needs" RuntimeInformation.FrameworkDescription) "Baseline"
-    | Result.Error why -> failtestf "every save to a run_app app would restart: %s" why
+    | Result.Error failure ->
+      failtestf "every save to a run_app app would restart: %s" (SageFs.Features.MetadataDelta.DeltaApply.describeProbeFailure failure)
 
   testCase "WHY - a capability probe that cannot read the list says why and names the runtime, so the restart it causes is explained" <| fun () ->
     match SageFs.Features.MetadataDelta.DeltaApply.featureProbe "NoSuchCapabilityMethod" with
-    | Result.Error why -> why |> Expect.stringContains "names the runtime" RuntimeInformation.FrameworkDescription
+    | Result.Error (SageFs.Features.MetadataDelta.CapabilityProbeFailure.MethodMissing (runtime, name) as failure) ->
+      (runtime, name) |> Expect.equal "names the runtime and the method" (RuntimeInformation.FrameworkDescription, "NoSuchCapabilityMethod")
+      SageFs.Features.MetadataDelta.DeltaApply.describeProbeFailure failure |> Expect.stringContains "and says so" RuntimeInformation.FrameworkDescription
+    | Result.Error other -> failtestf "a missing method should be named as missing, and is %A" other
     | Result.Ok features -> failtestf "a method the runtime does not have answered %A" features
 ]
 

@@ -92,6 +92,13 @@ type HandlerRun =
     Milliseconds: float
     Outcome: HandlerOutcome }
 
+/// Why the runtime's capability list could not be read. Each case names the runtime and the method asked for.
+[<RequireQualifiedAccess>]
+type CapabilityProbeFailure =
+  | MethodMissing of runtime: string * methodName: string
+  | NotAList of runtime: string * methodName: string * answeredType: string
+  | Threw of runtime: string * methodName: string * exceptionType: string * message: string
+
 [<RequireQualifiedAccess>]
 module DeltaApply =
 
@@ -101,18 +108,29 @@ module DeltaApply =
   /// runtime can rename it; `HarmonyCanaryTests` pins that the running runtime still has it.
   let capabilitiesMethodName = "GetCapabilities"
 
+  let describeProbeFailure (failure: CapabilityProbeFailure) : string =
+    match failure with
+    | CapabilityProbeFailure.MethodMissing (runtime, name) -> sprintf "%s has no internal MetadataUpdater.%s()" runtime name
+    | CapabilityProbeFailure.NotAList (runtime, name, answered) -> sprintf "MetadataUpdater.%s() on %s answered %s, not the text of a list" name runtime answered
+    | CapabilityProbeFailure.Threw (runtime, name, exnType, message) -> sprintf "MetadataUpdater.%s() on %s threw %s: %s" name runtime exnType message
+
   /// The runtime's own list, read through the internal method named `methodName`. `Error` says why it could not be
   /// read and names the runtime, because every save is a restart while it cannot be.
-  let featureProbe (methodName: string) : Result<string list, string> =
+  let featureProbe (methodName: string) : Result<string list, CapabilityProbeFailure> =
     let runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
     try
       match typeof<MetadataUpdater>.GetMethod(methodName, BindingFlags.NonPublic ||| BindingFlags.Static, null, Type.EmptyTypes, null) with
-      | null -> Result.Error(sprintf "%s has no internal MetadataUpdater.%s()" runtime methodName)
+      | null -> Result.Error(CapabilityProbeFailure.MethodMissing(runtime, methodName))
       | method ->
         match method.Invoke(null, [||]) with
         | :? string as text -> Result.Ok(text.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> Array.toList)
-        | other -> Result.Error(sprintf "MetadataUpdater.%s() on %s answered %s, not the text of a list" methodName runtime (match other with null -> "null" | o -> o.GetType().Name))
-    with e -> Result.Error(sprintf "MetadataUpdater.%s() on %s threw %s: %s" methodName runtime (e.GetType().Name) e.Message)
+        | other -> Result.Error(CapabilityProbeFailure.NotAList(runtime, methodName, (match other with null -> "null" | o -> o.GetType().Name)))
+    with
+    // What the method itself threw arrives wrapped; a lookup that matches two overloads is the other thing reflection throws here.
+    | :? TargetInvocationException as e ->
+      let thrown = (match e.InnerException with null -> e :> exn | inner -> inner)
+      Result.Error(CapabilityProbeFailure.Threw(runtime, methodName, thrown.GetType().Name, thrown.Message))
+    | :? AmbiguousMatchException as e -> Result.Error(CapabilityProbeFailure.Threw(runtime, methodName, e.GetType().Name, e.Message))
 
   /// The runtime's list, or nothing when it cannot be read: every delta then fails its feature check and every save
   /// restarts, which is the safe direction. That turns the whole route into restarts, so it is said as a warning, once
@@ -121,8 +139,8 @@ module DeltaApply =
     lazy
       (match featureProbe capabilitiesMethodName with
        | Result.Ok features -> features
-       | Result.Error why ->
-         SageFs.Utils.Log.warn "Hot reload: the runtime's metadata-update capabilities cannot be read (%s), so every save to an app started with run_app restarts it instead of patching it" why
+       | Result.Error failure ->
+         SageFs.Utils.Log.warn "Hot reload: the runtime's metadata-update capabilities cannot be read (%s), so every save to an app started with run_app restarts it instead of patching it" (describeProbeFailure failure)
          [])
 
   let private runtimeFeatures () : string list = probedFeatures.Value
