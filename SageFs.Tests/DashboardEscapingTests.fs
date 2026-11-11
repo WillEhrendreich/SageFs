@@ -71,19 +71,14 @@ let dashboardEscapingRenderTests =
 
     testProperty "renderSessionStatus never emits a hostile session id, dir, progress or workflow raw" <| fun (prefix: string) (pick: int) ->
       let h = hostile prefix pick
-      renderSessionStatus "Ready" h h h h |> renderNode
+      renderSessionStatus SageFs.SessionState.Ready h h h h |> renderNode
       |> expectInert "renderSessionStatus (Ready)"
-      renderSessionStatus "WarmingUp" h h h h |> renderNode
+      renderSessionStatus SageFs.SessionState.WarmingUp h h h h |> renderNode
       |> expectInert "renderSessionStatus (WarmingUp)"
-
-    testProperty "renderSessionStatus never emits a hostile session state raw" <| fun (prefix: string) (pick: int) ->
-      let h = hostile prefix pick
-      renderSessionStatus h "abcd1234" "/work" "" "REPL" |> renderNode
-      |> expectInert "renderSessionStatus (hostile state)"
 
     testProperty "renderSessionStatus keeps the working dir, encoded once, in text and data attribute" <| fun (prefix: string) (pick: int) ->
       let h = hostile prefix pick
-      let html = renderSessionStatus "Ready" "abcd1234" h "" "REPL" |> renderNode
+      let html = renderSessionStatus SageFs.SessionState.Ready "abcd1234" h "" "REPL" |> renderNode
       html
       |> Expect.stringContains "data-working-dir must carry the escaped dir"
            (sprintf "data-working-dir=\"%s\"" (htmlEscape h))

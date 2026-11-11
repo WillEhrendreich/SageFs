@@ -237,7 +237,7 @@ let renderDirSuggestions (dirs: string list) : XmlNode =
     (dirs |> List.map (fun d -> Elem.option [ Attr.value (attrEnc d) ] []))
 
 
-let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) (warmupProgress: string) (workflowLabel: string) =
+let renderSessionStatus (sessionState: SessionState) (sessionId: string) (workingDir: string) (warmupProgress: string) (workflowLabel: string) =
   let warmupNode =
     match warmupProgress.Length > 0 with
     | true ->
@@ -255,13 +255,11 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
     [ Elem.span [ Attr.class' workflowBadgeClass ] [
         textEnc workflowLabel
       ] ]
-  let statusClass =
-    match sessionState with
-    | "Ready" -> "status-ready"
-    | "WarmingUp" -> "status-warming"
-    | _ -> "status-faulted"
+  // The class comes from the display status every other surface uses, so an evaluating session is green here as it is in the
+  // sidebar, and a session that has not started is not drawn as a failure.
+  let statusClass = sessionState |> SessionDisplayStatus.ofSessionState |> SessionDisplayStatus.cssClass
   Elem.div [ Attr.id DomIds.SessionStatus; Attr.create "data-working-dir" (attrEnc workingDir) ] [
-    yield Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ textEnc sessionState ]
+    yield Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ textEnc (SessionState.label sessionState) ]
     yield! workflowNode
     yield Elem.br []
     yield Elem.span [ Attr.class' "meta" ] [

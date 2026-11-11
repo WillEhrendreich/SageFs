@@ -509,7 +509,7 @@ let private buildOutputPanelsFrom
   (infra: DashboardInfra)
   (sessions: WorkerProtocol.SessionInfo list)
   (sessionId: WorkerProtocol.SessionId)
-  (sessionState: string)
+  (sessionState: SessionState)
   (warmupProgress: string)
   (wCtx: WarmupContext option)
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode * ParsedSession list> =
@@ -536,8 +536,11 @@ let private buildOutputPanelsFrom
       | true -> sprintf "%s %s" (Glyphs.text Glyph.Busy) warmupProgress
       | false ->
         match sessionState with
-        | "Ready" -> "Ready — type code in the evaluator below, or use the MCP tools"
-        | state -> sprintf "%s" state
+        | SessionState.Ready -> "Ready — type code in the evaluator below, or use the MCP tools"
+        | SessionState.Uninitialized
+        | SessionState.WarmingUp
+        | SessionState.Evaluating
+        | SessionState.Faulted -> SessionState.label sessionState
     let evalsFinished = q.GetSessionEvalCounts () |> Map.tryFind sessionId |> Option.defaultValue 0
     let computeResult () =
       // Per-session regions use the caller's immutable viewing session,
@@ -1168,7 +1171,6 @@ let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading
     let sid = WorkerProtocol.SessionId.value sessionId
     let lastSid = WorkerProtocol.SessionId.value lastSessionId
     let state = q.GetSessionState sessionId
-    let stateStr = SessionState.label state
     let workingDir = q.GetSessionWorkingDir sessionId
     let statsTask =
       match cachedWorkerData with
@@ -1259,7 +1261,7 @@ let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading
     // The cards come first: the header badge, the daemon health bar, the card and the live bindings pane's note all read the
     // viewed card's own reading, so they are built from it and cannot differ by a poll.
     let warmupProgress = q.GetWarmupProgress sessionId
-    let! outputPanel, sessionsPanel, sessionPicker, cards = buildOutputPanelsFrom q infra sessions sessionId stateStr warmupProgress wCtx
+    let! outputPanel, sessionsPanel, sessionPicker, cards = buildOutputPanelsFrom q infra sessions sessionId state warmupProgress wCtx
     // What the viewed session's Ready is worth, read from the viewed card's own source reading and the registry's freshness:
     // the header badge, the daemon health bar and the card all say this one thing.
     let readiness = viewedReadiness state sessionId cards
