@@ -11,11 +11,6 @@ type LoadedDefinitionState =
   | ConfirmedStale of diskArtifact: string * loadedArtifact: string
   | UnknownLoadState of reason: string
 
-module LoadedDefinitionState =
-  let isCurrent = function
-    | LoadedDefinitionState.ConfirmedCurrent _ -> true
-    | _ -> false
-
 [<RequireQualifiedAccess>]
 type RegressionRisk =
   | LocalizedBehavior

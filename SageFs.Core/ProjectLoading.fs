@@ -1173,10 +1173,6 @@ let isTestProject (proj: ProjectOptions) : bool =
     proj.PackageReferences
     |> List.exists (fun pr -> isTestPackageName (Path.GetFileNameWithoutExtension(pr.FullPath)))
 
-/// Filter a solution's projects to only test projects.
-let discoverTestProjects (projects: ProjectOptions list) : ProjectOptions list =
-  projects |> List.filter isTestProject
-
 /// Desktop-UI frameworks are enabled by MSBuild properties, not packages
 /// (WPF/WinForms have no package — they are `<UseWPF>`/`<UseWindowsForms>` on a
 /// `-windows` TFM; MAUI/WinUI add `<UseMaui>`/`<UseWinUI>` alongside packages).

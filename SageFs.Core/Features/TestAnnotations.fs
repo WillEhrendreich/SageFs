@@ -215,19 +215,6 @@ module FailurePresentation =
     | TestFailure.TimedOut after ->
       FailurePresentation.Timeout after
 
-  let inlineLabel maxLen (fp: FailurePresentation) =
-    let raw =
-      match fp with
-      | FailurePresentation.AssertionDiff(e, a) ->
-        sprintf "expected %s, got %s" e a
-      | FailurePresentation.ExceptionMessage(m, _) -> m
-      | FailurePresentation.Timeout t ->
-        sprintf "timed out after %ds" (int t.TotalSeconds)
-      | FailurePresentation.RawMessage m -> m
-    match raw.Length <= maxLen with
-    | true -> raw
-    | false -> raw.Substring(0, maxLen - 1) + "…"
-
 module AnnotationFreshness =
   let fromPhaseAndResult
     (phase: TestRunPhase)

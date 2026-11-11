@@ -191,9 +191,6 @@ module GuardPatcher =
   /// The registry of the process: the real patcher, the real ledger hot reload writes to.
   let shared : PatchRegistry = PatchRegistry(HarmonyBackend.backend, DetourLedger.shared)
 
-  /// The id our patches carry on a method, for asking Harmony who is on it.
-  let patchOwnerId () : string = HarmonyBackend.ownerId ()
-
   let private callOpcodes = [ OpCodes.Call; OpCodes.Callvirt; OpCodes.Newobj; OpCodes.Ldftn; OpCodes.Ldvirtftn; OpCodes.Jmp ]
 
   /// The methods one method calls, constructs or takes a pointer to, from its IL, read by Harmony's reader.

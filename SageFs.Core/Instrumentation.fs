@@ -208,12 +208,6 @@ module Instrumentation =
   let sseFrameBytes =
     mcpMeter.CreateHistogram<int64>("sagefs.sse.frame_bytes", "B", "SSE frame size in bytes")
 
-  // P2: RED metric gaps — EventStore fetch
-  let eventstoreFetchDurationMs =
-    sessionMeter.CreateHistogram<float>("sagefs.eventstore.fetch_duration_ms", "ms", "EventStore fetch duration")
-  let eventstoreStreamEventCount =
-    sessionMeter.CreateHistogram<int64>("sagefs.eventstore.stream_event_count", description = "Event count per fetched stream")
-
   // P2: RED metric gaps — FSI eval
   let fsiEvalDurationMs =
     mcpMeter.CreateHistogram<float>("sagefs.fsi.eval_duration_ms", "ms", "FSI eval duration")

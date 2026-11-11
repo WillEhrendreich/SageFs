@@ -32,7 +32,6 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
      * injectTracker: Create __SageFsCoverage class
      * insertProbes: Inject Hit() calls before sequence points
      * instrumentAssembly: Full instrumentation pipeline
-     * collectCoverageHits: Read coverage data post-test via reflection
    - Key Type: InstrumentationMap { Slots: SequencePoint[]; TotalProbes: int }
    - Coverage Bitmap: CoverageBitmap { Bits: uint64[]; Count: int } (8x memory vs bool[])
 

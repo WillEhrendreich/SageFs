@@ -665,12 +665,6 @@ module ILCoverage =
         file, lineMap)
       |> Map.ofArray
 
-  /// Get coverage for a specific file.
-  let forFile (filePath: string) (coverage: Map<string, Map<int, LineCoverage>>) : (int * LineCoverage) array =
-    match Map.tryFind filePath coverage with
-    | None -> [||]
-    | Some lineMap -> lineMap |> Map.toArray
-
 /// Which lines of a file an edit changed, measured against the text the assembly was compiled
 /// from. Line numbers in recorded coverage are only meaningful against that text.
 [<RequireQualifiedAccess>]
@@ -2076,15 +2070,6 @@ module StatusToGutter =
   let toAnnotation (line: int) (testName: string) (status: TestRunStatus) : LineAnnotation =
     { Line = line; Icon = fromTestStatus status; Tooltip = tooltip testName status }
 
-  let coverageAnnotation (line: int) (symbol: string) (status: CoverageStatus) : LineAnnotation =
-    let tip =
-      match status with
-      | CoverageStatus.Covered (n, CoverageHealth.AllPassing) -> sprintf "%s: covered by %d test(s), all passing" symbol n
-      | CoverageStatus.Covered (n, CoverageHealth.SomeFailing) -> sprintf "%s: covered by %d test(s), some failing" symbol n
-      | CoverageStatus.NotCovered -> sprintf "%s: not covered by any test" symbol
-      | CoverageStatus.Pending -> sprintf "%s: coverage pending" symbol
-    { Line = line; Icon = fromCoverageStatus status; Tooltip = tip }
-
 module TestSummary =
   let empty = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
 
@@ -2872,17 +2857,6 @@ module LiveTesting =
       previousNarratives
       (LiveTestState.orderedStatusEntries state)
       state
-
-  let markAffected (testIds: TestId array) (state: LiveTestState) : LiveTestState =
-    let affected = testIds |> Set.ofArray |> Set.union state.AffectedTests
-    let previousStatuses =
-      LiveTestState.orderedStatusEntries state
-      |> Array.map (fun e -> e.TestId, e.Status)
-      |> Map.ofArray
-    let updatedState = { state with AffectedTests = affected }
-    LiveTestState.withStatusEntries
-      (computeStatusEntriesWithHistory previousStatuses updatedState)
-      updatedState
 
   let annotationsForFile (filePath: string) (state: LiveTestState) : LineAnnotation array =
     let entryIndex = LiveTestState.statusEntryIndex state

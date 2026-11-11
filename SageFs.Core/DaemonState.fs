@@ -334,7 +334,6 @@ module DaemonState =
   let read () = probeDaemonHttp defaultMcpPort
 
   /// Detect a running daemon on a specific MCP port.
-  let readOnPortAsync (mcpPort: int) = probeDaemonHttpAsync mcpPort
   let readOnPort (mcpPort: int) = probeDaemonHttp mcpPort
 
   /// Request graceful shutdown via the dashboard API.

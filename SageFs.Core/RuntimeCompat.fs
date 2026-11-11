@@ -149,11 +149,6 @@ let describe (choice: RuntimeChoice) : string =
 /// Why no shared-framework directory could be chosen.
 type FrameworkDirError = NoFrameworkForMajor of major: int * available: string list
 
-let describeFrameworkDirError (error: FrameworkDirError) : string =
-  match error with
-  | NoFrameworkForMajor(major, available) ->
-    sprintf "no shared framework directory for .NET %d among [%s]" major (String.concat ", " available)
-
 /// Pick the shared-framework directory (e.g. Microsoft.AspNetCore.App/<dir>) whose reference assemblies
 /// match the runtime the host is ACTUALLY running on: exact major.minor.patch, else the highest of the
 /// same major. Never a different major, which is what "newest directory" got wrong on a machine with

@@ -943,10 +943,6 @@ module ToolName =
     | ToolName.SeatConductor -> Some CohortTool.SeatConductor
     | _ -> None
 
-  /// Whether `tool` is one of the cohort verbs. Derived from the mapping
-  /// above rather than from the name list, so the two cannot disagree.
-  let isCohortTool (tool: ToolName) : bool = Option.isSome (tryCohortTool tool)
-
 // ── ToolRole: what this project means by `Observer` ──────────────────────
 //
 // THE SEMANTIC DECISION, stated once so every test can quote it.

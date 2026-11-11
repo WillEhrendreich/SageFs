@@ -98,5 +98,4 @@ module BinaryPrimitives =
   let writeU8 (bw: BinaryWriter) (v: byte) = bw.Write(v)
   let writeU16 (bw: BinaryWriter) (v: uint16) = bw.Write(v)
   let writeU32 (bw: BinaryWriter) (v: uint32) = bw.Write(v)
-  let writeU64 (bw: BinaryWriter) (v: uint64) = bw.Write(v)
   let writeI64 (bw: BinaryWriter) (v: int64) = bw.Write(v)

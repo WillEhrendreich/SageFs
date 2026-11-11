@@ -45,11 +45,6 @@ module Stream =
     | Stdout -> "APP_OUTPUT="
     | Stderr -> "APP_ERROR="
 
-  /// The tag, looked up by its text. Used by the parse side and by a caller that has to say which prefix it is
-  /// about to write.
-  let ofPrefix (text: string) : Stream option =
-    all |> List.tryFind (fun s -> prefix s = text)
-
 /// stdout line prefix, kept as a named value because the dashboard's own tests and the worker-side writer both
 /// refer to it by name. Defined FROM `Stream.prefix` rather than beside it: two places deciding the same tag
 /// pairing is how a tag ends up written for one stream and parsed as the other.

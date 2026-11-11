@@ -119,9 +119,3 @@ module GranularRestart =
     match verdict with
     | Verdict.Restart _ -> verdict, budgets |> Map.add (describe subject) next
     | Verdict.GiveUp _ -> verdict, budgets
-
-  /// The labels that currently hold a budget. The DST invariants fold over
-  /// this, so a subject the sim never exercises is a non-vacuousness failure
-  /// rather than a silent pass.
-  let subjectsWithBudget (budgets: Budgets) : string list =
-    budgets |> Map.toList |> List.map fst

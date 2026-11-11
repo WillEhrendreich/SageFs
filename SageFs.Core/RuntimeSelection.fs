@@ -53,7 +53,3 @@ let resolveRuntimeChoiceFor (hostMajor: int) (projects: string list) : RuntimeCo
     | _ ->
       Ok(known |> List.maxBy (fun r -> r.Major, (match r.Stability with RuntimeCompat.Stable -> 0 | RuntimeCompat.Prerelease -> 1)))
   RuntimeCompat.decide hostMajor (installedRuntimeMajors ()) requirement
-
-/// The worker's own case: it runs on the runtime of this process.
-let resolveRuntimeChoice (projects: string list) : RuntimeCompat.RuntimeChoice =
-  resolveRuntimeChoiceFor Environment.Version.Major projects

@@ -48,13 +48,6 @@ let summarize (lines: DiffLine list) : DiffSummary =
     ModifiedCount = lines |> List.sumBy (function Modified _ -> 1 | _ -> 0)
     UnchangedCount = lines |> List.sumBy (function Unchanged _ -> 1 | _ -> 0) }
 
-let formatDiffLine (line: DiffLine) : string =
-  match line with
-  | Unchanged s -> sprintf "  %s" s
-  | Added s -> sprintf "+ %s" s
-  | Removed s -> sprintf "- %s" s
-  | Modified(old, cur) -> sprintf "~ %s → %s" old cur
-
 let formatSummary (summary: DiffSummary) : string =
   let parts =
     [ if summary.AddedCount > 0 then sprintf "%d added" summary.AddedCount

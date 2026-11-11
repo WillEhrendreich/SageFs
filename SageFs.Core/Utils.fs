@@ -53,14 +53,3 @@ module Configuration =
 
   let getBaseConfigString () =
     getEmbeddedFileAsString "SageFs.Core.base.fsx" (Assembly.GetExecutingAssembly())
-
-  let getConfigDir () =
-    let configDir =
-      Environment.GetFolderPath Environment.SpecialFolder.ApplicationData
-      |> fun s -> Path.Combine [| s; "SageFs" |]
-
-    match Directory.Exists configDir with
-    | false -> do Directory.CreateDirectory configDir |> ignore
-    | true -> ()
-
-    configDir

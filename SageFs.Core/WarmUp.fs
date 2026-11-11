@@ -323,21 +323,6 @@ module WarmupProgressLine =
     | true -> tryParsePayload (line.Substring Prefix.Length)
     | false -> None
 
-/// Opens names iteratively with rich failure info.
-/// opener: tries to open a name+kind, returns OpenAttemptResult.
-/// Returns (succeeded with timing, failures with diagnostics).
-let openWithRetryRich
-  (maxRounds: int)
-  (opener: string -> OpenableKind -> OpenAttemptResult)
-  (names: (string * OpenableKind) list)
-  : OpenedBinding list * WarmupOpenFailure list =
-  openWithRetryRichCore
-    maxRounds
-    (fun remaining ->
-      remaining
-      |> List.map (fun (name, kind) -> name, kind, opener name kind))
-    names
-
 /// Opens names in chunks to reduce per-open interpreter overhead.
 /// When a chunk fails, each item is retried individually so failures stay attributable.
 let openWithRetryRichBatched

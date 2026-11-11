@@ -37,9 +37,6 @@ module ProjectResolution =
       | 0 -> ProjectResolution.RequestedButUnresolved (SessionProjectTarget.paths targets)
       | _ -> ProjectResolution.Resolved
 
-  let classifyOnDisk (_workingDir: string) (targets: SessionProjectTarget list) (resolvedCount: int) : ProjectResolution =
-    classify targets resolvedCount
-
   /// One line explaining the fault, naming what was asked for and what to
   /// do about it.
   let unresolvedReason (requested: string list) : string =

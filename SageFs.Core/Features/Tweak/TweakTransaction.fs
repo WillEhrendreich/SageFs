@@ -163,11 +163,6 @@ let isApplied (state: TweakState<'Value>) =
   | TweakState.Journaled _ -> true
   | _ -> false
 
-let isJournaled (state: TweakState<'Value>) =
-  match state with
-  | TweakState.Journaled _ -> true
-  | _ -> false
-
 let isFailed (state: TweakState<'Value>) =
   match state with
   | TweakState.Failed _ -> true

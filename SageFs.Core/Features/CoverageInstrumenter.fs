@@ -327,52 +327,9 @@ module CoverageInstrumenter =
     removeStaging staging
     outcome
 
-  /// Collect coverage hits from an instrumented assembly via reflection.
-  let collectCoverageHits
-    (asm: Assembly)
-    (map: InstrumentationMap)
-    : CoverageState option =
-    match map.TotalProbes = 0 with
-    | true ->
-      None
-    | false ->
-      let trackerType = asm.GetType(map.TrackerTypeName)
-      match trackerType = null with
-      | true ->
-        None
-      | false ->
-        let hitsField = trackerType.GetField(map.HitsFieldName)
-        match hitsField = null with
-        | true ->
-          None
-        | false ->
-          let hits = hitsField.GetValue(null) :?> bool array
-          Some(InstrumentationMap.toCoverageState hits map)
-
-  /// Reset coverage hits to prepare for a new test run.
-  let resetCoverageHits
-    (asm: Assembly)
-    (map: InstrumentationMap)
-    : unit =
-    match map.TotalProbes > 0 with
-    | true ->
-      let trackerType = asm.GetType(map.TrackerTypeName)
-      match trackerType <> null with
-      | true ->
-        let hitsField = trackerType.GetField(map.HitsFieldName)
-        match hitsField <> null with
-        | true ->
-          hitsField.SetValue(null, Array.create map.TotalProbes false)
-        | false -> ()
-      | false -> ()
-    | false -> ()
-
   /// Track consecutive instrumentation failures for circuit breaker.
   let mutable private consecutiveFailures = 0
   let private maxConsecutiveFailures = 3
-
-  /// Reset the circuit breaker (e.g., after a successful instrumentation).
-  let resetCircuitBreaker () = consecutiveFailures <- 0
 
   /// Check if the circuit breaker has tripped.
   let isCircuitBroken () = consecutiveFailures >= maxConsecutiveFailures
