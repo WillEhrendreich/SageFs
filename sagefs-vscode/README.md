@@ -196,7 +196,7 @@ A session fault message is one sentence and a remedy. The daemon's full diagnosi
 - **Dashboard webview**: Open the SageFs dashboard directly inside VS Code
 - **Status bar**: Active project, eval count, test summary, eval performance sparkline. Click to open dashboard.
 - **Auto-start**: Detects `.fsproj`/`.sln`/`.slnx` files and offers to start SageFs automatically
-- **Ionide integration**: Hijacks Ionide's `FSI: Send Selection` commands so Alt+Enter routes through SageFs
+- **Ionide integration**: Registers Ionide's `fsi.SendSelection`, `fsi.SendLine` and `fsi.SendFile` command ids so Ionide's send keys route through SageFs. Alt+Enter has its own binding and works either way. Set `sagefs.takeOverIonideSendCommands` to `false` to leave the ids to Ionide (reload the window after changing it); when another extension already owns one, the SageFs output channel says so
 - **11 custom theme colors**: Inline result and test mark colors respect your VS Code theme (the list is under `contributes.colors` in `package.json`)
 
 ---

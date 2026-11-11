@@ -31,6 +31,7 @@
     <Compile Include="StatusBarPure.fs" />
     <Compile Include="EvalPreflightPure.fs" />
     <Compile Include="StartupPure.fs" />
+    <Compile Include="IonideTakeoverPure.fs" />
     <Compile Include="NudgeKnobPure.fs" />
     <Compile Include="../../SageFs.Core/LadderContract.fs" Link="LadderContract.fs" />
     <Compile Include="TypeExplorerPure.fs" />

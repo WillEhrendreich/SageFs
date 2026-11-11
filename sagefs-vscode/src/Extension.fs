@@ -35,6 +35,7 @@ module SessionsTreePure = SageFs.Vscode.SessionsTreePure
 module StatusBarPure = SageFs.Vscode.StatusBarPure
 module EvalPreflightPure = SageFs.Vscode.EvalPreflightPure
 module StartupPure = SageFs.Vscode.StartupPure
+module IonideTakeoverPure = SageFs.Vscode.IonideTakeoverPure
 module WorkflowPickPure = SageFs.Vscode.WorkflowPickPure
 module ContextKeysPure = SageFs.Vscode.ContextKeysPure
 
@@ -2581,19 +2582,24 @@ let private startDebugRectsServer () =
   | DebugRects.ServerGate.Start port -> listenDebugRects port
 
 let hijackIonideSendToFsi (subs: ResizeArray<Disposable>) =
-  for cmd in [| "fsi.SendSelection"; "fsi.SendLine"; "fsi.SendFile" |] do
-    try
-      let disp =
-        Commands.registerCommand cmd (fun _ ->
-          match cmd with
-          | "fsi.SendFile" ->
-            Commands.executeCommand "sagefs.evalFile" |> promiseIgnore
-          | _ ->
-            Commands.executeCommand "sagefs.eval" |> promiseIgnore
-        )
-      subs.Add disp
-    with ex ->
-      logDebug (sprintf "Could not hijack %s: %s" cmd (string ex))
+  let enabled = (Workspace.getConfiguration "sagefs").get(IonideTakeoverPure.settingKey, true)
+  match IonideTakeoverPure.plan enabled with
+  | IonideTakeoverPure.Plan.LeaveToIonide -> ()
+  | IonideTakeoverPure.Plan.TakeOver ->
+    for cmd in IonideTakeoverPure.commandIds do
+      try
+        let disp =
+          Commands.registerCommand cmd (fun _ ->
+            match cmd with
+            | "fsi.SendFile" ->
+              Commands.executeCommand "sagefs.evalFile" |> promiseIgnore
+            | _ ->
+              Commands.executeCommand "sagefs.eval" |> promiseIgnore
+          )
+        subs.Add disp
+      with ex ->
+        logDebug (sprintf "Could not hijack %s: %s" cmd (string ex))
+        (getOutput()).appendLine (IonideTakeoverPure.refusedNotice cmd)
 
 // ── Activate / Deactivate ──────────────────────────────────────
 

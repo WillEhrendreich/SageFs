@@ -405,6 +405,12 @@
           "type": "string",
           "default": "",
           "description": "Pin the API Browser tree to a single root namespace (e.g. \"MyApp.Domain\"). Empty string shows the default set of common .NET and F# namespaces."
+        },
+        "sagefs.takeOverIonideSendCommands": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Register Ionide's fsi.SendSelection, fsi.SendLine and fsi.SendFile command ids so Alt+Enter and Ionide's own send keys reach SageFs. Turn it off to leave them to Ionide. Takes effect after a window reload. When another extension already owns an id, SageFs says so in its output channel."
         }
       }
     },
