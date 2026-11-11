@@ -2,6 +2,117 @@
 
 Roadmap item: `delta-adds-fields-and-types` (Later, hot reload). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read on that commit. The plan under "Resume here" is
+still the design; this section is what to do on Monday morning with nobody to ask.
+
+### 1. Outcome
+
+Today a `run_app` save that adds a lambda capturing a local, adds a field to a class or record, or adds a type restarts the app
+(pid changes, state is lost). Afterwards those three saves land as a metadata delta: same pid, state kept, verdict `Patched`,
+mechanism `metadata-delta`. Saves the runtime cannot take still restart and name the declaration and the cause.
+
+Outcome gate: new rows in the `rows` table of `SageFs.Tests/RunAppDeltaTests.fs:60` (today: `generic`, `closure`, `instance`,
+`taskBody`, `addedMethod`, `rudeVirtual`, `rudeStruct`). Each row runs once per runtime through
+`Integration.hostListConcurrent` (`RunAppDeltaTests.fs:285`, runtimes from `HostRuntime` in
+`SageFs.Tests/HotReloadStateHarness.fs:31`, net10 and net11). A row asserts `Before`, `After`, same pid and `Ending`
+(`Ending.PatchedByDelta` or `Ending.RestartsNaming`, `RunAppDeltaTests.fs:39`). Linux only is proven; the metadata rows are
+platform-neutral but no Windows or macOS run exists, say so in the row's name if a cell is skipped there.
+
+### 2. Where the code is today
+
+- `SageFs.Core/Features/MetadataDelta/RudeCause.fs`: `TypeRemoved:46`, `TypeAdded:49`, `FieldsChanged:51`,
+  `PropertiesOrEventsChanged:55`, `AttributesChanged:57`, `AddedMethodUnsupported:70`, `StaticInitializerChanged:73`,
+  `ClosureMatchAmbiguous:76`. `describe` at `:86` says "(a new closure class or type needs a restart)", which phase A makes false.
+- `RequiredFeature` is in `DeltaWriter.fs:35` (`Baseline`, `AddMethodToExistingType`, `GenericUpdateMethod`), with
+  `capabilityName:42`. The plan below says `DeltaApply.fs`; that file only reads the names: `RuntimeCapability.Features:44`,
+  `GetCapabilities` by reflection at `DeltaApply.fs:104`, `MissingFeature` check at `:197`.
+- `DeltaWriter.fs`: `KnownRows:364` (only `Methods: Map<string, MethodRow>` at `:371`), `ChainState:393`,
+  `DeltaChain.write:492`, the token `map` at `:582`, `AddParameter:855`, EnC log `AddMethod:868`.
+- `MethodDiff.fs`: `MethodChange:39` (`Unchanged | BodyChanged | Added | Rude of RudeCause`), `fieldsOf:138`, `membersOf:151`,
+  closure matching by `FoldedName` with `ClosureMatchAmbiguous` at `:198-208`, `TypeRemoved:213`, `TypeAdded:218`.
+- `SageFs.Core/Features/PatchRoute.fs:28` `choose`: only `AppPlacement.InWorkerProcess, MetadataDeltaMode.On,
+  ReloadPlan.PatchFunctions` goes to `SaveRoute.ByMetadataDelta` (`:30-31`).
+- Planner restart reasons the gate must widen for: `ReloadOutcome.RestartReason.TypeShapeChanged`, `NewDeclaration`,
+  `ClosureShapeChanged` (`SageFs.Core/Features/RestartSubjectDecision.fs:45-86`, names at `ReloadBroadcast.fs:60-67`).
+  `ReloadPlanning.planReloadAsync` is at `ReloadPlanning.fs:1377`.
+- Harness: `SageFs.Tests/DeltaProgram.fs` (`Closure:61`, `CallClosure:52`, `interpret:162`, `genNextVersion:262`),
+  `DeltaChild.fs`, `MetadataDeltaTests.fs:402` (`testList "metadata delta emitter"`, a plain `[<Tests>]` in the DEFAULT suite,
+  it spawns its own child; the plan below calls it host-tier, which is wrong), `RealFSharpDeltaTests.fs`,
+  `DeltaRouteTests.fs:64-85` (tests of `choose`), `DeltaRouteSimTests.fs`.
+- Sim: `SageFs.Simulation/DeltaRouteSim.fs`, `DeltaRouteGenerators.fs:19-28` (ops `Edit`, `Prepare`, `Apply`, `ArmFault`,
+  `ReplaceProcess`, `Respawn`, `AttachDebugger`, `DetachDebugger`, `RequestStarts`, `RequestEnds`, `BoundElapses`),
+  `DeltaRouteInvariants.fs`.
+- Fixture: `SageFs.Tests/fixtures/RunAppDeltaFixture/Handlers.fs` and `Program.fs`.
+- Doc sentence to change when phase A lands: `docs/how-hot-reload-works.md:183`.
+- `[not verified]`: what the runtime's `GetCapabilities` returns on net10 and net11 (step 1 reads it), and what the planner
+  answers for each target edit (step 1).
+
+### 3. Steps
+
+Each step is one commit. New test files go in `SageFs.Tests/SageFs.Tests.fsproj` as `<Compile Include="..."/>` before
+`Program.fs` (`:1194`); `DeltaProgram.fs` is at `:690`, `RunAppDeltaTests.fs` at `:1006`.
+
+1. Measure (no code). In a SageFs session on `SageFs.Tests`, eval
+   `typeof<System.Reflection.Metadata.MetadataUpdater>.GetMethod("GetCapabilities", System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Static).Invoke(null, [||])`
+   and write the list into "What exists today" below (replace the "from my memory" paragraph). Do it once in a net11 host and
+   once in a net10 host. Then run `ReloadPlanning.planReloadAsync` on a before/after `FileDecls` pair for each of the six
+   edits and record `PatchFunctions` or the `RestartReason`. If `NewTypeDefinition` is absent on both runtimes, stop and say so.
+2. RED, pure: `SageFs.Tests/MetadataDeltaTests.fs`, case "WHY - the runtime reports every capability the writer needs"
+   (fails while `RequiredFeature` lacks `NewTypeDefinition`; add the case to `RequiredFeature` and `capabilityName` in
+   `DeltaWriter.fs:35-45`). Domain logic.
+3. RED, outcome: row `addLambdaCapturing` in `RunAppDeltaTests.fs` with `Ending.PatchedByDelta`, and the route in
+   `fixtures/RunAppDeltaFixture/Handlers.fs`. It fails today with a restart. Commit red (marker from `sagefs-workflow`).
+4. RED, harness: `DeltaProgram.genNextVersion` gains "append a `Closure` and a `CallClosure` to an existing method"; case
+   "WHY - a closure class added by a later version is created by the patched method and answers like the interpreter". Red
+   until step 6. Test files only; runs in parallel with 5.
+5. `MethodDiff.fs`, domain logic: closure pairing by canonical `Invoke` IL (`IlCanon`) plus captured field types; unmatched
+   new closure is `MethodChange.AddedType` (new case, with the `TypeAddition` record from "Design"); `TypeAdded` stays for
+   generic, interface, enum and unspellable-base types. `RudeCause.describe:86` text changes.
+6. `DeltaWriter.fs`, domain logic: TypeDef, NestedClass, Field, MethodDef (`.ctor`, `Invoke`), Param rows and their EnC
+   entries; `KnownRows.Types` and `Fields`; `map:582` maps a next-image TypeDef the baseline lacks. Step 4 goes green.
+7. `PatchRoute.choose`, domain logic: with the app in the worker and delta mode on, a `RestartRequired` plan whose reason is
+   `ClosureShapeChanged`, `TypeShapeChanged` or `NewDeclaration` goes to the emitter. RED first in `DeltaRouteTests.fs`.
+   `DeltaRouteGenerators.fs` learns an `AddClosure` op; invariants D1 to D3 from "Tests" below. Parallel with 6.
+8. Edge: whatever `WorkerMain.fs` needs so the emitter's refusal, when it refuses, is reported with the planner's reason as the
+   fallback. Row 3 goes green on both runtimes. Ship phase A here (recommendation below).
+9. Phase B rows `addClassField`, `addRecordField` (RED), then Property, PropertyMap, MethodSemantics, CustomAttribute and
+   constructor rows. `DECISION:` see 6.
+10. `docs/how-hot-reload-works.md:183` and the comparison table; a `decisions.md` entry.
+
+### 4. How to check it
+
+- Inner loop: a SageFs session on `SageFs.Tests` (build first), `send_fsharp_code` the pure diff/writer functions against a
+  Cecil-built pair; `run_tests` filtered to `metadata delta emitter`.
+- Gate lane: `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Row inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary --filter-test-list "run_app metadata delta"`.
+- Acceptance: unfiltered `--summary` (emitter tests, route tests, sim) and unfiltered `--integration-host --summary` (rows),
+  read the `TRUST` line's `ran=`.
+
+### 5. Traps in this repo
+
+- SAGE-005: `TypeAddition` has `Type: string` beside method names; wrap the type key or keep one string field per record.
+- A new `RudeCause` case is a string on the wire inside `reasons` (`ReloadRefusal.Case`); clients render it as text, so
+  `Plugin: n/a`, but say so in the commit trailer because `ReloadBroadcast.fs` is on the wire list.
+- `MetadataDeltaTests` runs in the default suite and spawns a child with `DOTNET_MODIFIABLE_ASSEMBLIES=debug`; a child
+  process test goes through `SpawnEnvironment.apply`.
+- No timing: a row waits on the `Patched` frame, never a sleep.
+- Linux only machine; no Windows row has ever run.
+
+### 6. Size and order
+
+L. Phase A (steps 1 to 8) two to three weeks for one person; phase B another two to three. Step 1 first (one day, can end
+the item). Steps 4 and 5 in parallel, 6 after 5, 7 in parallel with 6. First commit: step 1's measurement written into this
+file plus step 2's red test.
+
+### 7. Not now
+
+- A lambda that already exists and starts capturing: live closure objects have no slot for it; stays a restart (C# does the same).
+- Struct layout, static fields, module-level values: the runtime cannot, or the initializer never reruns.
+- Waiting for `dotnet/fsharp#19941`: no date; keep the rows behind `DeltaWriter.fs` so the apply/confirm/refuse half survives.
+- `type-change-keeps-state` (old objects read the CLR zero in a new field) is its own item; this one only emits the refusal hook.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -48,8 +159,9 @@ state counter that carries on. The existing refusal rows stay and must still res
   `ReloadPlan.PatchFunctions` plan to `SaveRoute.ByMetadataDelta`. A plan that is `RestartRequired` (for example
   `TypeShapeChanged` for a record, row `rudeStruct`, `Cause.Planner`) is a restart before `MethodDiff` is asked. A save that
   adds a lambda is judged by the planner's closure rules first; I did not run what it answers, see Measure first.
-- `DeltaApply.fs` checks the runtime before a call. `RequiredFeature` knows three names: `Baseline`, `AddMethodToExistingType`,
-  `GenericUpdateMethod`, read from the runtime's internal `MetadataUpdater.GetCapabilities`.
+- `DeltaApply.fs` checks the runtime before a call. `RequiredFeature` (defined in `DeltaWriter.fs:35`, not in `DeltaApply.fs`)
+  knows three names: `Baseline`, `AddMethodToExistingType`, `GenericUpdateMethod`, compared against the list `DeltaApply.fs:104`
+  reads from the runtime's internal `MetadataUpdater.GetCapabilities`.
 - The existing proofs: `MetadataDeltaTests.fs` (seeded programs from `DeltaProgram.fs`, compiled with Cecil, run in a child
   with `DOTNET_MODIFIABLE_ASSEMBLIES=debug`, answers compared with an interpreter, one to three deltas in a row, twins),
   `RealFSharpDeltaTests.fs` (the F# compiler's own output) and `DeltaRouteSim.fs`.
@@ -148,9 +260,9 @@ cannot see a missing row); `runIgnoresRuntimeRefusal` breaks D2; `runFirstMatchB
 added above another. The mutation style that exists for the writer applies: remove one row kind at a time and each removal
 must turn a harness case red.
 
-Tiers: 1, 2 and 4 and the sim run where their current siblings run (`MetadataDeltaTests` is a host-tier test because it needs
-a child process with the modifiable environment; check its `Integration` registration and follow it). Row tests run in
-`--integration-host`. No waits on time: each row waits on the `Patched` frame, and the harness reads answers from the child
+Tiers: 1, 2 and 4 and the sim run where their current siblings run (`MetadataDeltaTests` is a plain `[<Tests>]` list in the
+default suite, checked 2026-11-11; it starts its own child with the modifiable environment, so a new case there needs no
+registration). Row tests run in `--integration-host`. No waits on time: each row waits on the `Patched` frame, and the harness reads answers from the child
 after `ApplyUpdate` returns.
 
 ## Steps
