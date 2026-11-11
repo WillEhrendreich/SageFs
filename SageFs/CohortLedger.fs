@@ -160,8 +160,17 @@ VALUES ($scope, $seq, $clock_ticks, $entropy, $command_json, $events_json);"
           skipped <- skipped + 1
           Log.warn "[cohort-ledger] skipping ledger row v%d: this build cannot read its events (%s). The row is left in place — the daemon starts without that history rather than refusing to boot." (int64 seq) (SageFsError.describe eventsErr)
       if skipped > 0 then
-        Log.warn "[cohort-ledger] %d ledger row(s) could not be read by this build and were skipped. Everything the daemon does now starts from an empty cohort for its scope; no landing or claim was applied from them." skipped
+        Log.warn "[cohort-ledger] %d ledger row(s) could not be read by this build and were skipped. They stay on disk for a build that can read them. The cohort for this scope is rebuilt from the rows this build can read, no landing or claim was applied from the skipped ones, and new rows are numbered after the highest row on disk." skipped
       List.ofSeq entries
+
+    /// One past the highest `seq` this scope holds, read from the column and never decoded, so a row `readAll` skipped
+    /// keeps its number and the owner's next append takes the one after it.
+    let nextSeq (scope: SageFs.CohortScope) : int64<Measures.ledgerSeq> =
+      use connection = openConnection dbPath
+      use command = connection.CreateCommand()
+      command.CommandText <- "SELECT COALESCE(MAX(seq) + 1, 0) FROM cohort_ledger WHERE scope = $scope;"
+      command.Parameters.AddWithValue("$scope", SageFs.Scope.label scope) |> ignore
+      LanguagePrimitives.Int64WithMeasure<Measures.ledgerSeq> (System.Convert.ToInt64(command.ExecuteScalar()))
 
     /// The scopes this store actually holds rows for, sorted. A caller starting a cohort for a
     /// scope with no rows gets `[]`, which is what makes a replay a real reconstruction rather
@@ -177,7 +186,7 @@ VALUES ($scope, $seq, $clock_ticks, $entropy, $command_json, $events_json);"
         labels.Add(reader.GetString 0)
       labels |> Seq.toList |> List.map SageFs.Cohort.scopeOfLabel |> List.sortBy SageFs.Scope.label
 
-    { Append = append; ReadAll = readAll; Scopes = scopes }
+    { Append = append; ReadAll = readAll; NextSeq = nextSeq; Scopes = scopes }
 
   /// The ledger's footprint for the "what's stored" view.
   type LedgerUsage = {

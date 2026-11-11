@@ -527,10 +527,9 @@ module CohortOwner =
     let audit = replayAuditIn scope entries
     logReplayFindings logger scope audit
     let head = audit.Head
-    let initialNextSeq =
-      match entries with
-      | [] -> 0L<ledgerSeq>
-      | _ -> head.Seq + 1L<ledgerSeq>
+    // From the store, never from `entries`: a row this build could not read is not in `entries` but is still on disk
+    // holding its number, and reusing that number made every append for the scope fail on the store's key.
+    let initialNextSeq = ledger.NextSeq scope
     let frameRef = ref (frameOf getSessionTestOutcomes head)
     let publish (frame: CohortFrame<MemberId>) =
       Interlocked.Exchange(frameRef, frame) |> ignore

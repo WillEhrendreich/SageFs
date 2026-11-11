@@ -360,6 +360,7 @@ let cohortInspectorTests =
       let portOver (store: SageFs.Features.CohortLedger.InMemory.Store<MemberId>) : SageFs.Features.CohortLedger.LedgerPort<MemberId> = {
         Append = store.Append
         ReadAll = store.ReadAll
+        NextSeq = store.NextSeq
         Scopes = store.Scopes
       }
 

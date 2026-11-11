@@ -33,6 +33,10 @@ module CohortLedger =
     Append: LedgerEntry<'m> -> unit
     /// Every entry recorded for `scope` so far, in `Seq` order.
     ReadAll: CohortScope -> LedgerEntry<'m> list
+    /// The `Seq` the next append for `scope` takes: one past the highest number the store holds for it, counting rows
+    /// this build cannot read. `ReadAll` skips such a row and leaves it on disk, so a number taken from what `ReadAll`
+    /// returned reused the skipped row's and every append after an upgrade hit the store's key.
+    NextSeq: CohortScope -> int64<Measures.ledgerSeq>
     /// The scopes this store actually holds rows for, sorted. A caller starting a
     /// cohort for a scope with no rows gets `[]` — the store is what says whether
     /// there is history, which is what makes `replayIn` a real reconstruction
@@ -72,6 +76,13 @@ module CohortLedger =
           | true, bucket -> List.ofSeq bucket
           | false, _ -> [])
 
+      member _.NextSeq(scope: CohortScope) : int64<Measures.ledgerSeq> =
+        let key = Scope.label scope
+        lock sync (fun () ->
+          match rows.TryGetValue key with
+          | true, bucket when bucket.Count > 0 -> (bucket |> Seq.map (fun e -> e.Seq) |> Seq.max) + 1L<Measures.ledgerSeq>
+          | _ -> 0L<Measures.ledgerSeq>)
+
       member _.Scopes() =
         lock sync (fun () ->
           rows.Keys |> Seq.sort |> Seq.map Cohort.scopeOfLabel |> List.ofSeq)
@@ -82,6 +93,7 @@ module CohortLedger =
       let store = Store<'m>()
       { Append = store.Append
         ReadAll = store.ReadAll
+        NextSeq = store.NextSeq
         Scopes = store.Scopes }
 
     /// A port over the process-wide store. Two callers using `shared` are two
@@ -103,6 +115,7 @@ module CohortLedger =
       let typed = store :?> Store<'m>
       { Append = typed.Append
         ReadAll = typed.ReadAll
+        NextSeq = typed.NextSeq
         Scopes = typed.Scopes }
 
   /// A read of the whole ledger that costs a lookup when nothing was appended.
@@ -152,4 +165,5 @@ module CohortLedger =
           fresh
       { Append = append
         ReadAll = readAll
+        NextSeq = inner.NextSeq
         Scopes = inner.Scopes }

@@ -28,6 +28,13 @@ let private tempDbPath () =
 let private cleanup (path: string) =
   try File.Delete path with _ -> ()
 
+let private ledgerTestLogger =
+  { new SageFs.Utils.ILogger with
+      member _.LogInfo _ = ()
+      member _.LogDebug _ = ()
+      member _.LogWarning _ = ()
+      member _.LogError _ = () }
+
 // ── Generators covering the DU shapes the codec must round-trip ───────────
 
 let private genMember =
@@ -293,6 +300,62 @@ let cohortLedgerSqliteTests =
         check.CommandText <- "SELECT COUNT(*) FROM cohort_ledger;"
         let rows = check.ExecuteScalar() :?> int64
         rows |> Expect.equal "both rows are still on disk — nothing was deleted" 2L
+      finally
+        cleanup path
+    }
+
+    // The step the skip test above stops short of. After a skipped row the owner has to keep appending: its next
+    // number comes from every row the scope holds, read or not, so a row this build cannot read keeps its number and
+    // the next command gets the one after it. Before this the number came from the last row the build COULD read, the
+    // append hit the (scope, seq) key, and every command for that cohort failed for good.
+    testTask "after a row this build cannot read, the owner's next command appends with the number after it" {
+      let path = tempDbPath ()
+      try
+        let port = Sqlite.create path
+        port.Append
+          { Seq = 0L<ledgerSeq>
+            Clock = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+            Entropy = [| 1uy |]
+            Command = CohortCommand.Tick cohortScope
+            Events = [] }
+        use connection = new SqliteConnection(sprintf "Data Source=%s" path)
+        connection.Open()
+        use corrupt = connection.CreateCommand()
+        corrupt.CommandText <-
+          "INSERT INTO cohort_ledger (scope, seq, clock_ticks, entropy, command_json, events_json) VALUES ('machine', 1, 0, X'01', '{ broken', '[]');"
+        corrupt.ExecuteNonQuery() |> ignore
+
+        use owner =
+          SageFs.Features.CohortOwner.start ledgerTestLogger cohortScope (Sqlite.create path)
+            (fun () -> DateTime(2026, 1, 1, 0, 1, 0, DateTimeKind.Utc)) (fun () -> [| 2uy |]) (fun _ -> ([], [], [], 0L))
+        let! joined = owner.Commit(CohortCommand.Join(MemberId.Minted "alice", JoinableRole.Implementer, None, cohortScope))
+        joined |> Result.isOk |> Expect.isTrue "the first command after the skipped row is accepted"
+        port.ReadAll cohortScope
+        |> List.map (fun e -> e.Seq)
+        |> Expect.equal "the join took the number after the unreadable row, which keeps its own" [ 0L<ledgerSeq>; 2L<ledgerSeq> ]
+      finally
+        cleanup path
+    }
+
+    testTask "when every row is unreadable, the owner's first command appends after them and does not reuse row 0" {
+      let path = tempDbPath ()
+      try
+        Sqlite.create path |> ignore
+        use connection = new SqliteConnection(sprintf "Data Source=%s" path)
+        connection.Open()
+        use corrupt = connection.CreateCommand()
+        corrupt.CommandText <-
+          "INSERT INTO cohort_ledger (scope, seq, clock_ticks, entropy, command_json, events_json) VALUES ('machine', 0, 0, X'01', '{ broken', '[]');"
+        corrupt.ExecuteNonQuery() |> ignore
+
+        use owner =
+          SageFs.Features.CohortOwner.start ledgerTestLogger cohortScope (Sqlite.create path)
+            (fun () -> DateTime(2026, 1, 1, 0, 1, 0, DateTimeKind.Utc)) (fun () -> [| 2uy |]) (fun _ -> ([], [], [], 0L))
+        let! joined = owner.Commit(CohortCommand.Join(MemberId.Minted "alice", JoinableRole.Implementer, None, cohortScope))
+        joined |> Result.isOk |> Expect.isTrue "the first command is accepted although row 0 cannot be read"
+        use count = connection.CreateCommand()
+        count.CommandText <- "SELECT MAX(seq) FROM cohort_ledger WHERE scope = 'machine';"
+        count.ExecuteScalar() :?> int64 |> Expect.equal "the join is row 1, after the unreadable row 0" 1L
       finally
         cleanup path
     }
