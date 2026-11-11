@@ -120,6 +120,37 @@ let cliStatusExitCodeTests =
     }
   ]
 
+// `sagefs status` used to exit 1 for "no daemon", "wedged" and "running but degraded", so a script could not tell a
+// daemon that is down from one that is up with a dead component.
+[<Tests>]
+let statusExitCodeDistinctTests =
+  testSequenced <| testList "Cli.status gives each state its own exit code" [
+    test "WHY — healthy 0, not running 1, degraded 3, wedged 4" {
+      let healthy, _ = runStatus (fun _ -> Some daemonOnPort) (fun _ -> None)
+      let notRunning, _ = runStatus (fun _ -> None) (fun _ -> None)
+      let degraded, out = runStatus (fun _ -> Some { daemonOnPort with ComponentFailures = [ "mcp-server: port in use" ] }) (fun _ -> None)
+      let wedged, _ = runStatusWedged (fun _ -> None) (fun _ -> Some 9001) (fun _ -> None)
+      [ healthy; notRunning; degraded; wedged ] |> Expect.equal "four codes" [ 0; 1; 3; 4 ]
+      out |> Expect.stringContains "the degraded component is named" "mcp-server: port in use"
+    }
+    test "the codes come from one closed set" {
+      [ Program.StatusOutcome.Healthy; Program.StatusOutcome.NotRunning; Program.StatusOutcome.Degraded; Program.StatusOutcome.Wedged ]
+      |> List.map Program.StatusOutcome.exitCode
+      |> Expect.equal "distinct" [ 0; 1; 3; 4 ]
+    }
+  ]
+
+[<Tests>]
+let versionLineTests =
+  testList "Program.versionLine" [
+    test "WHY — --version names the payload and the runtime, so a net10.0 install can be told from a net11.0 one" {
+      Program.versionLine { Tool = System.Version(0, 6, 945, 0); TargetFrameworkName = ".NETCoreApp,Version=v11.0"; Runtime = System.Version(11, 0, 0) }
+      |> Expect.equal "net11" "SageFs version 0.6.945.0 (net11.0, .NET 11.0.0)"
+      Program.versionLine { Tool = System.Version(0, 6, 945, 0); TargetFrameworkName = ".NETCoreApp,Version=v10.0"; Runtime = System.Version(11, 0, 0) }
+      |> Expect.equal "the net10 payload rolled forward" "SageFs version 0.6.945.0 (net10.0, .NET 11.0.0)"
+    }
+  ]
+
 // `CliCommand.parse` routes "status" and "stop" to distinct pure decisions
 // (statusCommand / stopCommand above); this is the pure half of the routing
 // itself, closing the gap the real-process CLI smoke used to be the only
@@ -136,5 +167,47 @@ let cliCommandRoutingTests =
     test "--mcp-port after status is not mistaken for a new subcommand" {
       Program.CliCommand.parse [| "status"; "--mcp-port"; "39990" |]
       |> Expect.equal "still Status" Program.CliCommand.Status
+    }
+  ]
+
+// A word `sagefs` does not know used to start a foreground daemon that never returned (`| _ -> Daemon args`), so a typo
+// (`sagefs statsu`) or a guessed verb (`sagefs install`, `sagefs update`) hung the terminal.
+[<Tests>]
+let cliUnknownWordTests =
+  testList "Program.CliCommand.parse refuses a word it does not know" [
+    test "WHY — an unknown first word is refused, never a daemon start" {
+      for word in [ "statsu"; "install"; "update"; "xyzzy"; "47700"; "stpo" ] do
+        match Program.CliCommand.parse [| word |] with
+        | Program.CliCommand.UnknownCommand asked -> asked |> Expect.equal (sprintf "%s is named back" word) word
+        | other -> failtestf "%s parsed as %A, which is not a refusal" word other
+    }
+    test "WHY — help as a word prints the help, like --help and -h" {
+      for args in [ [| "help" |]; [| "--help" |]; [| "-h" |] ] do
+        Program.CliCommand.parse args |> Expect.equal (sprintf "%A" args) Program.CliCommand.ShowHelp
+    }
+    test "a flag first, or no words at all, still starts the daemon" {
+      for args in [ [||]; [| "--mcp-port"; "47700"; "--ttl"; "8h" |]; [| "--supervised" |]; [| "--no-resume" |] ] do
+        match Program.CliCommand.parse args with
+        | Program.CliCommand.Daemon _ -> ()
+        | other -> failtestf "%A parsed as %A" args other
+    }
+    test "every known verb parses to its own command, never to the refusal or the daemon" {
+      for verb in Program.Verb.all do
+        let word = Program.Verb.text verb
+        match Program.CliCommand.parse [| word; "x" |] with
+        | Program.CliCommand.UnknownCommand _
+        | Program.CliCommand.Daemon _ -> failtestf "the known verb %s was not routed" word
+        | _ -> ()
+    }
+    test "the refusal names the nearest command when one is two edits away, and the commands it knows" {
+      let near = Program.describeUnknownCommand "statsu"
+      near |> Expect.stringContains "names the near verb" "Did you mean `sagefs status`?"
+      near |> Expect.stringContains "lists the verbs" "install-skill"
+      near |> Expect.stringContains "says how a daemon starts" "`sagefs` with no command"
+      let far = Program.describeUnknownCommand "xyzzy"
+      (far.Contains "Did you mean") |> Expect.isFalse "nothing is near xyzzy, so nothing is guessed"
+    }
+    test "a refused word exits 2, the usage-error code" {
+      Program.unknownCommandExitCode |> Expect.equal "usage error" 2
     }
   ]

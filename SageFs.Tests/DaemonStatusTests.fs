@@ -69,7 +69,7 @@ let daemonStatusTests =
 
     testCase "WHY — a daemon that is running but degraded is reported as running, with its version and how many components fail" <| fun _ ->
       let code, output = degraded
-      code |> Expect.equal "the command itself exits 1 for a degraded daemon" 1
+      code |> Expect.equal "the command itself exits 3 for a degraded daemon, its own code" 3
       classify output
       |> Expect.equal "so the exit code cannot be what says it is running" (Running { Version = "0.6.937+abc1234"; Failing = 2; Pid = 4242; Directory = installDirectory })
       describe (classify output)

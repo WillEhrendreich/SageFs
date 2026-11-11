@@ -32,3 +32,26 @@ let tests =
       | true -> List.isEmpty args
       | false -> args = [ "--owner-pid"; string (int pid) ]
   ]
+
+/// The bridge (and the watchdog) started the daemon by running this process's own executable again. Under a local tool
+/// (`dotnet sagefs mcp`), `dnx` or `dotnet SageFs.dll`, that executable is the `dotnet` muxer, so the start ran
+/// `dotnet --mcp-port 37749`, no daemon came up, and the bridge gave up 30 probes later blaming the environment.
+[<Tests>]
+let spawnCommandTests =
+  testList "McpBridge.daemonSpawnCommand" [
+    testCase "WHY — the tool's own shim is started directly" <| fun _ ->
+      SageFs.McpBridge.daemonSpawnCommand { ProcessPath = "/home/u/.dotnet/tools/sagefs"; EntryAssembly = SageFs.McpBridge.EntryAssembly.At "/home/u/.dotnet/tools/.store/sagefs/x/SageFs.dll" }
+      |> Expect.equal "the shim" (SageFs.McpBridge.DaemonSpawn.Run("/home/u/.dotnet/tools/sagefs", []))
+
+    testCase "WHY — under the dotnet muxer the entry assembly is handed to it, so the daemon is SageFs and not dotnet" <| fun _ ->
+      SageFs.McpBridge.daemonSpawnCommand { ProcessPath = "/usr/share/dotnet/dotnet"; EntryAssembly = SageFs.McpBridge.EntryAssembly.At "/x/tools/net11.0/any/SageFs.dll" }
+      |> Expect.equal "dotnet <dll>" (SageFs.McpBridge.DaemonSpawn.Run("/usr/share/dotnet/dotnet", [ "/x/tools/net11.0/any/SageFs.dll" ]))
+      SageFs.McpBridge.daemonSpawnCommand { ProcessPath = @"C:\Program Files\dotnet\dotnet.exe"; EntryAssembly = SageFs.McpBridge.EntryAssembly.At @"C:\t\SageFs.dll" }
+      |> Expect.equal "dotnet.exe <dll>" (SageFs.McpBridge.DaemonSpawn.Run(@"C:\Program Files\dotnet\dotnet.exe", [ @"C:\t\SageFs.dll" ]))
+
+    testCase "WHY — a muxer with no entry assembly to give it is refused with a reason, which the bridge reports at once" <| fun _ ->
+      match SageFs.McpBridge.daemonSpawnCommand { ProcessPath = "/usr/bin/dotnet"; EntryAssembly = SageFs.McpBridge.EntryAssembly.Unknown } with
+      | SageFs.McpBridge.DaemonSpawn.MuxerWithoutEntry _ as refused ->
+        SageFs.McpBridge.DaemonSpawn.describe refused |> Expect.stringContains "says the muxer is the problem" "dotnet muxer"
+      | spawn -> failtestf "spawning %A would start dotnet, not the daemon" spawn
+  ]

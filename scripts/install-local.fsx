@@ -168,8 +168,9 @@ let parse (argv: string list) : Mode =
 let status (repo: string) =
   let read name = let p = Path.Combine(markDir, name) in if File.Exists p then File.ReadAllText(p).Trim() else ""
   let sha = read "sha"
-  // `sagefs status` exits 1 for a degraded or wedged daemon as well as for none, so the exit code says nothing about whether the
-  // daemon is up. Its first line does, and DaemonStatusTests holds the classifier to what the real command prints.
+  // `sagefs status` has one exit code per state (0 healthy, 1 not running, 3 degraded, 4 wedged), but an installed daemon older
+  // than that exits 1 for all three, so the first line is what is read. DaemonStatusTests holds the classifier to what the real
+  // command prints.
   let running = DaemonStatus.describe (DaemonStatus.classify (snd (run "sagefs" [ "status" ] repo)))
   if sha = "" then
     say (sprintf "no install recorded. Running daemon: %s. Master is at %s." running (versionAt repo "master"))

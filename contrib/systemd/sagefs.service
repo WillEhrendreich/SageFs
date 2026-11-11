@@ -43,9 +43,16 @@
 # create ~/.local/state/sagefs (%S/sagefs) before the daemon starts, and
 # WorkingDirectory points at it. Open your sessions in a project directory.
 
+# The watchdog restarts a crashed daemon itself. When the daemon crashes more often than its restart policy allows,
+# the watchdog gives up and exits 1, and Restart=on-failure starts it again. Three give-ups in ten minutes mark the
+# unit failed and leave it down, so `systemctl --user status sagefs` says so instead of looping forever. After fixing
+# the cause, `systemctl --user reset-failed sagefs` and `systemctl --user restart sagefs` bring it back.
+
 [Unit]
 Description=SageFs daemon (F# REPL, MCP server, dashboard)
 After=network.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
 
 [Service]
 Type=simple

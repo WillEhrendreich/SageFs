@@ -15,6 +15,59 @@ open System.Text.RegularExpressions
 /// clients racing to start it — can't hang the bridge or lose a message.
 module McpBridge =
 
+  /// The assembly the runtime entered, when the process can name it (`Assembly.GetEntryAssembly().Location`).
+  [<RequireQualifiedAccess>]
+  type EntryAssembly =
+    | At of path: string
+    | Unknown
+
+  /// What the running process knows about how it was started: the executable (`Environment.ProcessPath`) and the
+  /// assembly the runtime entered.
+  type SpawnFacts = { ProcessPath: string; EntryAssembly: EntryAssembly }
+
+  /// How to start SageFs again from this process.
+  [<RequireQualifiedAccess>]
+  type DaemonSpawn =
+    /// The program and the arguments that go before the daemon's own.
+    | Run of program: string * leadingArgs: string list
+    /// The process is the `dotnet` muxer and the SageFs.dll it runs cannot be named, so there is nothing to start.
+    | MuxerWithoutEntry of muxer: string
+
+  module DaemonSpawn =
+    let describe (spawn: DaemonSpawn) : string =
+      match spawn with
+      | DaemonSpawn.Run (program, leadingArgs) -> String.concat " " (program :: leadingArgs)
+      | DaemonSpawn.MuxerWithoutEntry muxer ->
+        sprintf
+          "this process runs under the dotnet muxer (%s) and the SageFs.dll it runs could not be found, so there is nothing to start. Start the daemon yourself with `sagefs` (or `dotnet <path to SageFs.dll>`), then reconnect."
+          muxer
+
+  /// The program and the leading arguments that start SageFs again from this process, for the stdio bridge and the
+  /// watchdog. Installed as a global tool the executable is the tool's shim. Run as a local tool (`dotnet sagefs`),
+  /// through `dnx`, or as `dotnet SageFs.dll`, the executable is the `dotnet` muxer, which has to be given the
+  /// entry assembly, or it would start `dotnet --mcp-port 37749` and no daemon at all.
+  let daemonSpawnCommand (facts: SpawnFacts) : DaemonSpawn =
+    // Either separator, so the rule reads a Windows path the same on every OS (Path.GetFileName on Linux does not).
+    let fileName = facts.ProcessPath.Substring(facts.ProcessPath.LastIndexOfAny([| '/'; '\\' |]) + 1)
+    let isMuxer =
+      System.String.Equals(fileName, "dotnet", System.StringComparison.OrdinalIgnoreCase)
+      || System.String.Equals(fileName, "dotnet.exe", System.StringComparison.OrdinalIgnoreCase)
+    match isMuxer, facts.EntryAssembly with
+    | false, _ -> DaemonSpawn.Run(facts.ProcessPath, [])
+    | true, EntryAssembly.At entry when entry.EndsWith(".dll", System.StringComparison.OrdinalIgnoreCase) ->
+      DaemonSpawn.Run(facts.ProcessPath, [ entry ])
+    | true, EntryAssembly.At _
+    | true, EntryAssembly.Unknown -> DaemonSpawn.MuxerWithoutEntry facts.ProcessPath
+
+  /// The edge: this process's facts.
+  let currentSpawnFacts () : SpawnFacts =
+    { ProcessPath = System.Environment.ProcessPath
+      EntryAssembly =
+        match System.Reflection.Assembly.GetEntryAssembly() with
+        | null -> EntryAssembly.Unknown
+        | assembly when System.String.IsNullOrEmpty assembly.Location -> EntryAssembly.Unknown
+        | assembly -> EntryAssembly.At assembly.Location }
+
   /// JSON-RPC 2.0 message id. The spec allows a string or a number; a
   /// notification carries neither (see `RpcMessage.Notification`).
   [<RequireQualifiedAccess>]

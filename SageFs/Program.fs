@@ -148,49 +148,158 @@ type CliCommand =
   | Play of ledgerPath: string
   | CohortExport of args: string list
   | Mcp of args: string array
+  /// `sagefs uninstall ...`: the arguments after `uninstall`.
+  | Uninstall of args: string list
+  /// A first word that is not a flag and not a verb `sagefs` knows. It is refused: starting a daemon for a typo leaves a
+  /// terminal hanging on a process that never returns.
+  | UnknownCommand of word: string
+  /// A verb given without an argument it cannot do without (`sagefs play` with no ledger).
+  | MissingArgument of usage: string
+
+/// The first words `sagefs` knows. Anything else that is not a flag is refused.
+[<RequireQualifiedAccess>]
+type Verb =
+  | Call
+  | Stop
+  | Status
+  | Check
+  | InstallSkill
+  | Setup
+  | Member
+  | Cohort
+  | Data
+  | Sweep
+  | Hygiene
+  | Play
+  | CohortExport
+  | Mcp
+  | Help
+  | Tui
+  | Gui
+  | Uninstall
+
+module Verb =
+  let text (verb: Verb) : string =
+    match verb with
+    | Verb.Call -> "call"
+    | Verb.Stop -> "stop"
+    | Verb.Status -> "status"
+    | Verb.Check -> "check"
+    | Verb.InstallSkill -> "install-skill"
+    | Verb.Setup -> "setup"
+    | Verb.Member -> "member"
+    | Verb.Cohort -> "cohort"
+    | Verb.Data -> "data"
+    | Verb.Sweep -> "sweep"
+    | Verb.Hygiene -> "hygiene"
+    | Verb.Play -> "play"
+    | Verb.CohortExport -> CohortExportCommand.commandName
+    | Verb.Mcp -> "mcp"
+    | Verb.Help -> "help"
+    | Verb.Tui -> "tui"
+    | Verb.Gui -> "gui"
+    | Verb.Uninstall -> "uninstall"
+
+  /// Every case, read off the union so a new verb cannot be left out of the refusal's list.
+  let all : Verb list =
+    Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<Verb>
+    |> Array.map (fun case -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||]) :?> Verb)
+    |> List.ofArray
+
+  let tryParse (word: string) : Verb option = all |> List.tryFind (fun verb -> text verb = word)
+
+  /// The verbs a person can still use: the deprecated clients are refused with their own message.
+  let current : Verb list =
+    all |> List.filter (fun verb -> verb <> Verb.Tui && verb <> Verb.Gui)
+
+  /// How many single-character edits a typo may be from a verb and still be offered as it.
+  let nearestRadius = 2
+
+  /// The verb a mistyped word most likely meant: one it starts (`install` for `install-skill`), or one at most
+  /// `nearestRadius` edits away. Nothing near gets nothing, since a guess would only mislead.
+  let nearest (word: string) : Verb option =
+    let wanted = word.ToLowerInvariant()
+    current
+    |> List.map (fun verb ->
+      let known = text verb
+      let distance =
+        match wanted.Length >= 3 && known.StartsWith wanted with
+        | true -> 0
+        | false -> McpCall.ToolSpec.editDistance { From = wanted; To = known }
+      verb, distance)
+    |> List.filter (fun (_, distance) -> distance <= nearestRadius)
+    |> List.sortBy snd
+    |> List.tryHead
+    |> Option.map fst
+
+/// The exit code for a command line `sagefs` cannot act on: an unknown word or a missing argument.
+let unknownCommandExitCode = 2
+
+/// What `sagefs <word>` says when it does not know the word.
+let describeUnknownCommand (word: string) : string =
+  let suggestion =
+    match Verb.nearest word with
+    | Some verb -> sprintf " Did you mean `sagefs %s`?" (Verb.text verb)
+    | None -> ""
+  let verbs = Verb.current |> List.map Verb.text |> String.concat ", "
+  sprintf
+    "sagefs: `%s` is not a command.%s\nCommands: %s.\n`sagefs` with no command (or with only flags) starts the daemon. `sagefs --help` shows what each command does."
+    word suggestion verbs
 
 module CliCommand =
   let parse (args: string array) =
     let hasFlag flag = args |> Array.exists (fun a -> a = flag)
-    match () with
-    | _ when args.Length > 0 && args.[0] = "call" -> Call(args |> Array.skip 1 |> List.ofArray)
+    let rest () = args |> Array.skip 1 |> List.ofArray
+    let first = Array.tryHead args
+    match first |> Option.bind Verb.tryParse with
+    | Some Verb.Call -> Call(rest ())
     | _ when hasFlag "--help" || hasFlag "-h" -> ShowHelp
     | _ when hasFlag "--version" || hasFlag "-v" -> ShowVersion
-    | _ when args.Length > 0 && args.[0] = "stop" -> Stop
-    | _ when args.Length > 0 && args.[0] = "status" -> Status
-    | _ when args.Length > 0 && args.[0] = "check" -> Check
-    | _ when args.Length > 0 && args.[0] = "install-skill" -> InstallSkill(args |> Array.skip 1 |> List.ofArray)
-    | _ when args.Length > 0 && args.[0] = "setup" -> Setup(args |> Array.skip 1 |> List.ofArray)
-    | _ when args.Length > 0 && args.[0] = "member" -> Member(args |> Array.skip 1 |> List.ofArray)
-    | _ when args.Length > 0 && args.[0] = "cohort" -> Cohort(args |> Array.skip 1 |> List.ofArray)
-    | _ when args.Length > 0 && args.[0] = "data" -> Data(args |> Array.skip 1 |> List.ofArray)
-    | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
-    | _ when args.Length > 0 && args.[0] = "hygiene" ->
-      let repo =
-        match args |> Array.tryFindIndex (fun a -> a = "--repo") with
-        | Some i when i + 1 < args.Length -> args.[i + 1]
-        | _ -> ""
-      let action =
-        match args |> Array.tryFindIndex (fun a -> a = "--rescue") with
-        | Some i when i + 1 < args.Length -> HygieneAction.Rescue args.[i + 1]
-        | Some _
-        | None ->
-          match hasFlag "--tidy" with
-          | true -> HygieneAction.TidySafe
-          | false -> HygieneAction.ShowPlan
-      Hygiene (action, repo)
-    | _ when args.Length > 0 && args.[0] = "play" && args.Length > 1 -> Play args.[1]
-    | _ when args.Length > 0 && args.[0] = "play" -> ShowHelp
-    | _ when args.Length > 0 && args.[0] = CohortExportCommand.commandName -> CohortExport (List.ofArray args.[1..])
-    | _ when args.Length > 0 && args.[0] = "mcp" -> Mcp args
-    | _ when args.Length > 0 && args.[0] = "tui" -> DeprecatedClient "tui"
-    | _ when args.Length > 0 && args.[0] = "gui" -> DeprecatedClient "gui"
-    | _ when hasFlag "--jupyter" ->
-      let idx = args |> Array.findIndex (fun a -> a = "--jupyter")
-      match idx + 1 < args.Length with
-      | true -> Jupyter args.[idx + 1]
-      | false -> ShowHelp
-    | _ -> Daemon args
+    | Some verb ->
+      match verb with
+      | Verb.Call -> Call(rest ())
+      | Verb.Help -> ShowHelp
+      | Verb.Stop -> Stop
+      | Verb.Status -> Status
+      | Verb.Check -> Check
+      | Verb.InstallSkill -> InstallSkill(rest ())
+      | Verb.Setup -> Setup(rest ())
+      | Verb.Member -> Member(rest ())
+      | Verb.Cohort -> Cohort(rest ())
+      | Verb.Data -> Data(rest ())
+      | Verb.Sweep -> Sweep (hasFlag "--kill")
+      | Verb.Hygiene ->
+        let repo =
+          match args |> Array.tryFindIndex (fun a -> a = "--repo") with
+          | Some i when i + 1 < args.Length -> args.[i + 1]
+          | _ -> ""
+        let action =
+          match args |> Array.tryFindIndex (fun a -> a = "--rescue") with
+          | Some i when i + 1 < args.Length -> HygieneAction.Rescue args.[i + 1]
+          | Some _
+          | None ->
+            match hasFlag "--tidy" with
+            | true -> HygieneAction.TidySafe
+            | false -> HygieneAction.ShowPlan
+        Hygiene (action, repo)
+      | Verb.Play ->
+        (match args.Length > 1 with
+         | true -> Play args.[1]
+         | false -> MissingArgument "sagefs play <ledger.jsonl>: name the ledger file to replay.")
+      | Verb.CohortExport -> CohortExport (List.ofArray args.[1..])
+      | Verb.Mcp -> Mcp args
+      | Verb.Tui -> DeprecatedClient "tui"
+      | Verb.Gui -> DeprecatedClient "gui"
+      | Verb.Uninstall -> Uninstall(rest ())
+    | None ->
+      match first with
+      | Some word when not (word.StartsWith "-") -> UnknownCommand word
+      | _ when hasFlag "--jupyter" ->
+        let idx = args |> Array.findIndex (fun a -> a = "--jupyter")
+        match idx + 1 < args.Length with
+        | true -> Jupyter args.[idx + 1]
+        | false -> ShowHelp
+      | _ -> Daemon args
 
 /// Human guidance for why an unimplemented daemon-startup flag was refused,
 /// and what to do instead. This is CLI presentation text, kept separate from
@@ -331,7 +440,7 @@ let runDaemon (args: string array) =
       Environment.CurrentDirectory
       cts.Token
     |> awaitAtEntryPoint
-    0
+    |> WatchdogRunner.WatchdogEnd.exitCode
   | false ->
     // The same entry-point wait, for the daemon itself.
     DaemonMode.run bindHost mcpPort flags ownership
@@ -370,7 +479,8 @@ let sweepCommand (kill: bool) =
               match proc.HasExited with
               | true -> "already exited"
               | false ->
-                proc.Kill()
+                // The whole tree: the daemon's FSI host workers are its children, and a daemon-only kill orphans them.
+                proc.Kill(entireProcessTree = true)
                 "killed"
             with ex -> sprintf "could not kill: %s" ex.Message
           DaemonOwnership.DaemonInfoFile.delete info.DataDir
@@ -525,19 +635,32 @@ type StopWait =
   | Exited
   | StillRunning
 
+/// The exit code for a stop that ended the daemon while something will start a new one: a service unit, a watchdog,
+/// or an agent's bridge. Exit 0 would tell a script there is no daemon, and five seconds later there is one.
+let stopWillRestartExitCode = 3
+
 let stopCommand
   (readOnPort: int -> DaemonInfo option)
   (wedgedPid: int -> int option)
   (requestShutdown: int -> bool)
   (killProcess: int -> StopKillResult)
   (waitForExit: int -> StopWait)
+  (restartersOf: int -> WatchdogRunner.Restarter list)
   (mcpPort: int)
   =
-  let reportKill (pid: int) =
+  // `restarters` is read before the stop: what restarts a daemon is read off its process, which is gone afterwards.
+  let stopped (restarters: WatchdogRunner.Restarter list) (pid: int) =
+    printfn "Daemon stopped (PID %d)" pid
+    match restarters with
+    | [] -> 0
+    | found ->
+      printfn "It will come back:"
+      for restarter in found do
+        printfn "  - %s" (WatchdogRunner.Restarter.describe restarter)
+      stopWillRestartExitCode
+  let reportKill (restarters: WatchdogRunner.Restarter list) (pid: int) =
     match killProcess pid with
-    | StopKilled ->
-      printfn "Daemon stopped (PID %d)" pid
-      0
+    | StopKilled -> stopped restarters pid
     | StopProcessGone message ->
       eprintfn "Stop daemon error for PID %d: %s" pid message
       printfn "Daemon was not running (stale PID %d)" pid
@@ -548,22 +671,21 @@ let stopCommand
       1
   match DaemonPresence.classify (readOnPort mcpPort) (wedgedPid mcpPort) with
   | DaemonPresence.Running info ->
+    let restarters = restartersOf info.Pid
     match requestShutdown mcpPort with
     | true ->
       // Accepting the request is not stopping: report success once the process is gone.
       match waitForExit info.Pid with
-      | StopWait.Exited ->
-        printfn "Daemon stopped (PID %d)" info.Pid
-        0
+      | StopWait.Exited -> stopped restarters info.Pid
       | StopWait.StillRunning ->
         eprintfn "Daemon PID %d did not exit after the shutdown request; killing it" info.Pid
-        reportKill info.Pid
-    | false -> reportKill info.Pid
+        reportKill restarters info.Pid
+    | false -> reportKill restarters info.Pid
   | DaemonPresence.Wedged pid ->
     // It never answered HTTP, so a graceful shutdown request would just time
     // out — go straight to the kill this state exists to enable.
     eprintfn "Daemon on port %d is wedged: process %d is holding the port but never answered. Killing it directly." mcpPort pid
-    reportKill pid
+    reportKill (restartersOf pid) pid
   | DaemonPresence.NotRunning ->
     printfn "No daemon running"
     1
@@ -574,7 +696,8 @@ let private stopKillProcess (pid: int) =
     if proc.HasExited then
       StopProcessGone (sprintf "process %d has already exited" pid)
     else
-      proc.Kill()
+      // The whole tree: the daemon's FSI host workers are its children, and a daemon-only kill orphans them.
+      proc.Kill(entireProcessTree = true)
       proc.WaitForExit(int Timeouts.stopKillExit.TotalMilliseconds) |> ignore
       StopKilled
   with ex ->
@@ -592,12 +715,177 @@ let private stopWaitForExit (pid: int) : StopWait =
   | :? ArgumentException -> StopWait.Exited
   | :? InvalidOperationException -> StopWait.Exited
 
+/// `sagefs uninstall`: what SageFs left on this machine, and how each piece goes. The plan is pure over what was
+/// found; the edge (`uninstallCommand`) finds the pieces and carries out only what a flag asked for. By default it
+/// prints, and user data goes only with both `--purge-data` and `--yes`.
+module UninstallPlan =
+  /// The data folders SageFs writes outside a project.
+  [<RequireQualifiedAccess>]
+  type DataKind =
+    /// `~/.SageFs`: manifests, worker logs, daemon-info, settings, operator.token, the friction and cohort stores.
+    | State
+    /// The daemon's own log folder.
+    | Logs
+    /// The config folder (`ApplicationData/SageFs`).
+    | Config
+    /// The working directory a service runs the daemon in.
+    | ServiceWorkingDirectory
+    /// The macOS service's console logs.
+    | ServiceLogs
+    /// `scripts/install-local.fsx`'s state, on a machine that builds SageFs from source.
+    | DeveloperInstallState
+    /// The release gate's checkouts and records, on a machine that builds SageFs from source.
+    | GateState
+
+  module DataKind =
+    let describe (kind: DataKind) : string =
+      match kind with
+      | DataKind.State -> "SageFs state (sessions, settings, tokens, stores)"
+      | DataKind.Logs -> "Daemon logs"
+      | DataKind.Config -> "SageFs config"
+      | DataKind.ServiceWorkingDirectory -> "The service's working directory"
+      | DataKind.ServiceLogs -> "The service's console logs"
+      | DataKind.DeveloperInstallState -> "install-local.fsx state"
+      | DataKind.GateState -> "Release gate state"
+
+  /// One thing SageFs left behind.
+  [<RequireQualifiedAccess>]
+  type Leftover =
+    | Daemon of pid: int
+    /// The unit file, then its drop-in folder when it has one.
+    | SystemdUnit of paths: string list
+    | LaunchdAgent of plist: string
+    | AgentSkill of directory: string
+    | Data of kind: DataKind * path: string
+
+  type Options = { Stop: bool; RemoveService: bool; PurgeData: bool; Yes: bool }
+
+  /// What the edge does for a step a flag asked for.
+  [<RequireQualifiedAccess>]
+  type Effect =
+    | StopDaemon of pid: int
+    | RemoveSystemdUnit of paths: string list
+    | RemoveLaunchdAgent of plist: string
+    | DeletePath of path: string
+
+  [<RequireQualifiedAccess>]
+  type Run =
+    | Perform of Effect
+    | PrintOnly
+
+  type Step = { What: string; Command: string; Run: Run }
+
+  /// The shell the printed commands are written for.
+  [<RequireQualifiedAccess>]
+  type Shell =
+    | Posix
+    | PowerShell
+
+  let toolCommand = "dotnet tool uninstall --global SageFs"
+
+  let parseArgs (args: string list) : Result<Options, string> =
+    let rec go (options: Options) (rest: string list) =
+      match rest with
+      | [] -> Ok options
+      | "--stop" :: tail -> go { options with Stop = true } tail
+      | "--remove-service" :: tail -> go { options with RemoveService = true } tail
+      | "--purge-data" :: tail -> go { options with PurgeData = true } tail
+      | "--yes" :: tail -> go { options with Yes = true } tail
+      // The daemon to look for is read by the caller.
+      | "--mcp-port" :: _ :: tail -> go options tail
+      | other :: _ ->
+        Error (sprintf "`%s` is not an uninstall flag. The flags are --stop, --remove-service, --purge-data, --yes and --mcp-port." other)
+    go { Stop = false; RemoveService = false; PurgeData = false; Yes = false } args
+
+  /// The service goes first (it would start the daemon again), then the daemon, the skill and the data. The tool
+  /// itself is last.
+  let private rank (leftover: Leftover) : int =
+    match leftover with
+    | Leftover.SystemdUnit _
+    | Leftover.LaunchdAgent _ -> 0
+    | Leftover.Daemon _ -> 1
+    | Leftover.AgentSkill _ -> 2
+    | Leftover.Data _ -> 3
+
+  let private removeCommand (shell: Shell) (path: string) : string =
+    match shell with
+    | Shell.Posix -> sprintf "rm -rf '%s'" path
+    | Shell.PowerShell -> sprintf "Remove-Item -LiteralPath '%s' -Recurse -Force" path
+
+  let plan (options: Options) (shell: Shell) (found: Leftover list) : Step list =
+    let purge = options.PurgeData && options.Yes
+    let performIf flag effect =
+      match flag with
+      | true -> Run.Perform effect
+      | false -> Run.PrintOnly
+    let stepOf leftover =
+      match leftover with
+      | Leftover.SystemdUnit paths ->
+        let quoted = paths |> List.map (sprintf "'%s'") |> String.concat " "
+        { What = sprintf "The systemd user unit %s (it restarts the daemon)" (List.head paths)
+          Command = sprintf "systemctl --user disable --now sagefs && rm -rf %s && systemctl --user daemon-reload" quoted
+          Run = performIf options.RemoveService (Effect.RemoveSystemdUnit paths) }
+      | Leftover.LaunchdAgent plist ->
+        { What = sprintf "The launchd agent %s (it restarts the daemon)" plist
+          Command = sprintf "launchctl bootout gui/$(id -u)/%s; rm -f '%s'" WatchdogRunner.Restarter.launchdLabel plist
+          Run = performIf options.RemoveService (Effect.RemoveLaunchdAgent plist) }
+      | Leftover.Daemon pid ->
+        { What = sprintf "The running daemon (PID %d) and its FSI host workers" pid
+          Command = "sagefs stop"
+          Run = performIf options.Stop (Effect.StopDaemon pid) }
+      | Leftover.AgentSkill dir ->
+        { What = sprintf "The sagefs agent skill in %s" dir
+          Command = removeCommand shell dir
+          Run = performIf purge (Effect.DeletePath dir) }
+      | Leftover.Data (kind, path) ->
+        { What = sprintf "%s: %s" (DataKind.describe kind) path
+          Command = removeCommand shell path
+          Run = performIf purge (Effect.DeletePath path) }
+    let tool = { What = "The SageFs tool itself (run this last, from outside any SageFs process)"; Command = toolCommand; Run = Run.PrintOnly }
+    (found |> List.sortBy rank |> List.map stepOf) @ [ tool ]
+
+  /// The plan as text: each step, and whether it was done here or is the person's to run.
+  let render (options: Options) (steps: Step list) : string list =
+    let lines =
+      steps
+      |> List.collect (fun step ->
+        let mark =
+          match step.Run with
+          | Run.Perform _ -> "doing"
+          | Run.PrintOnly -> "run"
+        [ sprintf "- %s" step.What; sprintf "    %s: %s" mark step.Command ])
+    let refusedPurge =
+      match options.PurgeData, options.Yes with
+      | true, false -> [ "--purge-data deletes your SageFs data only together with --yes, so nothing was deleted." ]
+      | _ -> []
+    let notes =
+      refusedPurge
+      @ [ "Projects you opened keep a .SageFs folder (a warmup cache and its .gitignore). Delete those by hand if you want them gone." ]
+    [ "SageFs on this machine:" ] @ lines @ [ "" ] @ notes
+
 /// The `sagefs status` command with the daemon lookup and the optional live
 /// session count injected — mirrors `stopCommand`'s shape so the "no daemon
 /// running" exit code/message is testable without touching a real daemon or
 /// a real HTTP call. `fetchSessionCount` returns `None` on any failure to
 /// reach the daemon's own `/api/sessions` (matching the original inline
 /// try/with, which silently omitted the line rather than failing `status`).
+/// What `sagefs status` found, one exit code each, so a script can tell a daemon that is down from one that is up with
+/// a failed component or one that holds the port and never answers.
+[<RequireQualifiedAccess>]
+type StatusOutcome =
+  | Healthy
+  | NotRunning
+  | Degraded
+  | Wedged
+
+module StatusOutcome =
+  let exitCode (outcome: StatusOutcome) : int =
+    match outcome with
+    | StatusOutcome.Healthy -> 0
+    | StatusOutcome.NotRunning -> 1
+    | StatusOutcome.Degraded -> 3
+    | StatusOutcome.Wedged -> 4
+
 let statusCommand
   (readOnPort: int -> DaemonInfo option)
   (wedgedPid: int -> int option)
@@ -630,19 +918,19 @@ let statusCommand
     // here (see DaemonInfoContract.ComponentFailures), so "running" alone
     // never gets the last word.
     match info.ComponentFailures with
-    | [] -> 0
+    | [] -> StatusOutcome.exitCode StatusOutcome.Healthy
     | failures ->
       printfn ""
       printfn "  DEGRADED — %d component(s) reporting a failure:" failures.Length
       for f in failures do
         printfn "    - %s" f
-      1
+      StatusOutcome.exitCode StatusOutcome.Degraded
   | DaemonPresence.Wedged _ as presence ->
     DaemonPresence.unreachableLines mcpPort presence |> List.iter (printfn "%s")
-    1
+    StatusOutcome.exitCode StatusOutcome.Wedged
   | DaemonPresence.NotRunning as presence ->
     DaemonPresence.unreachableLines mcpPort presence |> List.iter (printfn "%s")
-    1
+    StatusOutcome.exitCode StatusOutcome.NotRunning
 
 /// The pid a wedged-daemon recovery targets: a daemon-info file recorded
 /// locally (written at daemon startup — see `DaemonOwnership.DaemonInfoFile`)
@@ -670,6 +958,155 @@ let private fetchSessionCountHttp (info: DaemonInfo) : int option =
     | false -> None
   with _ -> None
 
+/// `sagefs --version`: the version, the payload the tool was installed as (the package carries a net10.0 and a net11.0
+/// build, and `dotnet tool install` picks one by the SDK it runs under) and the runtime running it. A net10.0 payload
+/// cannot load a net11.0 project, and this line is how a person finds out which one they have.
+type VersionFacts = { Tool: Version; TargetFrameworkName: string; Runtime: Version }
+
+let versionLine (facts: VersionFacts) : string =
+  // ".NETCoreApp,Version=v11.0" is how the runtime names net11.0.
+  let payload =
+    match facts.TargetFrameworkName with
+    | null -> "unknown payload"
+    | name ->
+      match name.Split("Version=v") with
+      | [| _; number |] -> "net" + number
+      | _ -> name
+  sprintf "SageFs version %O (%s, .NET %O)" facts.Tool payload facts.Runtime
+
+/// The help's Examples section, as the words after `sagefs` and what they do. Kept as data so a test can run each one
+/// through the parser and the ownership gate: the help once advertised `--mcp-port 47700`, which the gate refuses.
+let helpExamples : (string list * string) list =
+  [ [], "Start the bare daemon"
+    [ "--mcp-port"; "47700"; "--ttl"; "8h" ], "Start a throwaway daemon on another port (it stops after 8h idle)"
+    [ "--supervised" ], "Start with auto-restart"
+    [ "--jupyter"; "conn.json" ], "Run as Jupyter kernel"
+    [ "status" ], "Show daemon status"
+    [ "check" ], "Check environment before first run"
+    [ "install-skill"; "[--force]" ], "Install the sagefs agent skill (--dir <folder> for another skills folder)" ]
+
+/// Who will start a new daemon on `mcpPort` once the daemon at a pid is stopped.
+let private restartersOn (mcpPort: int) : int -> WatchdogRunner.Restarter list =
+  fun pid -> WatchdogRunner.Supervision.restartersOf ({ Port = mcpPort; Pid = pid } : WatchdogRunner.Supervision.Stopping)
+
+/// Runs a program to its end and says whether it succeeded, with its error output when it did not.
+let private runToEnd (program: string) (arguments: string list) : Result<unit, string> =
+  try
+    let psi = System.Diagnostics.ProcessStartInfo(program, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true)
+    arguments |> List.iter psi.ArgumentList.Add
+    use proc = System.Diagnostics.Process.Start psi
+    let errors = proc.StandardError.ReadToEndAsync()
+    proc.StandardOutput.ReadToEnd() |> ignore
+    proc.WaitForExit()
+    match proc.ExitCode with
+    | 0 -> Ok ()
+    | code -> Error (sprintf "%s %s exited %d: %s" program (String.concat " " arguments) code (errors.Result.Trim()))
+  with :? System.ComponentModel.Win32Exception as ex -> Error (sprintf "%s could not run: %s" program ex.Message)
+
+/// Deletes files and folders, saying which one could not go and why.
+let private deletePaths (paths: string list) : Result<unit, string> =
+  try
+    for path in paths do
+      match Directory.Exists path with
+      | true -> Directory.Delete(path, true)
+      | false -> File.Delete path
+    Ok ()
+  with
+  | :? IOException as ex -> Error ex.Message
+  | :? UnauthorizedAccessException as ex -> Error ex.Message
+
+/// What SageFs left on this machine, found on disk and in the daemon's port.
+let private findLeftovers (mcpPort: int) : UninstallPlan.Leftover list =
+  let home = Environment.GetFolderPath Environment.SpecialFolder.UserProfile
+  let under (parts: string list) = Path.Combine(Array.ofList (home :: parts))
+  let daemon =
+    match DaemonPresence.classify (DaemonState.readOnPort mcpPort) (wedgedPidFor mcpPort) with
+    | DaemonPresence.Running info -> [ UninstallPlan.Leftover.Daemon info.Pid ]
+    | DaemonPresence.Wedged pid -> [ UninstallPlan.Leftover.Daemon pid ]
+    | DaemonPresence.NotRunning -> []
+  let configHome =
+    match Environment.GetEnvironmentVariable "XDG_CONFIG_HOME" with
+    | null
+    | "" -> under [ ".config" ]
+    | set -> set
+  let unitFile = Path.Combine(configHome, "systemd", "user", "sagefs.service")
+  let systemd =
+    match File.Exists unitFile with
+    | true -> [ UninstallPlan.Leftover.SystemdUnit(unitFile :: ([ unitFile + ".d" ] |> List.filter Directory.Exists)) ]
+    | false -> []
+  let plist = under [ "Library"; "LaunchAgents"; WatchdogRunner.Restarter.launchdLabel + ".plist" ]
+  let launchd =
+    match File.Exists plist with
+    | true -> [ UninstallPlan.Leftover.LaunchdAgent plist ]
+    | false -> []
+  let skillDir = SkillFiles.skillDirectory (SkillFiles.defaultRoot ())
+  let skill =
+    match Directory.Exists skillDir with
+    | true -> [ UninstallPlan.Leftover.AgentSkill skillDir ]
+    | false -> []
+  let data =
+    [ UninstallPlan.DataKind.State, DataDirChoice.dataDirectory ()
+      UninstallPlan.DataKind.Logs, DaemonLog.userLogDirectory ()
+      UninstallPlan.DataKind.Config, Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.ApplicationData, "SageFs")
+      UninstallPlan.DataKind.ServiceWorkingDirectory, under [ ".local"; "state"; "sagefs" ]
+      UninstallPlan.DataKind.ServiceWorkingDirectory, under [ "Library"; "Application Support"; "sagefs-daemon" ]
+      UninstallPlan.DataKind.ServiceLogs, under [ "Library"; "Logs"; "sagefs" ]
+      UninstallPlan.DataKind.DeveloperInstallState, under [ ".local"; "state"; "sagefs-install" ]
+      UninstallPlan.DataKind.GateState, under [ ".local"; "share"; "sagefs-gate" ] ]
+    |> List.distinctBy (fun (_, path) -> Path.GetFullPath path)
+    |> List.filter (fun (_, path) -> Directory.Exists path)
+    |> List.map UninstallPlan.Leftover.Data
+  systemd @ launchd @ daemon @ skill @ data
+
+/// Carries out one step a flag asked for.
+let private performUninstallEffect (mcpPort: int) (effect: UninstallPlan.Effect) : Result<unit, string> =
+  match effect with
+  | UninstallPlan.Effect.StopDaemon _ ->
+    // The same stop as `sagefs stop`: the graceful request first, then the tree kill.
+    match
+      stopCommand
+        DaemonState.readOnPort wedgedPidFor DaemonState.requestShutdown stopKillProcess stopWaitForExit
+        (restartersOn mcpPort) mcpPort
+      with
+    | 0 -> Ok ()
+    | code -> Error (sprintf "sagefs stop exited %d" code)
+  | UninstallPlan.Effect.RemoveSystemdUnit paths ->
+    runToEnd "systemctl" [ "--user"; "disable"; "--now"; "sagefs" ]
+    |> Result.bind (fun () -> deletePaths paths)
+    |> Result.bind (fun () -> runToEnd "systemctl" [ "--user"; "daemon-reload" ])
+  | UninstallPlan.Effect.RemoveLaunchdAgent plist ->
+    // `launchctl remove` unloads the agent by label in this user's domain. It fails when the agent is not loaded,
+    // which is the state it is meant to reach, so only the plist's removal decides the step.
+    match runToEnd "launchctl" [ "remove"; WatchdogRunner.Restarter.launchdLabel ] with
+    | Ok ()
+    | Error _ -> deletePaths [ plist ]
+  | UninstallPlan.Effect.DeletePath path -> deletePaths [ path ]
+
+/// `sagefs uninstall [--stop] [--remove-service] [--purge-data --yes]`.
+let uninstallCommand (mcpPort: int) (options: UninstallPlan.Options) : int =
+  let shell =
+    match OperatingSystem.IsWindows() with
+    | true -> UninstallPlan.Shell.PowerShell
+    | false -> UninstallPlan.Shell.Posix
+  let steps = UninstallPlan.plan options shell (findLeftovers mcpPort)
+  UninstallPlan.render options steps |> List.iter (printfn "%s")
+  let failures =
+    steps
+    |> List.choose (fun step ->
+      match step.Run with
+      | UninstallPlan.Run.Perform effect ->
+        match performUninstallEffect mcpPort effect with
+        | Ok () ->
+          printfn "done: %s" step.What
+          None
+        | Error why ->
+          eprintfn "failed: %s: %s" step.What why
+          Some why
+      | UninstallPlan.Run.PrintOnly -> None)
+  match failures with
+  | [] -> 0
+  | _ -> 1
+
 [<EntryPoint>]
 let main args =
   let command = CliCommand.parse args
@@ -683,39 +1120,44 @@ let main args =
   | ShowHelp ->
     printfn "SageFs - F# Interactive daemon with MCP, hot reloading, and live dashboard"
     printfn ""
-    printfn "Usage: SageFs [options]                Start daemon (default mode)"
-    printfn "       SageFs check                    Check environment before first run"
-    printfn "       SageFs install-skill [--force]  Install the sagefs agent skill (~/.claude/skills; --dir <folder>)"
-    printfn "       SageFs setup [--client C] [--dir D] [--write]"
+    printfn "Usage: sagefs [options]                Start daemon (default mode)"
+    printfn "       sagefs help                     Show this help (also --help, -h)"
+    printfn "       sagefs check                    Check environment before first run"
+    printfn "       sagefs install-skill [--force]  Install the sagefs agent skill (~/.claude/skills; --dir <folder>)"
+    printfn "       sagefs setup [--client C] [--dir D] [--write]"
     printfn "                                       Register SageFs as a stdio server in Claude Code, VS Code, Cursor and Claude Desktop (C is claude-code, vscode,"
     printfn "                                       cursor or claude-desktop). Prints what it would do; --write merges the entry into the client's config and installs the skill"
-    printfn "       SageFs member mint --role R (--dir D | --session ID) [--scope S] [--ttl MINUTES] [--print-env VAR]"
+    printfn "       sagefs member mint --role R (--dir D | --session ID) [--scope S] [--ttl MINUTES] [--print-env VAR]"
     printfn "                                       Mint a member token with the operator credential (operator.token); --print-env prints an export line"
-    printfn "       SageFs cohort seat [<member id> [--replace <holder id>]] [--dir D]"
+    printfn "       sagefs cohort seat [<member id> [--replace <holder id>]] [--dir D]"
     printfn "                                       Fill an empty conductor seat with a present member (operator.token); with --replace, take the seat from a holder whose connection is gone;"
     printfn "                                       with no member id, list who is present and where the seat stands (and whether the holder is silent)"
-    printfn "       SageFs data clear [--store friction|cohort|all]"
+    printfn "       sagefs data clear [--store friction|cohort|all]"
     printfn "                                       Clear the local stores SageFs keeps (operator.token); a running cohort's ledger is left alone"
-    printfn "       SageFs call --list              List the daemon's tools (name and first line of the description)"
-    printfn "       SageFs call <tool> [--<parameter> <value> ...] | --json '{...}'"
+    printfn "       sagefs call --list              List the daemon's tools (name and first line of the description)"
+    printfn "       sagefs call <tool> [--<parameter> <value> ...] | --json '{...}'"
     printfn "                                       Call one tool and print its answer. Values are typed from the tool's own input schema;"
     printfn "                                       a tool error goes to stderr with exit code 1. --token T or SAGEFS_MEMBER_TOKEN is the member"
     printfn "                                       it calls as (none is anonymous); --port P picks the daemon. Reaches the tools when the client has none."
-    printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
-    printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
-    printfn "       SageFs mcp                      Speak MCP over stdio (spawns the daemon if needed)"
-    printfn "       SageFs stop                     Stop running daemon"
-    printfn "       SageFs status                   Show daemon info"
-    printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
-    printfn "       SageFs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part"
-    printfn "       SageFs hygiene --rescue <name>  Put the work of worktree <name> (commits and uncommitted files) on branch rescue/<name>, rebased on the base, and say whether the base already has it"
-    printfn "       SageFs play <ledger.jsonl>      Replay a portable cohort ledger file offline"
-    printfn "       SageFs %s <out.jsonl>   Write the cohort ledger to a file play can replay (%s <path>, %s <dir>)" CohortExportCommand.commandName (CohortExportCommand.Flag.text CohortExportCommand.Flag.Scope) (CohortExportCommand.Flag.text CohortExportCommand.Flag.DataDir)
+    printfn "       sagefs --supervised [options]   Start with watchdog auto-restart"
+    printfn "       sagefs --jupyter <conn.json>    Run as Jupyter kernel"
+    printfn "       sagefs mcp                      Speak MCP over stdio (spawns the daemon if needed)"
+    printfn "       sagefs stop                     Stop running daemon (and its FSI host workers)"
+    printfn "       sagefs uninstall [--stop] [--remove-service] [--purge-data --yes]"
+    printfn "                                       List what SageFs left on this machine and the command that removes each; the flags do"
+    printfn "                                       those steps here. Your data goes only with both --purge-data and --yes"
+    printfn "       sagefs status                   Show daemon info"
+    printfn "       sagefs sweep [--kill]           Reap daemons whose owner process is gone"
+    printfn "       sagefs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part"
+    printfn "       sagefs hygiene --rescue <name>  Put the work of worktree <name> (commits and uncommitted files) on branch rescue/<name>, rebased on the base, and say whether the base already has it"
+    printfn "       sagefs play <ledger.jsonl>      Replay a portable cohort ledger file offline"
+    printfn "       sagefs %s <out.jsonl>   Write the cohort ledger to a file play can replay (%s <path>, %s <dir>)" CohortExportCommand.commandName (CohortExportCommand.Flag.text CohortExportCommand.Flag.Scope) (CohortExportCommand.Flag.text CohortExportCommand.Flag.DataDir)
     printfn ""
     printfn "Options:"
     printfn "  --version, -v          Show version information"
     printfn "  --help, -h             Show this help message"
-    printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
+    printfn "  --mcp-port PORT        Run on PORT for this run only (default: 37749). A port other than the configured"
+    printfn "                         one needs --ttl or --owner-pid; to move your daemon for good, set SAGEFS_MCP_PORT."
     printfn "  --jupyter FILE         Run as Jupyter kernel with given connection file"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
     printfn "  --no-resume            Skip restoring previous sessions on daemon startup"
@@ -734,11 +1176,15 @@ let main args =
     printfn "  one and read the error for what to do instead."
     printfn ""
     printfn "Exit codes:"
-    printfn "  sagefs check   0 = every check passed          1 = at least one check failed"
-    printfn "  sagefs stop    0 = a running daemon was stopped 1 = there was nothing to stop"
+    printfn "  sagefs check     0 = no check failed (warnings and notes are listed)   1 = at least one check failed"
+    printfn "  sagefs stop      0 = stopped   1 = there was nothing to stop   3 = stopped, but a service, watchdog"
+    printfn "                   or agent bridge will start a new one (the output names it and the command that stops it)"
+    printfn "  sagefs status    0 = running and healthy   1 = not running   3 = running, a component failed"
+    printfn "                   4 = wedged (a process holds the port and never answers)"
+    printfn "  a word sagefs does not know, or a missing argument: 2"
     printfn ""
     printfn "Environment Variables:"
-    printfn "  SAGEFS_MCP_PORT           Override MCP server port (same as --mcp-port)"
+    printfn "  SAGEFS_MCP_PORT           The MCP port your daemon and its clients use (the dashboard takes the port after it)"
     printfn "  SAGEFS_BIND_HOST          Loopback bind address: localhost (default), 127.0.0.1 or ::1."
     printfn "                            Non-loopback addresses are refused — SageFs has no authentication."
     printfn ""
@@ -764,25 +1210,21 @@ let main args =
     printfn "  Or visit http://localhost:37750/dashboard in your browser."
     printfn ""
     printfn "Examples:"
-    printfn "  SageFs                              Start the bare daemon"
-    printfn "  SageFs --mcp-port 47700             Start daemon on custom port"
-    printfn "  SageFs --supervised                 Start with auto-restart"
-    printfn "  SageFs --jupyter conn.json          Run as Jupyter kernel"
-    printfn "  SageFs status                       Show daemon status"
-    printfn "  SageFs check                        Check environment before first run"
-    printfn "  SageFs install-skill [--force]      Install the sagefs agent skill (--dir <folder> for another skills folder)"
+    for (words, what) in helpExamples do
+      printfn "  %-36s%s" (String.concat " " ("sagefs" :: words)) what
     printfn ""
     0
 
   | ShowVersion ->
     let assembly = Assembly.GetExecutingAssembly()
-    let version = assembly.GetName().Version
-    printfn $"SageFs version %A{version}"
+    printfn "%s" (versionLine { Tool = assembly.GetName().Version; TargetFrameworkName = AppContext.TargetFrameworkName; Runtime = Environment.Version })
     0
 
   | Stop ->
     let mcpPort = resolveMcpPort args
-    stopCommand DaemonState.readOnPort wedgedPidFor DaemonState.requestShutdown stopKillProcess stopWaitForExit mcpPort
+    stopCommand
+      DaemonState.readOnPort wedgedPidFor DaemonState.requestShutdown stopKillProcess stopWaitForExit
+      (restartersOn mcpPort) mcpPort
 
   | Status ->
     let mcpPort = resolveMcpPort args
@@ -913,6 +1355,21 @@ let main args =
   | DeprecatedClient name ->
     eprintfn "%s" (deprecatedClientMessage name)
     2
+
+  | UnknownCommand word ->
+    eprintfn "%s" (describeUnknownCommand word)
+    unknownCommandExitCode
+
+  | Uninstall uninstallArgs ->
+    match UninstallPlan.parseArgs uninstallArgs with
+    | Ok options -> uninstallCommand (resolveMcpPort args) options
+    | Error why ->
+      eprintfn "sagefs uninstall: %s" why
+      unknownCommandExitCode
+
+  | MissingArgument usage ->
+    eprintfn "sagefs: %s" usage
+    unknownCommandExitCode
 
   | Jupyter connectionFile ->
     match File.Exists connectionFile with

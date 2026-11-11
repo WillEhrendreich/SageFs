@@ -65,8 +65,11 @@
   daemon whenever the daemon process is gone, whatever its exit code, so
   `sagefs stop` gets you a fresh daemon. KeepAlive with SuccessfulExit false
   restarts the watchdog itself if it crashes, the same as Restart=on-failure in
-  the systemd unit. A watchdog that gives up after repeated crashes exits 0, and
-  launchd leaves it down.
+  the systemd unit. A watchdog that gives up after repeated crashes exits 1, and
+  launchd starts it again after ThrottleInterval; launchd has no limit on that,
+  so a daemon that cannot start keeps being tried every few seconds until you
+  stop the agent (below) and read ~/Library/Logs/sagefs/. `sagefs stop` says
+  when this agent will start a new daemon.
 
   To stop it:   launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs
   To restart:   launchctl kickstart -k gui/$(id -u)/io.github.willehrendreich.sagefs

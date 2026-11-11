@@ -400,7 +400,7 @@ let ownerArguments (homePort: int) (mcpPort: int) (bridgePid: int) : string list
   | false -> [ "--owner-pid"; string bridgePid ]
 
 /// The daemon-spawn IO edge: start it exactly the way plain `sagefs` does —
-/// same executable, same args, detached. We never wait on it and never tie
+/// same executable (or `dotnet SageFs.dll` under the muxer), same args, detached. We never wait on it and never tie
 /// its lifetime to ours unless we were asked for a port of our own (see
 /// `ownerArguments`). Its own stdout/stderr are redirected and drained to OUR
 /// stderr so nothing from it ever reaches our stdout, which is the protocol
@@ -408,7 +408,9 @@ let ownerArguments (homePort: int) (mcpPort: int) (bridgePid: int) : string list
 let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
   task {
     try
-      let exePath = Process.GetCurrentProcess().MainModule.FileName
+      match McpBridge.daemonSpawnCommand (McpBridge.currentSpawnFacts ()) with
+      | McpBridge.DaemonSpawn.MuxerWithoutEntry _ as refused -> return Error (McpBridge.DaemonSpawn.describe refused)
+      | McpBridge.DaemonSpawn.Run (exePath, leadingArgs) ->
       let psi =
         ProcessStartInfo(
           exePath,
@@ -421,6 +423,8 @@ let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
       // settings snapshot and tier, from the same files. The credentials this bridge sends are the exception: the
       // daemon needs neither, and everything it starts would inherit them, down to the FSI host an eval runs in.
       SageFs.ProcessEnvironment.removeCredentials psi
+      // Under the dotnet muxer the first argument is SageFs.dll (`McpBridge.daemonSpawnCommand`).
+      leadingArgs |> List.iter psi.ArgumentList.Add
       psi.ArgumentList.Add("--mcp-port")
       psi.ArgumentList.Add(string mcpPort)
       ownerArguments (DaemonPort.configured ()) mcpPort (Process.GetCurrentProcess().Id)
