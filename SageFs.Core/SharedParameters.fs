@@ -60,7 +60,7 @@ module SharedParameters =
 
     /// A lease: sub-agents that share one connection each need their own.
     [<Literal>]
-    let Lease = "Your own agent name, distinct from sibling sub-agents'. Names your lease."
+    let Lease = "Your agent name, distinct from sibling sub-agents'."
 
   /// The wire names of the parameters that have named sentences.
   [<Literal>]

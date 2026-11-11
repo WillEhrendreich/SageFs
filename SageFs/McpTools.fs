@@ -1286,28 +1286,28 @@ BEHAVIOR:
         |> withEchoOutcome ctx "cancel_eval"
 
     [<McpServerTool>]
-    [<Description("""Enable hot reload (browser auto-refresh) for this session.
+    [<Description("""Report whether this session has hot reload, and how to get it if not. Changes nothing.
 
-This installs Harmony patches on WebApplication.Run/RunAsync() so that when a
-.fs file changes, the browser auto-refreshes. Designed for use after the
-session was created in Interactive workflow and the user later wants to run
-a Falco/Datastar webapp with live reload — without destroying the session.
+Hot reload means a saved .fs file re-points the changed methods in the running
+app and keeps its state; connected browsers refresh too. It belongs to the
+Hot Reload workflow, which is fixed when the session's FSI process starts.
+`switch_workflow` spells that workflow `hotreload`, and also `live`, `weblive`
+and `web`. `livetesting` is a different workflow (tests re-run as you type).
 
 WORKFLOW:
 1. Call this tool. It returns a JSON with `patched`, `workerPort`, `health`,
    `disabledByEnvVar`, and `nextSteps`.
-2. If a webapp is already running (webapp.Run() is blocking an eval), call
-   `cancel_eval` to stop it.
-3. Re-evaluate your `webapp.Run()` call. The Harmony patches now fire on
-   this Run() call, the DevReloadMiddleware is injected, and subsequent file
-   changes will hot-reload the browser.
+2. In a Hot Reload session the outcome is AlreadyActive. Start your app
+   (run_app, or evaluate webapp.Run()) and save a watched .fs file.
+3. In an Interactive or Live Testing session the outcome is RequiresLiveMode
+   and nothing is patched. `nextSteps` says how to switch. The switch
+   (`switch_workflow target=hotreload`) restarts the session's worker, so
+   REPL definitions and cell state are lost.
 
-Idempotent: safe to call multiple times. The patches only apply to future
-webapp.Run() calls; existing in-flight webapps are unaffected.
+Safe to call repeatedly: it only reads the session's workflow.
 
 If the env var SAGEFS_DEVRELOAD=0 is set, the tool returns `disabledByEnvVar:
-true` and does NOT install patches. This is intentional — the env var is the
-process-wide kill switch for hot reload.""")>]
+true`. The env var is the process-wide kill switch for hot reload.""")>]
     member _.enable_hot_reload(
         [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
@@ -1374,21 +1374,19 @@ process-wide kill switch for hot reload.""")>]
         |> withEchoReply ctx "enable_hot_reload"
 
     [<McpServerTool>]
-    [<Description("""Disable hot reload for this session.
+    [<Description("""Say how to turn hot reload off for this session. Changes nothing.
 
-This transitions the DevReload health state to Disabled. The Harmony patches
-remain installed in the process but the prefix check will refuse to inject
-the DevReloadMiddleware into future webapp.Run() calls.
+There is no per-session runtime off-switch. The tool answers from the session's
+workflow, and returns a JSON with `disabled`, `health` and `nextSteps`.
 
 WORKFLOW:
-1. Call this tool. It returns a JSON with `disabled: true` and `health`.
-2. If a webapp is already running, you do NOT need to restart it — the
-   middleware is already injected and the SSE channel is established.
-   However, future webapp.Run() calls will not get the middleware.
-3. To re-enable, call `enable_hot_reload` and then re-evaluate webapp.Run().
-
-This is the runtime analog of the SAGEFS_DEVRELOAD=0 env var. Unlike the env
-var, this is per-session and reversible. The env var, if set, takes precedence.""")>]
+1. Call this tool.
+2. In an Interactive or Live Testing session hot reload was never on, and the
+   answer says so.
+3. In a Hot Reload session `disabled` is false and `nextSteps` gives the two
+   ways off: `switch_workflow target=interactive`, which restarts the session's
+   worker and loses REPL definitions, or starting the daemon with
+   SAGEFS_DEVRELOAD=0 to turn hot reload off for every session.""")>]
     member _.disable_hot_reload(
         [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
@@ -1720,14 +1718,18 @@ ROUTING BEHAVIOR:
 
     [<McpServerTool>]
     [<Description("""Switch the workflow mode for a session.
-Workflows control the tradeoff between REPL capability and browser hot reload:
-- REPL (Interactive): Full type redefinition, interactive exploration
-- Live (HotReload): Browser hot reload on save, expression-only REPL
+Three workflows:
+- interactive (REPL): full type redefinition, interactive exploration
+- livetesting: the full REPL, and the affected tests re-run as you type
+- hotreload: a save re-points the changed methods in the running app and keeps
+  its state, with no type redefinition. The aliases `live`, `weblive` and `web`
+  also mean hotreload. `live` does NOT mean live testing; that is `livetesting`.
 
 Set dryRun=true to preview the transition cost without executing.
-Switching creates a new session — REPL definitions and cell state are lost.""")>]
+Switching restarts the session's worker under the same session id. REPL
+definitions and cell state are lost.""")>]
     member _.switch_workflow(
-        [<Description("Target workflow: 'interactive' (full REPL), 'livetesting' (full REPL + tests re-run as you type, debounced), or 'hotreload' (app hot reload; aliases: 'weblive', 'live', 'web'). Switching recreates the session, so REPL state is lost.")>]
+        [<Description("'interactive', 'livetesting' (tests re-run as you type) or 'hotreload'. 'live', 'weblive' and 'web' also mean hotreload, not livetesting.")>]
         target: string,
         [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]

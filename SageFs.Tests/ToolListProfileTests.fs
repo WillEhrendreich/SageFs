@@ -233,3 +233,47 @@ let sharedParameterTests =
           (sentence.Length <= 140)
           |> Expect.isTrue (sprintf "%s: '%s' is %d characters" parameter sentence sentence.Length)
   ]
+
+/// What an agent reads about the three workflows. `switch_workflow target=live` means Hot Reload, and `livetesting` means
+/// live testing: a prefix shared by two features is how an agent picks the wrong session and loses its REPL state.
+[<Tests>]
+let workflowWordingTests =
+  let manualOf (name: string) =
+    (ListedDefinitions.registered () |> List.find (fun tool -> tool.Name = name)).Description
+  let sentenceOf (name: string) =
+    match Affordances.ToolName.tryParse name with
+    | Some tool -> ToolSummaries.sentenceOf tool
+    | None -> failtestf "%s is not a ToolName" name
+  let hotReloadTools = [ "enable_hot_reload"; "disable_hot_reload"; "switch_workflow" ]
+  testList "Workflow wording an agent reads" [
+
+    testCase "WHY - no hot reload text calls it a browser refresh or says it installs Harmony patches, because a save re-points methods" <| fun () ->
+      for name in hotReloadTools do
+        for (where, text) in [ "sentence", sentenceOf name; "manual", manualOf name ] do
+          for stale in [ "browser auto-refresh"; "browser refresh"; "Browser hot reload"; "installs Harmony"; "Harmony patches" ] do
+            text.Contains stale |> Expect.isFalse (sprintf "%s %s says '%s'" name where stale)
+
+    testCase "WHY - the enable_hot_reload manual says hot reload re-points changed methods and that the tool changes nothing itself" <| fun () ->
+      let manual = manualOf "enable_hot_reload"
+      manual.Contains "re-point" |> Expect.isTrue "it says what hot reload is"
+      manual.Contains "Changes nothing" |> Expect.isTrue "it says the tool only reports"
+
+    testCase "WHY - switch_workflow says 'live' means hotreload and 'livetesting' is live testing, in its sentence and in its target parameter" <| fun () ->
+      let sentence = sentenceOf "switch_workflow"
+      for word in [ "livetesting"; "hotreload"; "'live'" ] do
+        sentence.Contains word |> Expect.isTrue (sprintf "the sentence names %s" word)
+      let target =
+        ListedDefinitions.full ()
+        |> List.find (fun tool -> tool.Name = "switch_workflow")
+        |> propertyDescriptions
+        |> List.find (fun (name, _) -> name = "target")
+        |> snd
+      for word in [ "livetesting"; "hotreload"; "'live'" ] do
+        target.Contains word |> Expect.isTrue (sprintf "the target parameter names %s" word)
+      target.Contains "recreates the session" |> Expect.isFalse "the target parameter says the session is recreated"
+
+    testCase "WHY - switch_workflow does not claim it recreates the session: it restarts the same session id's worker" <| fun () ->
+      for (where, text) in [ "sentence", sentenceOf "switch_workflow"; "manual", manualOf "switch_workflow" ] do
+        text.Contains "Recreates the session" |> Expect.isFalse (sprintf "%s says 'Recreates the session'" where)
+        text.Contains "creates a new session" |> Expect.isFalse (sprintf "%s says 'creates a new session'" where)
+  ]
