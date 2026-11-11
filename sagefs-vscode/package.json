@@ -104,7 +104,8 @@
       },
       {
         "command": "sagefs.createSession",
-        "title": "SageFs: Create Session"
+        "title": "SageFs: Create Session",
+        "icon": "$(add)"
       },
       {
         "command": "sagefs.configureWarmupAutoOpen",
@@ -344,26 +345,31 @@
         "sagefs.mcpPort": {
           "type": "number",
           "default": 37749,
+          "scope": "machine",
           "description": "Port for the SageFs MCP server."
         },
         "sagefs.dashboardPort": {
           "type": "number",
           "default": 37750,
+          "scope": "machine",
           "description": "Legacy fallback dashboard port. SageFs normally discovers the daemon and derives the dashboard port from the MCP port."
         },
         "sagefs.autoStart": {
           "type": "boolean",
           "default": true,
+          "scope": "window",
           "description": "Automatically start SageFs daemon when opening an F# project."
         },
         "sagefs.projectPath": {
           "type": "string",
           "default": "",
+          "scope": "resource",
           "description": "Path to .fsproj file. If empty, SageFs auto-detects."
         },
         "sagefs.showEventsFromAllSessions": {
           "type": "boolean",
           "default": false,
+          "scope": "window",
           "description": "Show session faults and file reloads from every session on the daemon. Off by default: a window shows its own session's and the sessions started in its workspace, so another agent's fault does not pop up here."
         },
         "sagefs.logLevel": {
@@ -374,16 +380,19 @@
             "debug"
           ],
           "default": "info",
+          "scope": "window",
           "description": "Output channel log level."
         },
         "sagefs.inlineResultTimeout": {
           "type": "number",
           "default": 30000,
+          "scope": "window",
           "description": "How long (ms) inline eval results stay visible before auto-clearing. Set to 0 to keep forever."
         },
         "sagefs.cellHighlight": {
           "type": "boolean",
           "default": true,
+          "scope": "window",
           "description": "Highlight the current code cell (block) the cursor is in."
         },
         "sagefs.density": {
@@ -399,11 +408,13 @@
             "Only inline results on eval, nothing persistent"
           ],
           "default": "full",
+          "scope": "window",
           "description": "Controls how many visual annotations SageFs shows."
         },
         "sagefs.typeExplorerRoot": {
           "type": "string",
           "default": "",
+          "scope": "window",
           "description": "Pin the API Browser tree to a single root namespace (e.g. \"MyApp.Domain\"). Empty string shows the default set of common .NET and F# namespaces."
         },
         "sagefs.takeOverIonideSendCommands": {
@@ -830,8 +841,7 @@
             "title": "Install the SageFs CLI",
             "description": "SageFs needs its CLI tool installed. Run ``dotnet tool install --global SageFs`` in your terminal.\n\n[Check Installation](command:sagefs.checkHealth)",
             "media": {
-              "image": "$(terminal)",
-              "altText": "Terminal icon"
+              "markdown": "walkthrough/install-cli.md"
             },
             "completionEvents": [
               "onCommand:sagefs.checkHealth"
@@ -842,8 +852,7 @@
             "title": "Open an F# Project",
             "description": "Open a folder containing a ``.fsproj`` or ``.sln`` file. SageFs will automatically detect it.\n\nFor workspaces with multiple projects, SageFs will ask which one to use. You can switch later with **SageFs: Switch Project** from the command palette.",
             "media": {
-              "image": "$(folder-opened)",
-              "altText": "Folder opened icon"
+              "markdown": "walkthrough/open-project.md"
             },
             "completionEvents": [
               "onLanguage:fsharp"
@@ -854,11 +863,21 @@
             "title": "Start the SageFs Daemon",
             "description": "Click the SageFs icon in the status bar or run **SageFs: Start Daemon** from the command palette.\n\n[Start SageFs](command:sagefs.start)",
             "media": {
-              "image": "$(rocket)",
-              "altText": "Rocket icon"
+              "markdown": "walkthrough/start-daemon.md"
             },
             "completionEvents": [
               "onCommand:sagefs.start"
+            ]
+          },
+          {
+            "id": "sagefs.createSession",
+            "title": "Create a Session",
+            "description": "A session is an F# Interactive with your project loaded. Evaluating code needs one.\n\n[Create Session](command:sagefs.createSession)",
+            "media": {
+              "markdown": "walkthrough/create-session.md"
+            },
+            "completionEvents": [
+              "onCommand:sagefs.createSession"
             ]
           },
           {
@@ -866,8 +885,7 @@
             "title": "Evaluate Your First Expression",
             "description": "Select some F# code and press ``Alt+Enter`` to evaluate it. Results appear inline!\n\nOther keys: ``Shift+Enter`` evaluates and moves to the next block, ``Alt+Shift+Enter`` evaluates the whole file.\n\nDon't have an F# file handy? Open our interactive tutorial:\n\n[Open Getting Started Sample](command:sagefs.openGettingStarted)",
             "media": {
-              "image": "$(play)",
-              "altText": "Play icon"
+              "markdown": "walkthrough/evaluate.md"
             },
             "completionEvents": [
               "onCommand:sagefs.eval"
@@ -878,8 +896,7 @@
             "title": "Explore Live Testing",
             "description": "A new session starts with live testing off, and no test runs until you turn it on. Click the link below, or run **SageFs: Enable Live Testing** from the command palette. After that SageFs finds your tests and re-runs the affected ones as you edit, saved or not. Results show on the test lines and in VS Code's Testing view, under SageFs Live Tests.\n\n[Enable Live Testing](command:sagefs.enableLiveTesting)",
             "media": {
-              "image": "$(testing-run-icon)",
-              "altText": "Testing icon"
+              "markdown": "walkthrough/live-testing.md"
             },
             "completionEvents": [
               "onCommand:sagefs.enableLiveTesting"
