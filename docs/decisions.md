@@ -1077,7 +1077,7 @@ read before it is compared. Custom attribute changes are compared as text of con
 frames, from the docs, not tested. A method a Harmony detour already points at, and the debugger-attached
 `NotSupportedException`, I read in the runtime source and did not run. Linux x64 only.
 
-What it costs, measured on this machine (16 logical cores, Linux, .NET 11.0.0-rc.1.26425.128, a machine other agents
+What it costs, measured on this machine (16 logical cores, Linux, .NET 11.0.0-rc.1.26425.128, measured on rc.1 and not re-measured on GA, a machine other agents
 were building on) with SageFs.Core.dll as the subject: 9.4 MB, 46,153 methods, three bodies changed. n = 5 passes in one
 child process, from nothing each time (the first has the JIT in it), then the next save once:
 
@@ -1173,7 +1173,7 @@ old body. That is a state the session carries and every surface shows, and the n
 chose not to. A field added to a type, a new closure class and a lambda that starts capturing something still restart, and
 each says which.
 
-Measured on this machine (16 logical cores, Linux, .NET SDK 11.0.0-rc.1.26425.128; the run_app fixture; n = 6 saves, medians):
+Measured on this machine (16 logical cores, Linux, .NET SDK 11.0.0-rc.1.26425.128, measured on rc.1 and not re-measured on GA; the run_app fixture; n = 6 saves, medians):
 file written to the new body served, 2.6 s on .NET 10 (twice) and 1.8 s then 2.6 s on .NET 11, the second with other builds running on the
 machine. The build is 1.6 to 2.4 s of that, the diff and the delta written 5 ms, the runtime's call with its handlers 1 ms. A restart pays
 that build and then starts a process, host to the app answering 4.4 to 5.6 s. Being editable cost a call-heavy loop (50 million calls of a
