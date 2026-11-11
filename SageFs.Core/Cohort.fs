@@ -1414,18 +1414,33 @@ module Cohort =
         match Purpose.tryCreate purposeRaw with
         | Error e -> Error(CohortError.InvalidPurpose e)
         | Ok purpose ->
-          let conflict =
+          let overlapping =
             state.Claims
             |> Map.toList
-            |> List.tryPick (fun (_, c) ->
+            |> List.choose (fun (_, c) ->
               match c.State with
-              | ClaimState.Held holder when ClaimScope.overlaps c.Scope scope -> Some holder
+              | ClaimState.Held holder when ClaimScope.overlaps c.Scope scope -> Some(c, holder)
               | ClaimState.Held _
               | ClaimState.Orphaned _
               | ClaimState.Released _ -> None)
-          match conflict with
-          | Some holder -> Error(CohortError.ClaimConflict(scope, holder))
-          | None ->
+          // Someone else's claim refuses first. A claim of the caller's own over the very same scope is the same claim
+          // asked for again: a retry after `OwnerUnresponsive`, or a sub-agent on its orchestrator's connection, which is
+          // the same member. That renews the member's lease and leaves the claim as it is (same id, same fence), where it
+          // used to be refused as a conflict naming the caller as the holder. An own claim over a DIFFERENT overlapping
+          // scope still refuses: granting it would hold two overlapping claims at once (property 1).
+          let ownSameScope =
+            overlapping
+            |> List.tryFind (fun (c, holder) -> holder = who && c.Scope = scope)
+          match overlapping |> List.tryFind (fun (_, holder) -> holder <> who), ownSameScope with
+          | Some(_, holder), _ -> Error(CohortError.ClaimConflict(scope, holder))
+          | None, Some _ ->
+            let record = state.Members.[who]
+            let renewed = { state with Members = Map.add who { record with LastRenewal = clock } state.Members }
+            Ok(renewed, [ CohortEvent.LeaseRenewed who ], [])
+          | None, None ->
+          match overlapping with
+          | (_, holder) :: _ -> Error(CohortError.ClaimConflict(scope, holder))
+          | [] ->
             let claimId = Ids.mintClaimId entropy
             if Map.containsKey claimId state.Claims then
               Error(CohortError.DuplicateClaimId claimId)

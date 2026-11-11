@@ -1781,3 +1781,31 @@ let cohortPropertyTests =
         && Set.contains Affordances.CohortTool.GetStatus (Affordances.cohortTools authority)
     ]
   ]
+
+/// A member asking again for a claim it already holds over the same scope gets that claim kept and its lease renewed.
+/// It used to be refused `ClaimConflict(scope, holder)` with the CALLER as the holder, which tells a sub-agent on its
+/// orchestrator's connection, or a caller retrying after `OwnerUnresponsive`, to coordinate with itself.
+[<Tests>]
+let ownClaimAskedAgainTests =
+  testList "cohort: an own claim asked for again" [
+    testPropertyWithConfig raceConfig "WHY — the same member and the same scope renews the lease and leaves the claim as it was; another member is still refused" <| fun (scope: ClaimScope) ->
+      let a = agentOf 1
+      let b = agentOf 2
+      let h0 = initHarness ()
+      let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
+      let h2 = applyCommand h1 (CohortCommand.Join(b, JoinableRole.Implementer, None, machine))
+      let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scope, "first ask", machine))
+      // One tick later: any instant after the first ask shows that the lease moved.
+      let later = h3.Clock.AddTicks 1L
+      let again = decide later [| 98uy |] h3.State (CohortCommand.AcquireClaim(a, scope, "asked again", machine))
+      let other = decide later [| 97uy |] h3.State (CohortCommand.AcquireClaim(b, scope, "someone else", machine))
+      match again, other with
+      | Ok(state, events, effects), Error(CohortError.ClaimConflict(_, holder)) ->
+        state.Claims = h3.State.Claims
+        && state.NextFence = h3.State.NextFence
+        && events = [ CohortEvent.LeaseRenewed a ]
+        && effects = []
+        && state.Members.[a].LastRenewal = later
+        && holder = a
+      | _ -> false
+  ]
