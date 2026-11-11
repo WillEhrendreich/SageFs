@@ -38,10 +38,18 @@ let private installText = "Install C# extension"
 
 /// Say something. Not awaited: see the header.
 let private say (notice: Notice) : unit =
-  match notice.Severity with
-  | Severity.Info -> Window.showInformationMessage notice.Text [||] |> ignore
-  | Severity.Warning -> Window.showWarningMessage notice.Text [||] |> ignore
-  | Severity.Error -> Window.showErrorMessage notice.Text [||] |> ignore
+  let labels = notice.Buttons |> List.map (fun b -> b.Label) |> List.toArray
+  let shown =
+    match notice.Severity with
+    | Severity.Info -> Window.showInformationMessage notice.Text labels
+    | Severity.Warning -> Window.showWarningMessage notice.Text labels
+    | Severity.Error -> Window.showErrorMessage notice.Text labels
+  shown
+  |> Promise.map (fun choice ->
+    match choice |> Option.bind (fun label -> notice.Buttons |> List.tryFind (fun b -> b.Label = label)) with
+    | Some button -> Commands.executeCommand button.Command |> ignore
+    | None -> ())
+  |> ignore
 
 /// The debug types an extension contributes, read from its package.json.
 let private debuggersOf (extension: Extension) : ExtensionDebuggers =
@@ -166,7 +174,7 @@ let private holdAndAttachAll (c: Client.Client) (sessionId: string) (ids: string
         match remaining, state.Value with
         | [], _ -> ()
         | _ :: _, SessionState.Ended ->
-          say { Severity = Severity.Warning; Text = sprintf "The debug session ended, so %d tests were not run." remaining.Length }
+          say { Severity = Severity.Warning; Text = sprintf "The debug session ended, so %d tests were not run." remaining.Length; Buttons = [] }
         | testId :: rest, _ ->
           let! answer = Client.debugTest testId sessionId c
           match answer with
@@ -241,7 +249,7 @@ let debugTests (c: Client.Client) (sessionId: string) (testIds: string list) : J
   match batchOf testIds, run with
   | [], _ -> Promise.lift ()
   | _, Run.Debugging _ ->
-    say { Severity = Severity.Warning; Text = "A test is already being debugged. Stop that debug session first." }
+    say { Severity = Severity.Warning; Text = "A test is already being debugged. Stop that debug session first."; Buttons = [] }
     Promise.lift ()
   | ids, Run.Idle ->
     run <- Run.Debugging ids

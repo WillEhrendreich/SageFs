@@ -180,6 +180,58 @@ let tests =
         notice.Text |> Expect.stringContains "where to look" "Debug Console"
     ]
 
+    // WHY — every debug-test refusal was a bare toast: `say` always passed no buttons, so "Session x has no running
+    // worker" or "No discovered test matches" left the person to work out the fix (roast-5 finding 7). The buttons run
+    // commands the extension already registers.
+    testList "refusals carry a button that fixes or explains them" [
+
+      let buttonsOf status =
+        match beginStep (withStatus status) with
+        | BeginStep.Refuse notice -> notice.Buttons
+        | other -> failtestf "%s should refuse, got %A" status other
+
+      let commandsOf status = buttonsOf status |> List.map (fun b -> b.Command)
+
+      testCase "WHY - no session offers Create Session" <| fun _ ->
+        commandsOf "no_session" |> Expect.equal "create" [ "sagefs.createSession" ]
+
+      testCase "WHY - a test that was not found offers to run the tests, which discovers them" <| fun _ ->
+        for status in [ "not_discovered"; "no_test_matched" ] do
+          commandsOf status |> Expect.equal status [ "sagefs.runTests" ]
+
+      testCase "WHY - a session with no running worker offers the hard reset and the output" <| fun _ ->
+        for status in [ "no_worker"; "host_unavailable"; "worker_failed" ] do
+          commandsOf status |> Expect.equal status [ "sagefs.hardReset"; "sagefs.showOutput" ]
+
+      testCase "WHY - every refusal that is an error has at least one button" <| fun _ ->
+        for status in [ "no_session"; "no_worker"; "host_unavailable"; "worker_failed"; "bad_request" ] do
+          buttonsOf status |> Expect.isNonEmpty (sprintf "%s has a button" status)
+
+      testCase "WHY - the daemon being unreachable offers Reconnect" <| fun _ ->
+        (unreachableNotice "connection refused").Buttons
+        |> List.map (fun b -> b.Command)
+        |> Expect.equal "reconnect" [ "sagefs.reconnect"; "sagefs.showOutput" ]
+
+      testCase "WHY - no test selected points at the Test Explorer" <| fun _ ->
+        noTestSelectedNotice.Buttons
+        |> List.map (fun b -> b.Command)
+        |> Expect.equal "explorer" [ "workbench.view.testing.focus" ]
+
+      testCase "WHY - every button's command is contributed by package.json or is a VS Code built-in named here" <| fun _ ->
+        let contributed =
+          JsonDocument.Parse(read "package.json").RootElement.GetProperty("contributes").GetProperty("commands").EnumerateArray()
+          |> Seq.map (fun c -> c.GetProperty("command").GetString())
+          |> Set.ofSeq
+        let builtIns = set [ "workbench.view.testing.focus" ]
+        let everyButton =
+          [ for status in [ "no_session"; "not_discovered"; "no_test_matched"; "no_worker"; "ambiguous_test"; "bad_request" ] do
+              yield! buttonsOf status
+            yield! (unreachableNotice "x").Buttons
+            yield! noTestSelectedNotice.Buttons ]
+        for b in everyButton do
+          Expect.isTrue (sprintf "%s (%s) is a real command" b.Label b.Command) (contributed.Contains b.Command || builtIns.Contains b.Command)
+    ]
+
     testList "continuing" [
 
       testCase "WHY - still running means ask again" <| fun _ ->

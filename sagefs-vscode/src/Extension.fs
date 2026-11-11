@@ -2923,7 +2923,13 @@ let activate (context: ExtensionContext) =
       | None, None -> []
     match TestDebugPure.batchOf ids with
     | [] ->
-      Window.showWarningMessage "No test selected. Use Debug above a failing test, or Debug Test in the Test Explorer." [||] |> ignore
+      let notice = TestDebugPure.noTestSelectedNotice
+      Window.showWarningMessage notice.Text (notice.Buttons |> List.map (fun b -> b.Label) |> List.toArray)
+      |> Promise.map (fun choice ->
+        match choice |> Option.bind (fun label -> notice.Buttons |> List.tryFind (fun b -> b.Label = label)) with
+        | Some button -> Commands.executeCommand button.Command |> ignore
+        | None -> ())
+      |> ignore
     | testIds ->
       withClient (fun c ->
         promise {

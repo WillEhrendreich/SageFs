@@ -86,12 +86,51 @@ type Severity =
   | Warning
   | Error
 
-/// One thing to tell the person, and how loudly.
-type Notice = { Severity: Severity; Text: string }
+/// A button on a notification. `Command` is a command id VS Code can run: one package.json contributes, or a built-in.
+type NoticeButton = { Label: string; Command: string }
 
-let private info (text: string) = { Severity = Severity.Info; Text = text }
-let private warning (text: string) = { Severity = Severity.Warning; Text = text }
-let private error (text: string) = { Severity = Severity.Error; Text = text }
+/// One thing to tell the person, how loudly, and what they can press to act on it.
+type Notice = { Severity: Severity; Text: string; Buttons: NoticeButton list }
+
+let private info (text: string) = { Severity = Severity.Info; Text = text; Buttons = [] }
+let private warning (text: string) = { Severity = Severity.Warning; Text = text; Buttons = [] }
+let private error (text: string) = { Severity = Severity.Error; Text = text; Buttons = [] }
+
+let createSessionButton = { Label = "Create Session"; Command = "sagefs.createSession" }
+let runTestsButton = { Label = "Run Tests"; Command = "sagefs.runTests" }
+let hardResetButton = { Label = "Hard Reset (Rebuild)"; Command = "sagefs.hardReset" }
+let showOutputButton = { Label = "Show Output"; Command = "sagefs.showOutput" }
+let reconnectButton = { Label = "Reconnect"; Command = "sagefs.reconnect" }
+let testExplorerButton = { Label = "Open Test Explorer"; Command = "workbench.view.testing.focus" }
+
+/// What a person can press after the daemon refused to debug a test. The refusal's own words say what happened; the
+/// button is the nearest fix. A refusal with nothing to press (another debug run is open) has none.
+let refusalButtons (status: DebugStatus) : NoticeButton list =
+  match status with
+  | DebugStatus.NoSession -> [ createSessionButton ]
+  | DebugStatus.NotDiscovered
+  | DebugStatus.NoTestMatched -> [ runTestsButton ]
+  | DebugStatus.AmbiguousTest -> [ testExplorerButton ]
+  | DebugStatus.HoldAlreadyOpen -> []
+  | DebugStatus.NoWorker
+  | DebugStatus.HostUnavailable
+  | DebugStatus.WorkerFailed -> [ hardResetButton; showOutputButton ]
+  | DebugStatus.Held
+  | DebugStatus.StillRunning
+  | DebugStatus.HostNotAnswering
+  | DebugStatus.Attached
+  | DebugStatus.NoDebuggerWithin
+  | DebugStatus.ReleasedWithoutDebugger
+  | DebugStatus.NoSuchHold
+  | DebugStatus.HostLost
+  | DebugStatus.BadRequest
+  | DebugStatus.Unrecognised _ -> [ showOutputButton ]
+
+/// What to say when a debug command arrives with no test id: the lens and the hover carry one, the Test Explorer carries
+/// the ones picked.
+let noTestSelectedNotice : Notice =
+  { warning "No test selected. Use Debug above a failing test, or Debug Test in the Test Explorer." with
+      Buttons = [ testExplorerButton ] }
 
 // ── The .NET debugger ────────────────────────────────────────────
 
@@ -164,8 +203,10 @@ type BeginStep =
 
 /// What to do with the daemon's answer to "debug this test".
 let beginStep (view: DebugAnswerView) : BeginStep =
-  let reason (severity: Severity) = BeginStep.Refuse { Severity = severity; Text = view.Message }
-  match statusOfWire view.Status with
+  let status = statusOfWire view.Status
+  let reason (severity: Severity) =
+    BeginStep.Refuse { Severity = severity; Text = view.Message; Buttons = refusalButtons status }
+  match status with
   | DebugStatus.Held ->
     let symbols =
       match view.Symbols with
@@ -258,7 +299,8 @@ let sessionEndedNotice (testName: string) : Notice =
 
 /// What to say when the daemon cannot be reached at all.
 let unreachableNotice (detail: string) : Notice =
-  error (sprintf "Could not reach SageFs to debug the test: %s" detail)
+  { error (sprintf "Could not reach SageFs to debug the test: %s" detail) with
+      Buttons = [ reconnectButton; showOutputButton ] }
 
 // ── Where the debug entry points are ─────────────────────────────
 
