@@ -4137,7 +4137,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         match rctx.Dispatch with
         | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
         | None -> ()
-        do! jsonResponse ctx 200 {| success = true; message = msg |}
+        do! jsonResponse ctx 200 {| success = true; message = msg; notice = SageFs.SessionPathValidation.SessionRootNotice.describe (SageFs.SessionPathValidation.noticeForUser workingDir) |> Option.toObj |}
       | Error err ->
         do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task

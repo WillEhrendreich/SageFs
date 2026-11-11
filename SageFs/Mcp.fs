@@ -2206,7 +2206,10 @@ module McpTools =
           Option.toList (formatDetectionHint packageRefs workflow)
           @ ProjectCompatibility.formatToolchainAdvisories perProject @ CreateSessionUx.hostHintsOfTargets workingDir targets
         let hint = match lines with [] -> None | ls -> Some(String.concat "\n\n" ls)
-        return EchoResult.Answered (CreateSessionUx.formatCreateSessionReply sid targets hint)
+        return
+          EchoResult.Answered (
+            CreateSessionUx.formatCreateSessionReply sid targets hint
+            |> SessionPathValidation.SessionRootNotice.appendTo (SessionPathValidation.noticeForUser workingDir))
       | Result.Error err -> return EchoResult.Failed err
     }
 

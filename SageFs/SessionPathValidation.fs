@@ -48,8 +48,9 @@ module SessionPathValidation =
   [<RequireQualifiedAccess>]
   type SessionRootNotice =
     | NoNotice
-    /// The person's home directory itself: the hot-reload and live-test watchers then cover every file they have, and
-    /// a symlink cycle under it once grew the daemon to 55 GB.
+    /// The person's home directory itself. The watchers refuse it (`FileWatcher.classifyWatchRoot`: a recursive watch
+    /// there covered every file the person has, and a symlink cycle under it once grew the daemon to 55 GB), so the
+    /// session gets no file events, and the reply has to say so.
     | HomeDirectory of path: string
 
   module SessionRootNotice =
@@ -57,7 +58,14 @@ module SessionPathValidation =
       match notice with
       | SessionRootNotice.NoNotice -> None
       | SessionRootNotice.HomeDirectory path ->
-        Some (sprintf "Warning: this session works in your home directory (%s), so it watches every file under it: many watchers, slow scans, and a symlink cycle anywhere below is walked too. Start the session in the project's own directory instead." path)
+        Some (sprintf "Warning: this session works in your home directory (%s). SageFs will not watch a folder that holds every file you have, so hot reload and live testing get no file events in this session. Start the session in the project's own directory instead." path)
+
+    /// `reply` with the notice's text after it, when the notice has one. Every reply to a session create goes through
+    /// this, so the warning reaches whoever asked.
+    let appendTo (notice: SessionRootNotice) (reply: string) : string =
+      match describe notice with
+      | None -> reply
+      | Some text -> reply + "\n\n" + text
 
   let private isUncPath (p: string) =
     not (System.String.IsNullOrWhiteSpace p)
