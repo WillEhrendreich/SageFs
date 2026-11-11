@@ -11,6 +11,7 @@ module SageFs.Tests.DashboardTestStatusGridTests
 
 open Expecto
 open Expecto.Flip
+open Falco.Markup
 open SageFs.Features.LiveTesting
 open SageFs.Tests
 
@@ -133,4 +134,33 @@ let allTests = testList "Dashboard test status grid" [
           |> Expect.equal (sprintf "n=%d keeps cells legible" n) (max TestMagnitudes.treemapMinCellPx (min TestMagnitudes.treemapMaxCellPx l.CellPx)))
     }
   ]
+]
+
+let private quarantinedEntry : TestStatusEntry =
+  { TestId = TestId.TestId "flaky-1"
+    DisplayName = "flaky one"
+    FullName = "Ns.flaky one"
+    Origin = TestOrigin.ReflectionOnly
+    Framework = TestFramework.Expecto
+    Category = TestCategory.Unit
+    CurrentPolicy = RunPolicy.OnEveryChange
+    Status = TestRunStatus.Quarantined "flipped 3 times in 10 runs"
+    PreviousStatus = TestRunStatus.Detected
+    Provenance = ResultProvenance.Compiled }
+
+[<Tests>]
+let quarantineTests = testList "Dashboard test status grid quarantine" [
+  test "WHY — a quarantined test keeps its own status in the grid, because it used to fold into Other with no word for it" {
+    TestTreemap.fromStatusEntries [| quarantinedEntry |]
+    |> Array.map (fun e -> e.Status)
+    |> Expect.equal "its own status" [| TreemapStatus.Quarantined |]
+  }
+
+  test "WHY — the grid cell and the filter legend say Quarantined in words, so the state does not rest on colour alone" {
+    let entries = TestTreemap.fromStatusEntries [| quarantinedEntry |]
+    let cell = SageFs.Server.DashboardFragments.renderTestTreemap entries |> renderNode
+    cell |> Expect.stringContains "the cell's label names the state" "quarantined"
+    let legend = SageFs.Server.DashboardFragments.renderTestFilterBar entries |> renderNode
+    legend |> Expect.stringContains "the filter legend names the state" "Quarantined 1"
+  }
 ]

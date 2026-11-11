@@ -31,7 +31,7 @@ module TestTreemap =
       // Quarantined keeps a cell, never its last verdict's colour.
       | TestRunStatus.Quarantined _ ->
         Some { DisplayName = e.DisplayName; FullName = e.FullName
-               DurationMs = SageFs.Timeouts.notRun.TotalMilliseconds; Status = TreemapStatus.Other }
+               DurationMs = SageFs.Timeouts.notRun.TotalMilliseconds; Status = TreemapStatus.Quarantined }
       | _ -> None)
     |> Array.sortByDescending (fun e -> e.DurationMs)
 
@@ -168,7 +168,7 @@ module TestStatusGrid =
     match status with
     | TreemapStatus.Failed -> 0
     | TreemapStatus.Running -> 1
-    | TreemapStatus.Other -> 2
+    | TreemapStatus.Quarantined -> 2
     | TreemapStatus.Skipped -> 3
     | TreemapStatus.Passed -> 4
 

@@ -2231,7 +2231,13 @@ module TestSummary =
 /// One rectangle in a WizTree-style test treemap.
 /// Area is proportional to duration — you instantly see which tests are slow.
 [<RequireQualifiedAccess>]
-type TreemapStatus = Passed | Failed | Skipped | Running | Other
+type TreemapStatus =
+  | Passed
+  | Failed
+  | Skipped
+  | Running
+  /// Held out of the summaries for flipping; it keeps a cell, never its last verdict's colour.
+  | Quarantined
 
 type TestTreemapEntry = {
   DisplayName: string

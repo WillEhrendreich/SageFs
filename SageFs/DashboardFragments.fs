@@ -1479,7 +1479,7 @@ let treemapStatusToFilterValue (status: Features.LiveTesting.TreemapStatus) =
   | Features.LiveTesting.TreemapStatus.Failed -> "failed"
   | Features.LiveTesting.TreemapStatus.Running -> "running"
   | Features.LiveTesting.TreemapStatus.Skipped -> "skipped"
-  | Features.LiveTesting.TreemapStatus.Other -> "other"
+  | Features.LiveTesting.TreemapStatus.Quarantined -> "quarantined"
 
 /// Render a filter toggle bar for test status filtering.
 /// Uses Datastar signals: clicking a button sets $testFilter, Ds.show on entries filters display.
@@ -1488,8 +1488,6 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
     entries |> Array.filter (fun e -> e.Status = status) |> Array.length
   let passedCount = countByStatus Features.LiveTesting.TreemapStatus.Passed
   let failedCount = countByStatus Features.LiveTesting.TreemapStatus.Failed
-  let runningCount = countByStatus Features.LiveTesting.TreemapStatus.Running
-  let skippedCount = countByStatus Features.LiveTesting.TreemapStatus.Skipped
   let filterBtn (label: string) (value: string) (count: int) (color: string) =
     Elem.button
       [ Attr.class' "test-filter-btn"
@@ -1504,6 +1502,12 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
         Sink.show (sprintf "$testFilter === '%s'" value)
         Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.857rem;border-radius:0;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
       [ textEnc (sprintf "%s %d ✕" label count) ]
+  // Running, skipped and quarantined show only when a test is in that state.
+  let whenAny (label: string) (status: Features.LiveTesting.TreemapStatus) (color: string) =
+    let value, count = treemapStatusToFilterValue status, countByStatus status
+    match count > 0 with
+    | true -> [ filterBtn label value count color; activeBtn label value count color ]
+    | false -> []
   Elem.div
     [ Attr.class' "test-filter-bar"
       Attr.style "display:flex;align-items:center;gap:2px;margin-bottom:4px;flex-wrap:wrap;" ]
@@ -1514,16 +1518,9 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
       yield activeBtn "✓" "passed" passedCount "var(--fg-green,#27ae60)"
       yield filterBtn "✗" "failed" failedCount "var(--fg-red,#e74c3c)"
       yield activeBtn "✗" "failed" failedCount "var(--fg-red,#e74c3c)"
-      match runningCount > 0 with
-      | true ->
-        yield filterBtn "⟳" "running" runningCount "var(--fg-blue,#3498db)"
-        yield activeBtn "⟳" "running" runningCount "var(--fg-blue,#3498db)"
-      | false -> ()
-      match skippedCount > 0 with
-      | true ->
-        yield filterBtn "⊘" "skipped" skippedCount "var(--fg-yellow,#f39c12)"
-        yield activeBtn "⊘" "skipped" skippedCount "var(--fg-yellow,#f39c12)"
-      | false -> () ]
+      yield! whenAny "⟳" Features.LiveTesting.TreemapStatus.Running "var(--fg-blue,#3498db)"
+      yield! whenAny "⊘" Features.LiveTesting.TreemapStatus.Skipped "var(--fg-yellow,#f39c12)"
+      yield! whenAny "Quarantined" Features.LiveTesting.TreemapStatus.Quarantined "var(--fg-magenta,#9b59b6)" ]
 
 // ── Test Status Grid (one legible cell per test) ───────────────────
 
@@ -1540,7 +1537,7 @@ let private testStatusCellColor (status: Features.LiveTesting.TreemapStatus) =
   | Features.LiveTesting.TreemapStatus.Failed -> "var(--fg-red,#e74c3c)"
   | Features.LiveTesting.TreemapStatus.Running -> "var(--fg-blue,#3498db)"
   | Features.LiveTesting.TreemapStatus.Skipped -> "var(--fg-yellow,#f39c12)"
-  | Features.LiveTesting.TreemapStatus.Other -> "var(--bg-focus,#2a2a2a)"
+  | Features.LiveTesting.TreemapStatus.Quarantined -> "var(--fg-magenta,#9b59b6)"
 
 /// Human duration for a cell's tooltip. An untimed test (Running/Skipped, which
 /// `TestTreemap.fromStatusEntries` records as `Timeouts.notRun`) reads "not run"
@@ -1579,8 +1576,9 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
       [ yield! grid.Cells |> Array.map (fun c ->
           let bgColor = testStatusCellColor c.Entry.Status
           let durationLabel = testStatusCellDuration c.Entry.DurationMs
-          let title = sprintf "%s — %s" c.Entry.DisplayName durationLabel
+          // The state in words as well as colour: the filter value is that word.
           let statusFilter = treemapStatusToFilterValue c.Entry.Status
+          let title = sprintf "%s — %s, %s" c.Entry.DisplayName statusFilter durationLabel
           let left = float c.Column * cell
           let top = float c.Row * cell
           Elem.div
