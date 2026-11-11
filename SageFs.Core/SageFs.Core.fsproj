@@ -515,6 +515,8 @@
         <Compile Include="AppRunOrchestration.fs" />
         <!-- The one home of the daemon/worker wire paths: HttpWorkerClient and WorkerHttpTransport both name a route by its case. -->
         <Compile Include="WorkerRoute.fs" />
+        <!-- The worker's per-spawn secret: the pure decision, the daemon's registry and the client handler that sends it. -->
+        <Compile Include="WorkerAuth.fs" />
         <Compile Include="HttpWorkerClient.fs" />
         <Compile Include="HostManifest.fs" />
         <Compile Include="HostAdaptation.fs" />

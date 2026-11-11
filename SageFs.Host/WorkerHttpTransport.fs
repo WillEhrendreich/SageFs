@@ -236,11 +236,31 @@ module WorkerHttpTransport =
       do! ctx.Response.WriteAsync(sprintf "Forbidden: %s" (SageFs.Server.HttpOriginGuard.Rejection.describe rejection))
   }
 
+  /// The worker's credential gate: every route but the browser's dev-reload stream needs the secret the daemon gave this
+  /// worker at spawn (`WorkerAuth`). Before it, anything that could reach loopback could POST /eval.
+  let workerCredentialGate (expected: WorkerAuth.Expected) (ctx: HttpContext) (next: Func<Task>) = task {
+    let path = ctx.Request.Path.Value |> Option.ofObj |> Option.defaultValue ""
+    let credential = WorkerAuth.credentialOfRequest { HttpMethod = ctx.Request.Method; Path = path }
+    let authorization =
+      match ctx.Request.Headers.TryGetValue "Authorization" with
+      | true, v when v.Count > 0 -> Some (string v)
+      | _ -> None
+    match WorkerAuth.decide expected credential authorization with
+    | WorkerAuth.Verdict.Admit
+    | WorkerAuth.Verdict.Exempt
+    | WorkerAuth.Verdict.Unsecured -> do! next.Invoke()
+    | WorkerAuth.Verdict.Refuse refusal ->
+      ctx.Response.StatusCode <- WorkerAuth.Refusal.statusCode refusal
+      ctx.Response.Headers["WWW-Authenticate"] <- "Bearer"
+      do! ctx.Response.WriteAsync(WorkerAuth.Refusal.describe refusal)
+  }
+
   /// Start a Kestrel HTTP server dispatching to the given handler.
   /// Pass port=0 for OS-assigned dynamic port.
   /// `beforeListen` runs after the app is built and its routes are mapped, right before Kestrel binds `port`. The worker
   /// frees the port it reserved there, so the time in which another process could take that port is only the bind.
-  let startServerGated
+  let startServerAuthenticated
+    (expected: WorkerAuth.Expected)
     (runHold: TestRunHold)
     (onShutdown: unit -> unit)
     (beforeListen: unit -> unit)
@@ -293,6 +313,9 @@ module WorkerHttpTransport =
       // Origin/CSRF gate for the worker HTTP surface — see workerOriginGuard.
       app.Use(Func<HttpContext, Func<Task>, Task>(fun ctx next ->
         workerOriginGuard ctx next :> Task)) |> ignore
+
+      app.Use(Func<HttpContext, Func<Task>, Task>(fun ctx next ->
+        workerCredentialGate expected ctx next :> Task)) |> ignore
 
       let inline respond' ctx msg = respond handler ctx msg
 
@@ -928,6 +951,10 @@ module WorkerHttpTransport =
       | Some actualUrl -> return new HttpWorkerServer(actualUrl, app)
       | None -> return failwith "Worker server started but reported no addresses"
     }
+
+  /// The worker's own server: the credential is the secret the daemon put in this process's environment, if any.
+  let startServerGated (runHold: TestRunHold) =
+    startServerAuthenticated (WorkerAuth.readExpectedOnce.Force()) runHold
 
   /// A server with no test-run gate: every run is admitted at once. The worker's own host passes its gate to `startServerGated`.
   let startServerWithShutdown

@@ -145,6 +145,8 @@ module WorkerStartup =
           ledger.Record StartStage.WorkerPort (DateTime.UtcNow - started)
           // Before OnReady, so anything that reacts to readiness by making the app write sees its stderr forwarded.
           System.Threading.Volatile.Write(&stderrDestination.contents, StderrDestination.TailAndAppOutput)
+          // Before OnReady, so the first call anything makes to this worker carries its secret.
+          WorkerAuth.Registry.bindUrl workerPid baseUrl
           events.OnReady workerPid baseUrl
           // #82: keep reading past the port line, for a run_app'd app's APP_OUTPUT= / APP_ERROR= lines (to EOF; read
           // errors/EOF swallowed, not a spawn fail). One reader per stream: stdout is read here, stderr by the reader

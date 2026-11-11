@@ -595,6 +595,18 @@ let sessionManagerLifecycleTests =
         | other ->
           failwithf "unexpected eval response: %A" other
 
+        // The worker's port answers only the process that started it: the proxy above carried the worker's secret, and
+        // a caller on loopback without it is refused before anything runs.
+        let! (listed: SageFs.WorkerProtocol.SessionInfo list) =
+          mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.ListSessions reply)
+          |> Async.StartAsTask
+        let workerPort = listed |> List.pick (fun s -> SessionLifecycleStatus.workerPort s.Status)
+        let anonymous = new Net.Http.HttpClient(Timeout = TestTimeouts.httpProbe)
+        let body = new Net.Http.StringContent("""{"code":"1+1;;","replyId":"anon"}""", Text.Encoding.UTF8, "application/json")
+        let! (refused: Net.Http.HttpResponseMessage) = anonymous.PostAsync(sprintf "http://127.0.0.1:%d/eval" workerPort, body)
+        anonymous.Dispose()
+        int refused.StatusCode |> Expect.equal "a caller without the worker's secret is refused" 401
+
         // Get status — should show at least 1 eval
         let! (statusResp: WorkerResponse) =
           proxy (WorkerMessage.GetStatus "s1")

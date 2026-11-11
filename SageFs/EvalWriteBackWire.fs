@@ -127,7 +127,7 @@ module EvalWriteBackWire =
       | _ -> unknown "the worker's answer is not an object"
     with :? JsonException as ex -> unknown ex.Message
 
-  let private client = new HttpClient(Timeout = Timeouts.workerHttpRead)
+  let private client = new HttpClient(WorkerAuth.newHandler (), Timeout = Timeouts.workerHttpRead)
 
   /// A refusal in the words a caller reads: the rule it broke and what to do next, the same
   /// sentences `nudge_value` prints, so one file's writes explain themselves one way.

@@ -469,3 +469,117 @@ let workerHttpGuardMutatingTests =
         disposeServer server
     }
   ]
+
+/// A worker started the way the daemon starts one, with a secret. Counts every message that reaches the handler.
+let private startSecuredServer (secret: WorkerAuth.WorkerSecret) (reached: int ref) : Task<WorkerHttpTransport.HttpWorkerServer> =
+  let handler (msg: WorkerMessage) : Async<WorkerResponse> = async {
+    reached.Value <- reached.Value + 1
+    match msg with
+    | WorkerMessage.EvalCode(code, rid) -> return WorkerResponse.EvalResult(rid, Ok code, [], Map.empty)
+    | _ -> return WorkerResponse.WorkerError (SageFsError.EvalFailed "reached handler")
+  }
+  WorkerHttpTransport.startServerAuthenticated
+    (WorkerAuth.Expected.Required secret) TestRunHold.none (fun () -> ()) ignore
+    handler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty)
+    (fun () -> fun _tc -> async { return Features.LiveTesting.TestResult.NotRun })
+    (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage)
+    0
+
+let private evalWith (server: WorkerHttpTransport.HttpWorkerServer) (authorization: string option) : Task<HttpResponseMessage> =
+  task {
+    use req = new HttpRequestMessage(HttpMethod.Post, server.BaseUrl + "/eval")
+    req.Content <- new StringContent("""{"code":"1+1","replyId":"r1"}""", Encoding.UTF8, "application/json")
+    authorization |> Option.iter (fun value -> req.Headers.TryAddWithoutValidation("Authorization", value) |> ignore)
+    use cts = new Threading.CancellationTokenSource(TestTimeouts.patience)
+    return! httpClient.SendAsync(req, cts.Token)
+  }
+
+/// The worker port ran /eval for anything on loopback: a sandboxed agent with host networking or another user on the
+/// machine could run code as the user without touching the daemon. A worker the daemon starts now needs its secret.
+[<Tests>]
+let workerCredentialTests =
+  testList "Worker credential" [
+    testCase "WHY - the decision refuses a daemon route with no credential, a non-Bearer one and a wrong one, and admits the secret" <| fun _ ->
+      let secret = WorkerAuth.generate ()
+      let decide = WorkerAuth.decide (WorkerAuth.Expected.Required secret) WorkerAuth.RouteCredential.DaemonOnly
+      [ decide None
+        decide (Some ("Basic " + WorkerAuth.textOf secret))
+        decide (Some ("Bearer " + WorkerAuth.textOf (WorkerAuth.generate ())))
+        decide (Some ("Bearer " + WorkerAuth.textOf secret)) ]
+      |> Expect.equal "each answer"
+        [ WorkerAuth.Verdict.Refuse WorkerAuth.Refusal.NoCredential
+          WorkerAuth.Verdict.Refuse WorkerAuth.Refusal.NotBearer
+          WorkerAuth.Verdict.Refuse WorkerAuth.Refusal.WrongSecret
+          WorkerAuth.Verdict.Admit ]
+
+    testCase "WHY - only the dev-reload stream is open without the secret, because the script in the user's app reads it with EventSource and cannot send a header" <| fun _ ->
+      WorkerRoute.all
+      |> List.filter (fun route -> WorkerAuth.credentialOf route = WorkerAuth.RouteCredential.BrowserStream)
+      |> Expect.equal "the one browser route" [ WorkerRoute.DevReloadStream ]
+      WorkerAuth.credentialOfRequest { HttpMethod = "POST"; Path = WorkerRoute.path WorkerRoute.DevReloadStream }
+      |> Expect.equal "a POST to the stream's path is not the stream" WorkerAuth.RouteCredential.DaemonOnly
+
+    testCase "WHY - two secrets differ and each is 43 base64url characters (32 random bytes)" <| fun _ ->
+      let a, b = WorkerAuth.textOf (WorkerAuth.generate ()), WorkerAuth.textOf (WorkerAuth.generate ())
+      a |> Expect.notEqual "a fresh secret per worker" b
+      a.Length |> Expect.equal "32 bytes" 43
+      a |> Seq.forall (fun c -> Char.IsAsciiLetterOrDigit c || c = '-' || c = '_') |> Expect.isTrue "base64url"
+
+    testTask "WHY - a worker started with a secret answers POST /eval with no credential 401 and never runs it" {
+      let reached = ref 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = startSecuredServer (WorkerAuth.generate ()) reached
+      try
+        let! (resp: HttpResponseMessage) = evalWith server None
+        status resp |> Expect.equal "refused" 401
+        let! body = resp.Content.ReadAsStringAsync()
+        body |> Expect.stringContains "the refusal names what the route needs" "Authorization: Bearer"
+        reached.Value |> Expect.equal "nothing reached the handler" 0
+      finally
+        disposeServer server
+    }
+
+    testTask "WHY - a wrong secret is refused the same way" {
+      let reached = ref 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = startSecuredServer (WorkerAuth.generate ()) reached
+      try
+        let! (resp: HttpResponseMessage) = evalWith server (Some ("Bearer " + WorkerAuth.textOf (WorkerAuth.generate ())))
+        status resp |> Expect.equal "refused" 401
+        reached.Value |> Expect.equal "nothing reached the handler" 0
+      finally
+        disposeServer server
+    }
+
+    testTask "WHY - the daemon's own client reaches a secured worker once the worker reported its port, because the registry adds the secret" {
+      let reached = ref 0
+      let secret = WorkerAuth.generate ()
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = startSecuredServer secret reached
+      // A process id no real process has: ids are positive.
+      let fakePid = Int32.MinValue + Random.Shared.Next 1000
+      try
+        WorkerAuth.Registry.rememberProcess fakePid secret
+        WorkerAuth.Registry.bindUrl fakePid server.BaseUrl
+        let! reply = HttpWorkerClient.httpProxy server.BaseUrl (WorkerMessage.EvalCode("1+1", "r1")) |> Async.StartAsTask
+        match reply with
+        | WorkerResponse.EvalResult(_, Ok _, _, _) -> ()
+        | other -> failtestf "the daemon's client was not admitted: %A" other
+        reached.Value |> Expect.equal "the eval ran once" 1
+      finally
+        WorkerAuth.Registry.forget fakePid
+        disposeServer server
+    }
+
+    testTask "WHY - the dev-reload stream still answers a request with no credential" {
+      let reached = ref 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = startSecuredServer (WorkerAuth.generate ()) reached
+      try
+        let req = new HttpRequestMessage(HttpMethod.Get, server.BaseUrl + WorkerRoute.path WorkerRoute.DevReloadStream)
+        let cts = new Threading.CancellationTokenSource(TestTimeouts.patience)
+        let! (resp: HttpResponseMessage) = httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
+        status resp |> Expect.equal "the stream opens" 200
+      finally
+        disposeServer server
+    }
+
+    testCase "WHY - every spawn strips the worker's secret, so the FSI host the user's code runs in never holds it" <| fun _ ->
+      ProcessEnvironment.poisonedVariables |> Expect.contains "every spawn strips it" WorkerAuth.secretEnvVar
+  ]

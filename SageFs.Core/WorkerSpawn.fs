@@ -126,9 +126,14 @@ module WorkerSpawn =
     // The worker is told this daemon's settings snapshot (the third argument, `WorkerCommandLine`): the machine
     // tier and the saved values, so every wait it scales (the FSI host build, the host's start, its own probes)
     // agrees with the daemon's instead of reading the machine again. The environment it inherits is the person's.
+    //
+    // The worker's secret goes in as an override: the poison list strips it from everything else, and the worker takes it
+    // out of its own environment once it has read it (`WorkerAuth`).
+    let secret = WorkerAuth.generate ()
     SageFs.ProcessEnvironment.applyToWithForwarding
       psi
-      (envVars @ SessionOptionsRegistry.workerEnvironmentOf sessionId projects workingDir @ RuntimeCompat.rollForwardEnv runtimeChoice)
+      (envVars @ SessionOptionsRegistry.workerEnvironmentOf sessionId projects workingDir @ RuntimeCompat.rollForwardEnv runtimeChoice
+       @ [ WorkerAuth.secretEnvVar, WorkerAuth.textOf secret ])
 
     let proc = new Process()
     proc.StartInfo <- psi
@@ -141,6 +146,7 @@ module WorkerSpawn =
       Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     | true ->
       let workerPid = proc.Id
+      WorkerAuth.Registry.rememberProcess workerPid secret
       // Record this worker as the owner of its private launch root (when one
       // was materialized) as soon as its pid is known — BEFORE anything else
       // touches the directory. This is what lets a startup or periodic sweep
@@ -150,6 +156,7 @@ module WorkerSpawn =
       // guessing. See HostCoreAdoption.sweepStaleAdoptedRoots.
       hostCleanup |> Option.iter (fun _ -> HostCoreAdoption.markAdoptedRootOwner launchRoot workerPid)
       proc.Exited.Add(fun _ ->
+        WorkerAuth.Registry.forget workerPid
         try
           onExited workerPid proc.ExitCode
         with _ -> ()

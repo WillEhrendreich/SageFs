@@ -101,8 +101,7 @@ module HttpWorkerClient =
 
   /// Create a SessionProxy backed by HTTP to the given base URL.
   let httpProxy (baseUrl: string) : SessionProxy =
-    let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
+    let client = new HttpClient(WorkerAuth.newHandler (), BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
     fun msg ->
       async {
         let method, path, body = toRoute msg
@@ -304,8 +303,7 @@ module HttpWorkerClient =
     Async.AwaitTask task
 
   let private newStreamingClient (baseUrl: string) =
-    let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-    new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
+    new HttpClient(WorkerAuth.newHandler (), BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
 
   /// Deliver one streamed test result; the worker's `{}` keep-alive is skipped. A result line that
   /// cannot be read is reported on stderr with its reason and skipped: its test then never reports,

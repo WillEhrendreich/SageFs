@@ -165,7 +165,9 @@ let environmentIsThePersonsTests =
   testList "Settings snapshot — the environment is not a settings bus" [
 
     testCase "WHY — no product file sets an environment variable of its own process except the two that run another program's code" <| fun _ ->
-      let allowed = [ "SageFs.Core/AspireSetup.fs"; "SageFs.Host/AppRunner.fs" ]
+      // WorkerAuth.fs only removes one: the worker takes its secret out of its own environment once it has read it,
+      // because `run_app` runs the user's app inside the worker process.
+      let allowed = [ "SageFs.Core/AspireSetup.fs"; "SageFs.Host/AppRunner.fs"; "SageFs.Core/WorkerAuth.fs" ]
       let offenders =
         [ for project in [ "SageFs"; "SageFs.Core"; "SageFs.Host" ] do
             for file in Directory.EnumerateFiles(Path.Combine(repoRoot, project), "*.fs", SearchOption.AllDirectories) do

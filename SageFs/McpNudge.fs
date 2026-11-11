@@ -146,7 +146,7 @@ module McpNudge =
   let ownedFilesFromJson (session: string) (workingDirectory: string) (hotReloadJson: string) : Result<OwnedFiles, NudgeRefusal> =
     EvalWriteBackWire.ownedFilesFromJson session workingDirectory hotReloadJson
 
-  let client = new HttpClient(Timeout = Timeouts.workerHttpRead)
+  let client = new HttpClient(WorkerAuth.newHandler (), Timeout = Timeouts.workerHttpRead)
 
   /// The files the session a call resolves to owns: its projects' files, and which of
   /// them hot reload is watching. A `sessionId` wins over the directory, as in every other
