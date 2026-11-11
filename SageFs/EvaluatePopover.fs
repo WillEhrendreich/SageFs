@@ -13,11 +13,12 @@ open Falco.Markup
 open Falco.Datastar
 open SageFs
 open SageFs.Server.DashboardTypes
+open SageFs.Server.DashboardSinks
 
 /// The shortcut that opens the popover from anywhere on the page that is not a text field.
 let [<Literal>] OpenKey = "e"
 
-let private testid (name: string) = Attr.create "data-testid" name
+let private testid (name: string) = Sink.attr "data-testid" (UserText.ofString name)
 
 /// The keydown handler of the textarea. Datastar evaluates it with `this` unbound, so the element is reached through
 /// `event.target`. Alt+Enter evaluates, Ctrl+L clears the output, Tab indents, and Escape dismisses the completion list first
@@ -31,10 +32,10 @@ let private actionButton (cls: string) (id: string) (label: string) (glyph: stri
   Elem.button
     [ Attr.class' cls
       testid id
-      Attr.create "aria-label" label
+      Sink.attr "aria-label" (UserText.ofString label)
       Ds.indicator Signals.ActionLoading
       Ds.attr' ("disabled", "$actionLoading")
-      Ds.onClick (Ds.post post) ]
+      Sink.onClick (Sink.post post) ]
     [ Elem.span [ Ds.show "$actionLoading" ] [ Text.enc (Glyphs.lead Glyph.Busy) ]
       Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw glyph ]
       Text.raw text ]
@@ -45,8 +46,8 @@ let render (keyboardHelp: XmlNode) : XmlNode =
     Elem.summary
       [ Attr.class' "session-btn session-btn-labeled eval-pop-toggle"
         testid "evaluate-toggle"
-        Attr.create "aria-label" (sprintf "Evaluate: open a quick box to check something (key %s)" OpenKey)
-        Attr.create "title" (sprintf "Evaluate (key %s)" OpenKey) ]
+        Sink.attr "aria-label" (UserText.ofString (sprintf "Evaluate: open a quick box to check something (key %s)" OpenKey))
+        Sink.attr "title" (UserText.ofString (sprintf "Evaluate (key %s)" OpenKey)) ]
       // The word is beside the glyph: a lone λ was an unlabelled button to three reviewers who had never seen it.
       [ Text.raw "λ Evaluate" ]
     Elem.div [ Attr.class' "eval-pop-body"; Attr.create "role" "dialog"; Attr.create "aria-labelledby" "eval-pop-title" ] [
@@ -65,7 +66,7 @@ let render (keyboardHelp: XmlNode) : XmlNode =
             Attr.type' "button"
             testid "evaluate-close"
             Attr.create "aria-label" "Close Evaluate"
-            Ds.onEvent ("click", sprintf "document.getElementById('%s').open = false" DomIds.EvaluateSection) ]
+            Sink.onEvent ("click", sprintf "document.getElementById('%s').open = false" DomIds.EvaluateSection) ]
           [ Text.raw "✕" ]
       ]
       Elem.div [ Attr.id DomIds.KeyboardHelpWrapper; Ds.show "$helpVisible" ] [ keyboardHelp ]
@@ -75,8 +76,8 @@ let render (keyboardHelp: XmlNode) : XmlNode =
             Attr.id DomIds.EvalTextarea
             Ds.bind Signals.Code
             Attr.create "placeholder" "Enter F# code... (Alt+Enter to eval, ;; auto-appended)"
-            Ds.onEvent ("keydown", keydownScript)
-            Ds.onEvent ("input.debounce_300ms", sprintf "var t=event.target; var c=t.value[t.selectionStart-1]; $%s = t.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
+            Sink.onEvent ("keydown", keydownScript)
+            Sink.onEvent ("input.debounce_300ms", sprintf "var t=event.target; var c=t.value[t.selectionStart-1]; $%s = t.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
             Attr.create "spellcheck" "false" ]
           []
         Elem.div
@@ -113,7 +114,7 @@ let render (keyboardHelp: XmlNode) : XmlNode =
               [ Attr.type' "file"
                 Attr.accept ".fs,.fsx,.fsi"
                 Attr.style "display: none;"
-                Ds.onEvent ("change", sprintf "var i=event.target; var f=i.files[0]; if(f){var r=new FileReader(); r.onload=function(){var ta=document.getElementById('%s'); ta.value=r.result; ta.dispatchEvent(new Event('input'))}; r.readAsText(f); i.value=''}" DomIds.EvalTextarea) ]
+                Sink.onEvent ("change", sprintf "var i=event.target; var f=i.files[0]; if(f){var r=new FileReader(); r.onload=function(){var ta=document.getElementById('%s'); ta.value=r.result; ta.dispatchEvent(new Event('input'))}; r.readAsText(f); i.value=''}" DomIds.EvalTextarea) ]
             Text.enc (Glyphs.lead Glyph.Folder + "Load File") ]
       ]
       Elem.div [ Attr.id DomIds.EvalResult ] []

@@ -14,6 +14,7 @@ open Falco.Datastar
 open SageFs
 open SageFs.Server.DashboardPanelContext
 open SageFs.Server.DashboardTypes
+open SageFs.Server.DashboardSinks
 
 /// What a panel has to say right now, apart from where it sits. A panel the person closed says nothing, so this is only about the
 /// panels that are placed.
@@ -115,11 +116,11 @@ module PaneLayoutView =
   let relevanceFor (pane: PanelId) (view: PaneLayoutView) : PaneRelevance =
     view.Relevance |> List.tryFind (fun (p, _) -> p = pane) |> Option.map snd |> Option.defaultValue PaneRelevance.OnPage
 
-let testid (name: string) = Attr.create "data-testid" name
+let testid (name: string) = Sink.attr "data-testid" (UserText.ofString name)
 
 /// The request one button posts. The edit rides the query string like the seat route's member does, so the button needs no signal.
 let editPost (edit: BookEdit) : string =
-  Ds.post (sprintf "%s?e=%s" DashboardRoutes.PaneLayoutEdit (Uri.EscapeDataString(BookEdit.token edit)))
+  Sink.post (sprintf "%s?e=%s" DashboardRoutes.PaneLayoutEdit (Uri.EscapeDataString(BookEdit.token edit)))
 
 /// Whether a button can be pressed. One that would change nothing is drawn disabled, which is the truth, and says why in its name.
 [<RequireQualifiedAccess>]
@@ -140,10 +141,10 @@ let menuButton (button: MenuButton) : XmlNode =
        Attr.class' "session-btn session-btn-labeled pane-menu-btn"
        Attr.type' "button"
        testid button.ButtonId
-       Attr.create "aria-label" button.Name
-       Attr.create "title" button.Name ]
+       Sink.attr "aria-label" (UserText.ofString button.Name)
+       Sink.attr "title" (UserText.ofString button.Name) ]
      @ (match button.State with
-        | ButtonState.Offers edit -> [ Ds.onClick (editPost edit) ]
+        | ButtonState.Offers edit -> [ Sink.onClick (editPost edit) ]
         | ButtonState.Unavailable -> [ Attr.create "disabled" "" ]))
     [ Text.enc button.Word ]
 
@@ -208,8 +209,8 @@ let row (view: PaneLayoutView) (pane: PanelId) : XmlNode =
             State = offersWhen true (LayoutEdit.Reopen pane) } ]
   Elem.li
     [ Attr.class' "pane-menu-row"
-      Attr.create "data-pane" (PanelId.token pane)
-      Attr.create "data-place" placeToken ]
+      Sink.attr "data-pane" (UserText.ofString (PanelId.token pane))
+      Sink.attr "data-place" (UserText.ofString placeToken) ]
     [ Elem.span [ Attr.class' "pane-menu-name" ] [ Text.enc label ]
       (match place with
        | PanePlace.InRegion _ -> relevanceNote (PaneLayoutView.relevanceFor pane view)
@@ -217,7 +218,7 @@ let row (view: PaneLayoutView) (pane: PanelId) : XmlNode =
       Elem.span [ Attr.class' "pane-menu-actions" ] buttons ]
 
 let group (view: PaneLayoutView) (group: MenuGroup) : XmlNode =
-  Elem.section [ Attr.class' "pane-menu-group"; Attr.create "aria-labelledby" group.GroupId ] [
+  Elem.section [ Attr.class' "pane-menu-group"; Sink.attr "aria-labelledby" (UserText.ofString group.GroupId) ] [
     Elem.h3 [ Attr.id group.GroupId; Attr.class' "pane-menu-heading" ] [ Text.enc group.Heading ]
     match group.Panes with
     | [] -> Elem.p [ Attr.class' "pane-menu-empty meta" ] [ Text.enc group.EmptyWords ]

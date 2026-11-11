@@ -9,6 +9,7 @@ open Falco.Datastar
 open SageFs
 open SageFs.Features.Tweak.RowFormatting
 open SageFs.Server.DashboardFragments
+open SageFs.Server.DashboardSinks
 
 let [<Literal>] Endpoint = "/dashboard/row-format"
 
@@ -48,7 +49,7 @@ let shownFor (formats: Map<string, FormatChoice>) (row: string) (typeName: strin
 /// value shows the value as it is, with the reason beside it, in words.
 let valueNodes (cssClass: string) (rowFormat: RowFormat) (typeName: string) (preview: string) : XmlNode list =
   let cell (text: string) =
-    Elem.span [ Attr.class' cssClass; Attr.create "title" (attrEnc preview) ] [ textEnc (sprintf "= %s" text) ]
+    Elem.span [ Attr.class' cssClass; Sink.attr "title" (UserText.ofString preview) ] [ textEnc (sprintf "= %s" text) ]
   match format rowFormat typeName preview with
   | Formatted.Text text -> [ cell text ]
   | Formatted.Swatch(text, rgb) ->
@@ -57,7 +58,7 @@ let valueNodes (cssClass: string) (rowFormat: RowFormat) (typeName: string) (pre
         [ Attr.class' "live-swatch"
           testid "live-swatch"
           Attr.create "aria-hidden" "true"
-          Attr.create "style" (sprintf "background-color: %s" (attrEnc rgb)) ]
+          Sink.attr "style" (UserText.ofString (sprintf "background-color: %s" rgb)) ]
         [] ]
   | Formatted.Meter(text, fraction) ->
     let percent = (fraction * 100.0).ToString("0.##", Globalization.CultureInfo.InvariantCulture)
@@ -68,9 +69,9 @@ let valueNodes (cssClass: string) (rowFormat: RowFormat) (typeName: string) (pre
           Attr.create "role" "meter"
           Attr.create "aria-valuemin" "0"
           Attr.create "aria-valuemax" "100"
-          Attr.create "aria-valuenow" percent
-          Attr.create "aria-label" (attrEnc (sprintf "%s on its range" text)) ]
-        [ Elem.span [ Attr.class' "live-meter-fill"; Attr.create "style" (sprintf "width: %s%%" percent) ] [] ] ]
+          Sink.attr "aria-valuenow" (UserText.ofString percent)
+          Sink.attr "aria-label" (UserText.ofString (sprintf "%s on its range" text)) ]
+        [ Elem.span [ Attr.class' "live-meter-fill"; Sink.attr "style" (UserText.ofString (sprintf "width: %s%%" percent)) ] [] ] ]
   | Formatted.CannotShow refusal ->
     [ cell preview
       Elem.span [ Attr.class' "live-fmt-note"; testid "live-fmt-note" ] [ textEnc (FormatRefusal.describe refusal) ] ]
@@ -100,7 +101,7 @@ let picker (row: string) (offeredChoices: FormatChoice list) (current: FormatCho
     [ Attr.class' "session-btn session-btn-labeled live-fmt-btn"
       Attr.type' "button"
       testid "live-fmt-button"
-      Attr.create "aria-label" (attrEnc (sprintf "Show %s as %s instead of %s" label nextWords (FormatChoice.label current)))
+      Sink.attr "aria-label" (UserText.ofString (sprintf "Show %s as %s instead of %s" label nextWords (FormatChoice.label current)))
       Attr.title (attrEnc (sprintf "Shown as %s. Press to show it as %s." (FormatChoice.label current) nextWords))
-      Ds.onClick (Ds.post (sprintf "%s?r=%s&f=%s" Endpoint (Uri.EscapeDataString row) (FormatChoice.token next))) ]
+      Sink.onClick (Sink.post (sprintf "%s?r=%s&f=%s" Endpoint (Uri.EscapeDataString row) (FormatChoice.token next))) ]
     [ Elem.span [ Attr.class' "session-btn-word" ] [ textEnc (sprintf "Show as %s" nextWords) ] ]

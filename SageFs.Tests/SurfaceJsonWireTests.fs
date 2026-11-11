@@ -306,11 +306,11 @@ let fileFormatTests =
     test "WHY: themes.json is an indented object of key to theme, and loads back" {
       let dir = freshDir ()
       let themes = Collections.Concurrent.ConcurrentDictionary<string, string>()
-      themes.["/w/a"] <- "dark"
+      themes.["/w/a"] <- "Dracula"
       saveThemes dir themes
       File.ReadAllText(Path.Combine(dir, "themes.json")) |> lf
-      |> Expect.equal "themes text" "{\n  \"/w/a\": \"dark\"\n}"
-      (loadThemes dir).["/w/a"] |> Expect.equal "loaded" "dark"
+      |> Expect.equal "themes text" "{\n  \"/w/a\": \"Dracula\"\n}"
+      (loadThemes dir).["/w/a"] |> Expect.equal "loaded" "Dracula"
     }
 
     test "WHY: a garbled themes.json loads as no themes and does not throw" {

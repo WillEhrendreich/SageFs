@@ -1017,6 +1017,8 @@
         <Compile Include="EvalWriteBackTests.fs" />
         <!-- Before the browser runner, which lists the journeys this file adds. -->
         <Compile Include="DashboardPanelVisibilityTests.fs" />
+        <!-- After DashboardPanelVisibilityTests (the ledger helpers its cohort cases build frames with). -->
+        <Compile Include="DashboardSinkTests.fs" />
         <Compile Include="DashboardLandingFailureTests.fs" />
         <Compile Include="DashboardNoSessionLinesTests.fs" />
         <Compile Include="DashboardControlNamesTests.fs" />
@@ -1026,6 +1028,7 @@
         <Compile Include="PaneMenuViewTests.fs" />
         <Compile Include="DashboardPaneLayoutBrowserTests.fs" />
         <Compile Include="DashboardNarrowLayoutBrowserTests.fs" />
+        <Compile Include="DashboardSinkBrowserTests.fs" />
         <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="VscodeCommandProofTests.fs" />
         <Compile Include="CoverageTreemapTests.fs" />

@@ -71,7 +71,8 @@ let panelTests =
     testCase "WHY - a member name with a quote in it cannot end the script string in the click handler" <| fun _ ->
       let odd = MemberId.Minted "o'brien\\x"
       let html = render (frameAfter [ join alice; join odd; CohortCommand.Depart(alice, machine) ])
-      html |> Expect.stringContains "the quote is escaped inside the script" "o\\'brien"
+      // The attribute is entity-encoded too, so the script the browser hands Datastar is the decoded value.
+      Net.WebUtility.HtmlDecode html |> Expect.stringContains "the quote is escaped inside the script" "o\\'brien"
   ]
 
 [<Tests>]

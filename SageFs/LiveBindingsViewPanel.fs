@@ -14,6 +14,7 @@ open Falco.Markup
 open Falco.Datastar
 open SageFs
 open SageFs.Server.DashboardFragments
+open SageFs.Server.DashboardSinks
 
 /// Client-side state of the panel, declared once in the page shell with the dock's.
 module ViewSignals =
@@ -30,7 +31,7 @@ module ViewSignals =
       Ds.signal (Action, "")
       Ds.signal (Axis, "")
       Ds.signal (Value, "")
-      Ds.signal (Scope, ViewScope.token ViewScope.ThisApp) ]
+      Sink.signal Scope (UserText.ofString (ViewScope.token ViewScope.ThisApp)) ]
 
 module ViewIds =
   let [<Literal>] Button = "live-view-btn"
@@ -92,17 +93,19 @@ let private slidersIcon : XmlNode =
 
 /// What a click stages before it posts.
 let private click (sessionId: string) (action: ViewAction) (axis: string) (value: string) : string =
-  attrEnc (
-    sprintf "$%s = '%s'; $%s = '%s'; $%s = '%s'; " ViewSignals.Action (ViewAction.token action) ViewSignals.Axis axis ViewSignals.Value value
-    + Ds.post (endpoint sessionId)
-  )
+  sprintf
+    "$%s = %s; $%s = %s; $%s = %s; "
+    ViewSignals.Action (Sink.jsArg (UserText.ofString (ViewAction.token action)))
+    ViewSignals.Axis (Sink.jsArg (UserText.ofString axis))
+    ViewSignals.Value (Sink.jsArg (UserText.ofString value))
+  + Sink.post (endpoint sessionId)
 
 let private choice (sessionId: string) (pressed: bool) (label: string) (action: ViewAction) (axis: string) (value: string) : XmlNode =
   Elem.button
     [ Attr.class' "session-btn session-btn-labeled live-view-opt"
       Attr.type' "button"
-      Attr.create "aria-pressed" (match pressed with | true -> "true" | false -> "false")
-      Ds.onClick (click sessionId action axis value) ]
+      Sink.attr "aria-pressed" (UserText.ofString (match pressed with | true -> "true" | false -> "false"))
+      Sink.onClick (click sessionId action axis value) ]
     [ // The chosen option carries a mark as well as a fill, so the choice never rests on colour alone. The mark is decoration:
       // `aria-pressed` already tells a screen reader which one is chosen.
       match pressed with
@@ -146,7 +149,7 @@ let private presetRow (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTa
 let private axisRow (sessionId: string) (resolved: ResolvedView) (axis: ViewAxis) : XmlNode =
   let current = View.valueOf resolved.View axis
   let source = Map.tryFind axis resolved.Sources |> Option.defaultValue LDefault
-  Elem.div [ Attr.class' "live-view-row"; Attr.create "role" "group"; Attr.create "aria-label" (attrEnc (ViewAxis.label axis)) ] [
+  Elem.div [ Attr.class' "live-view-row"; Attr.create "role" "group"; Sink.attr "aria-label" (UserText.ofString (ViewAxis.label axis)) ] [
     Elem.span [ Attr.class' "live-view-label" ] [ textEnc (ViewAxis.label axis) ]
     yield!
       AxisValue.allFor axis
@@ -165,14 +168,14 @@ let private axisRow (sessionId: string) (resolved: ResolvedView) (axis: ViewAxis
       Elem.button
         [ Attr.class' "session-btn session-btn-labeled live-view-reset"
           Attr.type' "button"
-          Attr.create "aria-label" (attrEnc (sprintf "Put %s back to the recommended view" (ViewAxis.label axis)))
-          Ds.onClick (click sessionId ViewAction.ResetAxis (ViewAxis.token axis) "") ]
+          Sink.attr "aria-label" (UserText.ofString (sprintf "Put %s back to the recommended view" (ViewAxis.label axis)))
+          Sink.onClick (click sessionId ViewAction.ResetAxis (ViewAxis.token axis) "") ]
         [ Text.raw "Reset" ]
   ]
 
 let private scopeRow (sessionId: string) : XmlNode =
   Elem.div [ Attr.class' "live-view-row" ] [
-    Elem.label [ Attr.class' "live-view-label"; Attr.create "for" ViewIds.ScopeSelect ] [ Text.raw "Save choices for" ]
+    Elem.label [ Attr.class' "live-view-label"; Sink.attr "for" (UserText.ofString ViewIds.ScopeSelect) ] [ Text.raw "Save choices for" ]
     Elem.select
       [ Attr.id ViewIds.ScopeSelect
         Attr.class' "live-view-scope"
@@ -181,7 +184,7 @@ let private scopeRow (sessionId: string) : XmlNode =
     Elem.button
       [ Attr.class' "session-btn session-btn-labeled live-view-reset-all"
         Attr.type' "button"
-        Ds.onClick (click sessionId ViewAction.ResetEverything "" "") ]
+        Sink.onClick (click sessionId ViewAction.ResetEverything "" "") ]
       [ Text.raw "Reset to recommended" ]
   ]
 
@@ -199,14 +202,14 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
         Ds.attr' ("aria-expanded", sprintf "$%s ? 'true' : 'false'" ViewSignals.Open)
         Ds.class' ("session-btn-on", sprintf "$%s" ViewSignals.Open)
         Ds.preserveAttr "class aria-expanded"
-        Ds.onClick (sprintf "$%s = !$%s" ViewSignals.Open ViewSignals.Open) ]
+        Sink.onClick (sprintf "$%s = !$%s" ViewSignals.Open ViewSignals.Open) ]
       [ slidersIcon; Elem.span [ Attr.class' "session-btn-word" ] [ textEnc "Display settings" ] ]
   let panelWith (extras: XmlNode list) : XmlNode =
     Elem.div
       [ Attr.id ViewIds.Panel
         Attr.class' "live-view-panel live-hidden"
         Attr.create "role" "group"
-        Attr.create "aria-label" (attrEnc (sprintf "How the live bindings are shown in %s" (ViewWorkflow.label workflow)))
+        Sink.attr "aria-label" (UserText.ofString (sprintf "How the live bindings are shown in %s" (ViewWorkflow.label workflow)))
         Ds.class' ("live-hidden", sprintf "!$%s" ViewSignals.Open)
         Ds.preserveAttr "class" ]
       [ Elem.div [ Attr.class' "live-view-head" ] [
@@ -224,7 +227,7 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
             [ Attr.class' "live-view-close"
               Attr.type' "button"
               Attr.create "aria-label" "Hide the display settings"
-              Ds.onClick (sprintf "$%s = false" ViewSignals.Open) ]
+              Sink.onClick (sprintf "$%s = false" ViewSignals.Open) ]
             // "Close" ends a session on the Sessions card, so this one says what it does to the panel.
             [ Text.raw "✕ Done" ] ]
         // One preset that is already chosen is not a choice, so the row appears only when there is something to pick.

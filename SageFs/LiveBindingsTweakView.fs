@@ -22,6 +22,7 @@ open SageFs.Features.Tweak.Nudge
 open SageFs.Features.Tweak.BindingTweak
 open SageFs.Features.Tweak.BindingTweakRows
 open SageFs.Server.DashboardFragments
+open SageFs.Server.DashboardSinks
 
 // ── the page's signals ──
 
@@ -572,23 +573,14 @@ let describeReload (reload: RowReload) : ReloadLine =
 
 /// The inside of a single-quoted JS string literal for text that came from a file or a person. A newline, a quote, a backslash and
 /// the two line separators JS treats as line ends are all escaped, so the literal is always one line and always the same text.
-let jsInner (text: string) : string =
-  text
-    .Replace("\\", "\\\\")
-    .Replace("'", "\\'")
-    .Replace("\n", "\\n")
-    .Replace("\r", "\\r")
-    .Replace("\t", "\\t")
-    .Replace(string (char 0x2028), "\\u2028")
-    .Replace(string (char 0x2029), "\\u2029")
+let jsInner (text: string) : string = Encode.jsInner text
 
 /// A single-quoted JS string literal for that text.
-let jsText (text: string) : string = "'" + jsInner text + "'"
+let jsText (text: string) : string = Encode.jsString text
 
-/// A signal's initial value from text that came from a file or a person. Falco's `Ds.signal` writes a string as `'value'` and
-/// escapes nothing, so a quote in the text would end the attribute (and a `'` the string): the text goes in as the inside of a JS
-/// literal, escaped once for the script and once for the attribute.
-let signalFromText (name: string) (text: string) : XmlAttribute = Ds.signal (name, attrEnc (jsInner text))
+/// A signal's initial value from text that came from a file or a person: `Sink.signal`, escaped once for the script and once
+/// for the attribute.
+let signalFromText (name: string) (text: string) : XmlAttribute = Sink.signal name (UserText.ofString text)
 
 // ── the controls ──
 
@@ -615,14 +607,14 @@ let stagePostTo (endpoint: string) (key: RowKey) (place: SourceRef) (staged: Sta
     TweakSignals.SeenText (jsText place.Text)
     TweakSignals.Verb (jsText staged.Verb)
     TweakSignals.Value staged.ValueJs
-    (Ds.post endpoint)
+    (Sink.post endpoint)
 
 /// The script for the knob's own route.
 let stagePostJs : RowKey -> SourceRef -> Staged -> string = stagePostTo TweakSignals.Endpoint
 
-/// The same, as an attribute value: the script is escaped once, here.
+/// The same, for a handler: the `Sink` it goes through escapes it for the attribute.
 let stageAndPost (key: RowKey) (place: SourceRef) (staged: Staged) : string =
-  attrEnc (stagePostJs key place staged)
+  stagePostJs key place staged
 
 /// One write per settle: the handler runs once, a moment after the last change event, not on every one. Datastar's own modifier
 /// (`data-on:change__debounce.300ms`), written by the typed helper. The pause is the one the as-you-type typecheck waits after
@@ -655,11 +647,11 @@ let stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) 
     [ Attr.class' "session-btn live-step"
       Attr.type' "button"
       testid testName
-      Attr.create "aria-label" (attrEnc label)
+      Sink.attr "aria-label" (UserText.ofString label)
       Attr.title (attrEnc label)
       Ds.attr' ("disabled", sprintf "$%s || %s" (TweakSignals.busyOf key) atTheEnd)
-      Ds.onClick (
-        attrEnc (
+      Sink.onClick (
+        (
           sprintf
             "$%s = Math.max(%d, Math.min(%d, Number($%s || 0) + (%d))); document.getElementById(%s).value = %s; document.getElementById(%s).dispatchEvent(new Event('change'))"
             steps (-below) above steps delta
@@ -717,9 +709,9 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
     | _, Run.Ends _ -> "true"
   Elem.span
     [ Attr.class' "live-knob"
-      Attr.create "data-ranged" ranged
+      Sink.attr "data-ranged" (UserText.ofString ranged)
       Attr.create "role" "group"
-      Attr.create "aria-label" (attrEnc (sprintf "Change %s" label))
+      Sink.attr "aria-label" (UserText.ofString (sprintf "Change %s" label))
       Ds.signal (steps, 0) ]
     [ stepButton key "−" (sprintf "Step %s down by %s" label size) "tweak-step-down" reach StepDirection.Down landing
       Elem.span [ Attr.class' "live-slider-wrap" ] [
@@ -727,20 +719,20 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
           [ Attr.id (TweakSignals.sliderId key)
             Attr.class' "live-slider"
             Attr.type' "range"
-            Attr.create "min" (string (-below))
-            Attr.create "max" (string above)
+            Sink.attr "min" (UserText.ofString (string (-below)))
+            Sink.attr "max" (UserText.ofString (string above))
             Attr.create "step" "1"
             testid "tweak-slider"
             Attr.title (attrEnc (sprintf "Drag to change %s by steps of %s. The two ends are the lowest and highest it can take." label size))
-            Attr.create "aria-label" (attrEnc (sprintf "Drag to change %s. Arrow keys step it by %s. It is written when you let go." label size))
-            Attr.create "aria-valuetext" (attrEnc (sprintf "%s steps from %s" label current))
+            Sink.attr "aria-label" (UserText.ofString (sprintf "Drag to change %s. Arrow keys step it by %s. It is written when you let go." label size))
+            Sink.attr "aria-valuetext" (UserText.ofString (sprintf "%s steps from %s" label current))
             Ds.bind steps
             Ds.indicator (TweakSignals.busyOf key)
             Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
             // While the handle moves the box reads where it would land: set here, from the handle's own value, so no reactive effect
             // is involved (an effect that wrote the box overflowed the stack in the browser).
-            Ds.onEvent ("input", attrEnc (sprintf "$%s = Number(event.target.value); document.getElementById(%s).value = %s" steps (jsText (TweakSignals.readoutId key)) landing))
-            Ds.onEvent ("change", stageAndPost key place { Verb = "steps"; ValueJs = sprintf "String(Number($%s || 0))" steps }, settled) ]
+            Sink.onEvent ("input", (sprintf "$%s = Number(event.target.value); document.getElementById(%s).value = %s" steps (jsText (TweakSignals.readoutId key)) landing))
+            Sink.onEventWith ("change", stageAndPost key place { Verb = "steps"; ValueJs = sprintf "String(Number($%s || 0))" steps }, settled) ]
         // Under the track: the lowest, the step and the highest. It is also the button that opens the range editor.
         editor ]
       // The value is a box: type a number and press Enter to write it, Escape to put back what the file holds. The step buttons and the
@@ -756,12 +748,12 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
           Attr.value (attrEnc current)
           Attr.title "The value in the file. Type a number and press Enter to write it."
           testid "tweak-readout"
-          Attr.create "aria-label" (attrEnc (sprintf "%s value. Type a number and press Enter to write it to the file, Escape puts back what the file holds." label))
+          Sink.attr "aria-label" (UserText.ofString (sprintf "%s value. Type a number and press Enter to write it to the file, Escape puts back what the file holds." label))
           Ds.indicator (TweakSignals.busyOf key)
           Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-          Ds.onEvent (
+          Sink.onEvent (
             "keydown",
-            attrEnc (
+            (
               sprintf
                 "if (event.key === 'Enter') { event.preventDefault(); %s } else if (event.key === 'Escape') { event.target.value = %s; $%s = 0; event.target.blur() }"
                 (stagePostJs key place { Verb = "set"; ValueJs = "event.target.value" })
@@ -778,14 +770,12 @@ let limitsEditor (key: RowKey) (limits: NumberLimits) (reach: Reach) : XmlNode =
   let step = TweakSignals.limStepOf key
   let note = TweakSignals.limNoteOf key
   let stage (lowJs: string) (highJs: string) (stepJs: string) : string =
-    attrEnc (
-      sprintf "$%s = %s; $%s = %s; $%s = %s; $%s = %s; %s"
-        TweakSignals.Row (jsText (RowKey.text key))
-        TweakSignals.LimLow lowJs
-        TweakSignals.LimHigh highJs
-        TweakSignals.LimStep stepJs
-        (Ds.post TweakSignals.LimitsEndpoint)
-    )
+    sprintf "$%s = %s; $%s = %s; $%s = %s; $%s = %s; %s"
+      TweakSignals.Row (jsText (RowKey.text key))
+      TweakSignals.LimLow lowJs
+      TweakSignals.LimHigh highJs
+      TweakSignals.LimStep stepJs
+      (Sink.post TweakSignals.LimitsEndpoint)
   // The button says only "range": the handle's ends already show the numbers, and a button wide enough to repeat them squeezed the
   // slider. A chosen range fills it, so a row with one reads differently from one without.
   let chosen = match NumberLimits.isUnlimited limits with | true -> "false" | false -> "true"
@@ -798,14 +788,14 @@ let limitsEditor (key: RowKey) (limits: NumberLimits) (reach: Reach) : XmlNode =
           Attr.create "inputmode" "decimal"
           Attr.create "autocomplete" "off"
           Attr.create "spellcheck" "false"
-          Attr.create "placeholder" (attrEnc placeholder)
+          Sink.attr "placeholder" (UserText.ofString placeholder)
           testid testName
           Ds.bind signal ] ]
   Elem.details
     [ Attr.id (TweakSignals.limitsId key)
       Attr.class' "live-limits"
       Attr.create "data-preserve-attr" "open"
-      Attr.create "data-chosen" chosen
+      Sink.attr "data-chosen" (UserText.ofString chosen)
       testid "tweak-limits"
       signalFromText low (NumberLimits.edgeText limits.Lowest)
       signalFromText high (NumberLimits.edgeText limits.Highest)
@@ -824,13 +814,13 @@ let limitsEditor (key: RowKey) (limits: NumberLimits) (reach: Reach) : XmlNode =
             [ Attr.class' "session-btn session-btn-labeled live-limits-save"
               Attr.type' "button"
               testid "tweak-limits-save"
-              Ds.onClick (stage (sprintf "$%s" low) (sprintf "$%s" high) (sprintf "$%s" step)) ]
+              Sink.onClick (stage (sprintf "$%s" low) (sprintf "$%s" high) (sprintf "$%s" step)) ]
             [ Text.raw "Save" ]
           Elem.button
             [ Attr.class' "session-btn session-btn-labeled live-limits-clear"
               Attr.type' "button"
               testid "tweak-limits-clear"
-              Ds.onClick (sprintf "$%s = ''; $%s = ''; $%s = ''; %s" low high step (stage "''" "''" "''")) ]
+              Sink.onClick (sprintf "$%s = ''; $%s = ''; $%s = ''; %s" low high step (stage "''" "''" "''")) ]
             [ Text.raw "Clear" ] ]
         Elem.span [ Attr.class' "live-limits-note"; testid "tweak-limits-note"; Ds.text (sprintf "$%s" note) ] []
         Elem.span [ Attr.class' "live-limits-hint" ] [
@@ -848,20 +838,20 @@ let switchWord (value: bool) : string =
 let toggle (key: RowKey) (place: SourceRef) (value: bool) (label: string) : XmlNode =
   let signal = TweakSignals.fieldOf key
   let wordExpr = sprintf "$%s ? 'true' : 'false'" signal
-  Elem.label [ Attr.class' "live-knob live-switch"; Ds.signal (signal, value) ] [
+  Elem.label [ Attr.class' "live-knob live-switch"; Sink.signalFlag signal value ] [
     Elem.input
       ([ Attr.id (TweakSignals.sliderId key)
          Attr.class' "live-toggle"
          Attr.type' "checkbox"
          Attr.create "role" "switch"
-         Attr.create "aria-checked" (switchWord value)
+         Sink.attr "aria-checked" (UserText.ofString (switchWord value))
          Ds.attr' ("aria-checked", wordExpr)
          testid "tweak-toggle"
-         Attr.create "aria-label" (attrEnc (sprintf "Switch %s" label))
+         Sink.attr "aria-label" (UserText.ofString (sprintf "Switch %s" label))
          Ds.bind signal
          Ds.indicator (TweakSignals.busyOf key)
          Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-         Ds.onEvent ("change", stageAndPost key place { Verb = "set"; ValueJs = "event.target.checked ? 'true' : 'false'" }) ]
+         Sink.onEvent ("change", stageAndPost key place { Verb = "set"; ValueJs = "event.target.checked ? 'true' : 'false'" }) ]
        @ (match value with
           | true -> [ Attr.create "checked" "" ]
           | false -> []))
@@ -881,14 +871,14 @@ let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testN
         Attr.create "spellcheck" "false"
         Attr.create "autocomplete" "off"
         testid testName
-        Attr.create "aria-label" (attrEnc (sprintf "%s. Enter saves it to the file, Escape puts back what the file holds." label))
+        Sink.attr "aria-label" (UserText.ofString (sprintf "%s. Enter saves it to the file, Escape puts back what the file holds." label))
         signalFromText signal value
         Ds.bind signal
         Ds.indicator (TweakSignals.busyOf key)
         Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-        Ds.onEvent (
+        Sink.onEvent (
           "keydown",
-          attrEnc (
+          (
             sprintf
               "if (event.key === 'Enter') { event.preventDefault(); %s } else if (event.key === 'Escape') { $%s = %s; event.target.blur() }"
               (stagePostJs key place { Verb = verb; ValueJs = sprintf "$%s" signal })
@@ -900,7 +890,7 @@ let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testN
         Attr.class' "live-field-hint"
         Attr.style "display:none"
         Ds.preserveAttr "style"
-        Ds.show (attrEnc (sprintf "$%s !== %s" signal (jsText value))) ]
+        Sink.show ((sprintf "$%s !== %s" signal (jsText value))) ]
       [ Text.raw "Enter saves to the file, Escape cancels" ]
   ]
 
@@ -931,11 +921,11 @@ let historyButton (key: RowKey) (place: SourceRef) (glyph: string) (verb: string
   | HistoryStep.StepAvailable ->
     Elem.button
       (common
-       @ [ Attr.create "aria-label" (attrEnc (sprintf "%s the last write to this value" (historyWord verb)))
+       @ [ Sink.attr "aria-label" (UserText.ofString (sprintf "%s the last write to this value" (historyWord verb)))
            Attr.title (attrEnc (sprintf "%s the last write to this value" (historyWord verb)))
            Ds.indicator (TweakSignals.busyOf key)
            Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-           Ds.onClick (stageAndPost key place { Verb = verb; ValueJs = "''" }) ])
+           Sink.onClick (stageAndPost key place { Verb = verb; ValueJs = "''" }) ])
       content
   | HistoryStep.OtherRowFirst _
   | HistoryStep.NothingToStep ->
@@ -1009,11 +999,11 @@ let applyNodes (key: RowKey) (view: RowView) : XmlNode list =
         [ Attr.class' "session-btn session-btn-labeled live-history live-apply"
           Attr.type' "button"
           testid "tweak-apply"
-          Attr.create "aria-label" (attrEnc (sprintf "%s: evaluates %s in the session" ApplyToSession.words code))
+          Sink.attr "aria-label" (UserText.ofString (sprintf "%s: evaluates %s in the session" ApplyToSession.words code))
           Attr.title (attrEnc (sprintf "Evaluates %s in the running session. The file is not changed." code))
           Ds.indicator (TweakSignals.busyOf key)
           Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-          Ds.onClick (attrEnc (stagePostTo ApplyToSession.Endpoint key place { Verb = "apply"; ValueJs = "''" })) ]
+          Sink.onClick ((stagePostTo ApplyToSession.Endpoint key place { Verb = "apply"; ValueJs = "''" })) ]
         [ Text.raw "▶"; Elem.span [ Attr.class' "session-btn-label" ] [ textEnc ApplyToSession.words ] ] ]
   | PlaceOf.Placed _, ApplyOffer.NotOffered
   | PlaceOf.NotPlaced, _ -> []
@@ -1105,7 +1095,7 @@ let private wordButton (testName: string) (title: string) (key: RowKey) (word: s
       Attr.title (attrEnc title)
       Ds.indicator (TweakSignals.busyOf key)
       Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-      Ds.onClick (attrEnc onClick) ]
+      Sink.onClick (onClick) ]
     [ Elem.span [ Attr.class' "session-btn-label" ] [ textEnc word ] ]
 
 /// The button that tries the typed value in the session, where the row offers it. It changes nothing in the file.
@@ -1147,7 +1137,7 @@ let savingNodes (key: RowKey) (view: RowView) : XmlNode list =
             testid "tweak-adopt-confirm"
             Attr.style "display:none"
             Ds.preserveAttr "style"
-            Ds.show (attrEnc waiting) ]
+            Sink.show (waiting) ]
           [ Elem.span [ testid "tweak-adopt-sentence" ] [ textEnc (adoptConfirmation key live evolvedPlace view.Through) ]
             wordButton
               "tweak-adopt-yes"
@@ -1175,7 +1165,7 @@ let changesStrip (changes: ChangesStrip.Changes) : XmlNode list =
           Attr.type' "button"
           testid testName
           Attr.title (attrEnc title)
-          Ds.onClick (attrEnc (sprintf "$%s = %s; %s" TweakSignals.Batch (jsText json) (Ds.post TweakSignals.BatchEndpoint))) ]
+          Sink.onClick ((sprintf "$%s = %s; %s" TweakSignals.Batch (jsText json) (Sink.post TweakSignals.BatchEndpoint))) ]
         [ Elem.span [ Attr.class' "session-btn-label" ] [ textEnc word ] ]
     let tweakLines =
       ChangesStrip.Changes.byFile changes.Tweaks
@@ -1243,7 +1233,7 @@ let evaluateLink : XmlNode =
       Attr.type' "button"
       testid "tweak-evaluate-link"
       Attr.title "No file holds this value, so it changes only when you evaluate new code in this session. This opens the Evaluate box."
-      Ds.onClick (attrEnc "event.preventDefault(); event.stopPropagation(); var d = document.getElementById('evaluate-section'); if (d) { d.open = true; var t = d.querySelector('textarea'); if (t) { t.focus() } }") ]
+      Sink.onClick ("event.preventDefault(); event.stopPropagation(); var d = document.getElementById('evaluate-section'); if (d) { d.open = true; var t = d.querySelector('textarea'); if (t) { t.focus() } }") ]
     [ Text.raw "λ Edit in Evaluate" ]
 
 /// What a row that was written to a file nothing is watching says. Only a row that was written says it: said under every row of the
@@ -1390,8 +1380,8 @@ let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placeme
     [ Attr.id (TweakSignals.stripId key)
       Attr.class' (match shown with StripShown.Strip -> "live-tweak" | StripShown.Marker -> "live-tweak live-tweak-marker")
       testid "tweak-row"
-      Attr.create "data-state" (PersistenceState.token view.State)
-      Attr.create "data-row" (attrEnc (RowKey.text key)) ]
+      Sink.attr "data-state" (UserText.ofString (PersistenceState.token view.State))
+      Sink.attr "data-row" (UserText.ofString (RowKey.text key)) ]
     (match shown with
      // A marker row has no strip, but its Source cell says "n/a" when no file holds the value, so the column has an answer in every row.
      | StripShown.Marker ->
@@ -1404,7 +1394,7 @@ let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placeme
              [ Attr.class' (sprintf "live-state %s" (Tone.cssClass described.Tone))
                testid "tweak-state"
                // The label as data, so the stylesheet can give "has parts" and "formula" marks of their own.
-               Attr.create "data-label" (attrEnc described.Label)
+               Sink.attr "data-label" (UserText.ofString described.Label)
                Attr.title (attrEnc (badgeTitle view.State)) ]
              [ textEnc described.Label ]
          yield! whereChip

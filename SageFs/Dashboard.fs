@@ -52,6 +52,7 @@ open SageFs.Server.DashboardFragments
 open SageFs.Server.DashboardRequests
 open SageFs.Server.CohortInspector
 open SageFs.Features.FrictionSqlite
+open SageFs.Server.DashboardSinks
 
 module FalcoResponse = Falco.Response
 
@@ -380,7 +381,7 @@ let renderShellOf (shell: ShellInputs) =
     // (measured: rootDiv read 198px while the dock still resolved min(30vh, 18rem)). Body is the
     // common ancestor of both.
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true"; Ds.attr' ("style", sprintf "'--dock-max-height:' + $%s" Signals.DockHeight) ] [
-      Elem.div [ Ds.onInit (DashboardConnection.streamGet (sprintf "/dashboard/stream/%s" clientId)); Ds.onInit (sprintf "try{var v=localStorage.getItem('sagefs.dockHeight');if(v)$%s=v}catch(e){}" Signals.DockHeight); Ds.signal (Signals.DockHeight, Signals.DockHeightDefault); Ds.signal (Signals.DockResizing, false); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (NewSessionDialog.NewSessionNames.TargetSignal, NewSessionDialog.TargetKind.key NewSessionDialog.TargetKind.LoadProjects); Ds.signal (NewSessionDialog.NewSessionNames.ProjectsSignal, Array.empty<string>); Ds.signal (NewSessionDialog.NewSessionNames.WorkflowSignal, NewSessionDialog.WorkflowChoice.key NewSessionDialog.WorkflowChoice.defaultChoice);Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.HygienePanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
+      Elem.div [ Ds.onInit (DashboardConnection.streamGet (sprintf "/dashboard/stream/%s" (Uri.EscapeDataString clientId))); Ds.onInit (sprintf "try{var v=localStorage.getItem('sagefs.dockHeight');if(v)$%s=v}catch(e){}" Signals.DockHeight); Sink.signal Signals.DockHeight (UserText.ofString Signals.DockHeightDefault); Ds.signal (Signals.DockResizing, false); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Sink.signal Signals.ViewingSessionId (UserText.ofString initialSessionId); Sink.signal Signals.ClientId (UserText.ofString clientId); Ds.signal (Signals.Code, ""); Sink.signal Signals.NewSessionDir (UserText.ofString defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Sink.signal NewSessionDialog.NewSessionNames.TargetSignal (UserText.ofString (NewSessionDialog.TargetKind.key NewSessionDialog.TargetKind.LoadProjects)); Ds.signal (NewSessionDialog.NewSessionNames.ProjectsSignal, Array.empty<string>); Sink.signal NewSessionDialog.NewSessionNames.WorkflowSignal (UserText.ofString (NewSessionDialog.WorkflowChoice.key NewSessionDialog.WorkflowChoice.defaultChoice));Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.HygienePanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
                 // Chat-style output following (see `OutputFollow`). The browser's
                 // own state lives here, outside #main, so no morph resets it;
                 // the server's feed signals are seeded here too and then
@@ -617,7 +618,7 @@ module ActionResult =
     Elem.div
       [ Attr.class' CssClass
         Attr.style placement
-        Attr.create "role" role
+        Sink.attr "role" (UserText.ofString role)
         testid "action-result"
         Ds.onInit replacePrevious ]
       [ Elem.pre
@@ -629,7 +630,7 @@ module ActionResult =
             Attr.style "width:auto;padding:0 6px;"
             Attr.create "aria-label" "Dismiss this message"
             Attr.create "title" "Dismiss"
-            Ds.onClick dismiss ]
+            Sink.onClick dismiss ]
           [ Text.raw "×" ] ]
 
   /// Say how an action went, in a place the viewer can see.
@@ -3963,7 +3964,7 @@ let createEndpoints
         // (see renderThemePicker). We also read it from the signals JSON as
         // a fallback for legacy clients that only had data-bind.
         use! doc = readSignalsJsonSized ctx
-        let theme =
+        let requested =
           match ctx.Request.Query.ContainsKey "theme" with
           | true -> ctx.Request.Query.["theme"].ToString()
           | false ->
@@ -3988,21 +3989,23 @@ let createEndpoints
             | Error _ -> ""
           | true -> ""
         let workingDir = canonicalizeThemeKey rawDir
-        Log.info "[set-theme] theme=%s viewingId=%s rawDir=%s key=%s" theme viewingId rawDir workingDir
-        match workingDir.Length > 0 && theme.Length > 0 with
-        | true ->
-          infra.SessionThemes.[workingDir] <- theme
-          saveThemes DaemonState.SageFsDir infra.SessionThemes
-        | false -> ()
-        // Respond with SSE morph — Datastar @post expects SSE, not JSON.
-        // Push updated theme vars so the page re-styles immediately.
-        Response.sseStartResponse ctx |> ignore
-        do! ssePatchNode ctx (renderThemeVars theme)
-        do! ssePatchNode ctx (renderThemePicker theme)
-        // Patch the theme signal so Datastar's data-bind-theme matches the
-        // server-rendered <option selected>, preventing the binding from
-        // immediately re-overriding the picker with a stale client value.
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.Theme) theme
+        match ThemePresets.known requested with
+        | Error unknown ->
+          ctx.Response.StatusCode <- 400
+          do! ctx.Response.WriteAsJsonAsync({| error = ThemePresets.describeUnknown unknown |})
+        | Ok theme ->
+          Log.info "[set-theme] theme=%s viewingId=%s rawDir=%s key=%s" theme viewingId rawDir workingDir
+          match workingDir.Length > 0 with
+          | true ->
+            infra.SessionThemes.[workingDir] <- theme
+            saveThemes DaemonState.SageFsDir infra.SessionThemes
+          | false -> ()
+          // Respond with an SSE morph (Datastar @post expects SSE) so the page re-styles immediately.
+          Response.sseStartResponse ctx |> ignore
+          do! ssePatchNode ctx (renderThemeVars theme)
+          do! ssePatchNode ctx (renderThemePicker theme)
+          // The theme signal follows, so data-bind does not put a stale client value back over <option selected>.
+          do! Response.ssePatchSignal ctx (SignalPath.sp Signals.Theme) theme
       with
       | :? RequestTooLargeException -> ()
       | ex ->

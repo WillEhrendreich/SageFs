@@ -29,6 +29,7 @@ open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 open SageFs.Server.DockPanes
 open SageFs.Server.LiveBindingsTweakView
+open SageFs.Server.DashboardSinks
 
 /// Client-side state of the dock. All three are plain signals declared once in the page shell.
 module DockSignals =
@@ -48,7 +49,7 @@ module DockSignals =
   /// The initial value of every signal above, for the page shell.
   let initial : XmlAttribute list =
     [ Ds.signal (LiveFilter, "")
-      Ds.signal (LiveTab, WatchTab.token WatchTab.All)
+      Sink.signal LiveTab (UserText.ofString (WatchTab.token WatchTab.All))
       Ds.signal (LivePins, ",")
       Ds.signal (LivePanePinned, false)
       Ds.signal (LivePaneCollapsed, false) ]
@@ -385,7 +386,7 @@ let private panePinButton (id: string) : XmlNode =
       Ds.attr' ("aria-pressed", sprintf "$%s ? 'true' : 'false'" DockSignals.LivePanePinned)
       Ds.class' ("session-btn-on", sprintf "$%s" DockSignals.LivePanePinned)
       Ds.preserveAttr "class aria-pressed"
-      Ds.onClick (sprintf "$%s = !$%s" DockSignals.LivePanePinned DockSignals.LivePanePinned) ]
+      Sink.onClick (sprintf "$%s = !$%s" DockSignals.LivePanePinned DockSignals.LivePanePinned) ]
     // The word is in the markup (it was drawn by CSS `::before`, which no one can select, search or translate).
     [ pinIcon; Elem.span [ Attr.class' "session-btn-word" ] [ Text.raw "Keep open" ] ]
 
@@ -405,11 +406,11 @@ let private collapseButton () : XmlNode =
       Attr.create "aria-expanded" "true"
       Ds.attr' ("aria-expanded", sprintf "!$%s ? 'true' : 'false'" DockSignals.LivePaneCollapsed)
       Ds.preserveAttr "aria-expanded"
-      Ds.onClick (sprintf "$%s = !$%s" DockSignals.LivePaneCollapsed DockSignals.LivePaneCollapsed) ]
+      Sink.onClick (sprintf "$%s = !$%s" DockSignals.LivePaneCollapsed DockSignals.LivePaneCollapsed) ]
     // The word says what a click does now: "Hide panel" while it is open and "Show panel" once it is folded. It read "Hide panel"
     // in both states.
-    [ Elem.span [ Ds.show (sprintf "!$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▼" ]
-      Elem.span [ Ds.show (sprintf "$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▲" ]
+    [ Elem.span [ Sink.show (sprintf "!$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▼" ]
+      Elem.span [ Sink.show (sprintf "$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▲" ]
       Elem.span [ Attr.class' "session-btn-word"; Ds.text (sprintf "$%s ? 'Show panel' : 'Hide panel'" DockSignals.LivePaneCollapsed) ] [ Text.raw "Hide panel" ] ]
 
 /// Where a pane's visibility follows the pin: the extra class it is drawn with, and the attributes that keep it in step with the
@@ -483,9 +484,9 @@ let private treeElement (look: View) (children: XmlNode list) : XmlNode =
   Elem.div
     [ Attr.id DockIds.Tree
       Attr.class' "live-tree"
-      Attr.create "data-values" (AxisValue.token (AxisValue.ValueMode look.Values))
-      Attr.create "data-row" (AxisValue.token (AxisValue.RowHeight look.Row))
-      Attr.create "data-cols" (ViewColumns.requestedToken look.Layout)
+      Sink.attr "data-values" (UserText.ofString (AxisValue.token (AxisValue.ValueMode look.Values)))
+      Sink.attr "data-row" (UserText.ofString (AxisValue.token (AxisValue.RowHeight look.Row)))
+      Sink.attr "data-cols" (UserText.ofString (ViewColumns.requestedToken look.Layout))
       Ds.class' ("live-hidden", sprintf "$%s" DockSignals.LivePaneCollapsed)
       Ds.preserveAttr "class" ]
     children
@@ -528,14 +529,14 @@ let modeRows (sessionId: string) (current: ValueWalk) : XmlNode list =
     Elem.button
       [ Attr.class' "session-btn session-btn-labeled live-view-opt live-mode-btn"
         Attr.type' "button"
-        Attr.create "aria-pressed" pressed
+        Sink.attr "aria-pressed" (UserText.ofString pressed)
         Attr.title (attrEnc (ValueWalk.consequence choice))
-        Attr.create "aria-label" (attrEnc (sprintf "Walk live values in %s mode. %s" name (ValueWalk.consequence choice)))
+        Sink.attr "aria-label" (UserText.ofString (sprintf "Walk live values in %s mode. %s" name (ValueWalk.consequence choice)))
         Ds.indicator walkModeLoading
         Ds.attr' ("disabled", sprintf "$%s" walkModeLoading)
-        Ds.onClick (attrEnc (sprintf "$mode = %s; " (ValueWalk.name choice |> jsStringLiteral) + Ds.post modeEndpoint)) ]
+        Sink.onClick ((sprintf "$mode = %s; " (ValueWalk.name choice |> jsStringLiteral) + Sink.post modeEndpoint)) ]
       [ textEnc label ]
-  [ Elem.div [ Attr.class' "live-view-row live-mode"; Attr.create "role" "group"; Attr.create "aria-labelledby" DockIds.ModeLabel ] [
+  [ Elem.div [ Attr.class' "live-view-row live-mode"; Attr.create "role" "group"; Sink.attr "aria-labelledby" (UserText.ofString DockIds.ModeLabel) ] [
       Elem.span [ Attr.id DockIds.ModeLabel; Attr.class' "live-view-label live-mode-label"; testid "live-mode-label" ] [
         textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ModeGoverns) ]
       yield! ValueWalk.all |> List.map modeButton ]
@@ -564,15 +565,15 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
   // The click's payload is staged in the signals the daemon route reads (`$binding`, `$path`), then posted.
   let evaluateClick (binding: string) (path: string list) =
     let stagedPath = path |> List.map jsStringLiteral |> String.concat ", "
-    attrEnc (sprintf "$binding = %s; $path = [%s]; " (jsStringLiteral binding) stagedPath + Ds.post evaluateEndpoint)
+    sprintf "$binding = %s; $path = [%s]; " (jsStringLiteral binding) stagedPath + Sink.post evaluateEndpoint
   let nameCell (node: LiveValueTree.LiveValueNode) = Elem.code [ Attr.class' "live-name" ] [ textEnc node.Label ]
   let glyphCell (node: LiveValueTree.LiveValueNode) =
     let word = kindLabel node.Kind
     Elem.span
       [ Attr.class' "live-glyph"
-        Attr.create "title" word
+        Sink.attr "title" (UserText.ofString word)
         Attr.create "role" "img"
-        Attr.create "aria-label" word ]
+        Sink.attr "aria-label" (UserText.ofString word) ]
       [ textEnc (kindGlyph node.Kind node.TypeName) ]
   // The Type column is a view axis: off, the cell is not drawn at all (and is not a hidden node a screen reader would still read).
   let typeCells (node: LiveValueTree.LiveValueNode) : XmlNode list =
@@ -607,7 +608,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
               Elem.span
                 [ Attr.class' (sprintf "live-state %s" (Tone.cssClass described.Tone))
                   testid "tweak-row-badge"
-                  Attr.create "data-label" (attrEnc described.Label)
+                  Sink.attr "data-label" (UserText.ofString described.Label)
                   Attr.title (attrEnc (badgeTitle rowView.State)) ]
                 [ textEnc described.Label ]
           | BadgePlace.InTheStrip -> () ]
@@ -646,13 +647,13 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
       | LiveBindingsPane.HeldNext.RetryWithButton ->
         Elem.button
           [ Attr.class' "session-btn live-held-btn"
-            Attr.create "aria-label" (attrEnc (sprintf "Run %s now: it runs your code under a deadline" node.Label))
-            Attr.create "title" (attrEnc (sprintf "Run %s now. It runs your code, under a deadline and, where the OS allows, a syscall filter." node.Label))
+            Sink.attr "aria-label" (UserText.ofString (sprintf "Run %s now: it runs your code under a deadline" node.Label))
+            Sink.attr "title" (UserText.ofString (sprintf "Run %s now. It runs your code, under a deadline and, where the OS allows, a syscall filter." node.Label))
             Ds.indicator indicator
             Ds.attr' ("disabled", sprintf "$%s" indicator)
-            Ds.onClick (evaluateClick binding path) ]
+            Sink.onClick (evaluateClick binding path) ]
           [ Text.raw "▶" ]
-        Elem.span [ Attr.class' "live-held-evaluating"; Ds.show (sprintf "$%s" indicator) ] [ Text.enc (Glyphs.lead Glyph.Busy + "evaluating…") ]
+        Elem.span [ Attr.class' "live-held-evaluating"; Sink.show (sprintf "$%s" indicator) ] [ Text.enc (Glyphs.lead Glyph.Busy + "evaluating…") ]
       | LiveBindingsPane.HeldNext.SwitchMode _
       | LiveBindingsPane.HeldNext.NothingOnScreen -> ()
       yield! typeCells node
@@ -676,7 +677,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
     let asIs =
       // The whole value is the tooltip: the cell clips a long one to a line with an ellipsis (always at phone width), and the
       // rest was out of reach. The pane's own "Long values: Full" setting is the way to see it without hovering.
-      Elem.span [ Attr.class' valueClass; Attr.create "title" (attrEnc node.Preview) ] [ textEnc (sprintf "= %s" node.Preview) ]
+      Elem.span [ Attr.class' valueClass; Sink.attr "title" (UserText.ofString node.Preview) ] [ textEnc (sprintf "= %s" node.Preview) ]
     let shown =
       match node.Kind with
       | LiveValueTree.NodeKind.Leaf ->
@@ -710,7 +711,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
           | Tweak.RowFormatting.RowFormat.Binary
           | Tweak.RowFormatting.RowFormat.Colour
           | Tweak.RowFormatting.RowFormat.Slider _ -> LiveBindingsRowFormat.valueNodes valueClass chosen.Current node.TypeName node.Preview
-        [ Attr.create "data-format" (Tweak.RowFormatting.FormatChoice.token choice) ], cells @ LiveBindingsRowFormat.stateNote choice @ [ button ]
+        [ Sink.attr "data-format" (UserText.ofString (Tweak.RowFormatting.FormatChoice.token choice)) ], cells @ LiveBindingsRowFormat.stateNote choice @ [ button ]
     let row =
       // Text.create escapes: labels, type names and previews are FSI-derived DATA, not trusted markup. A string
       // preview holding <script> must never inject into the dashboard DOM.
@@ -852,13 +853,13 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
                   [ Attr.id (DockIds.bindingPin b.Name)
                     Attr.class' "session-btn live-binding-pin"
                     Attr.type' "button"
-                    Attr.create "aria-label" (attrEnc (sprintf "Pin %s to the top of the list" b.Name))
+                    Sink.attr "aria-label" (UserText.ofString (sprintf "Pin %s to the top of the list" b.Name))
                     Attr.title (attrEnc (sprintf "Pin %s to the top of the list" b.Name))
                     Attr.create "aria-pressed" "false"
                     Ds.attr' ("aria-pressed", sprintf "%s ? 'true' : 'false'" (isPinnedExpr b.Name))
                     Ds.class' ("session-btn-on", isPinnedExpr b.Name)
                     Ds.preserveAttr "class aria-pressed"
-                    Ds.onClick (attrEnc (togglePinExpr b.Name)) ]
+                    Sink.onClick ((togglePinExpr b.Name)) ]
                   [ pinIcon ]
                 Elem.div [ Attr.class' "live-binding-tree" ] [ renderNode b.Name [] b.Root None ] ])
         Elem.div
@@ -938,13 +939,13 @@ let tabBar (counts: TabCounts) : XmlNode =
             Attr.class' "session-btn session-btn-labeled live-tab"
             Attr.type' "button"
             testid (sprintf "live-tab-%s" (WatchTab.token tab))
-            Attr.create "aria-pressed" (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.SinceGreen | WatchTab.Watch -> "false")
+            Sink.attr "aria-pressed" (UserText.ofString (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.SinceGreen | WatchTab.Watch -> "false"))
             Ds.attr' ("aria-pressed", sprintf "%s ? 'true' : 'false'" (open' tab))
             Ds.class' ("session-btn-on", open' tab)
             Ds.preserveAttr "class aria-pressed"
             // The page hides what the tab does not list at once, and the post tells the server which tab the page has open, so it draws
             // the view that tab has.
-            Ds.onClick (sprintf "$%s = '%s'; %s" DockSignals.LiveTab (WatchTab.token tab) (Ds.post DockSignals.LiveTabEndpoint)) ]
+            Sink.onClick (sprintf "$%s = '%s'; %s" DockSignals.LiveTab (WatchTab.token tab) (Sink.post DockSignals.LiveTabEndpoint)) ]
           [ Elem.span [ Attr.class' "session-btn-word" ] [ textEnc (WatchTab.label tab) ]
             Elem.span
               ([ Attr.class' "live-tab-count"; testid (sprintf "live-tab-count-%s" (WatchTab.token tab)) ]
@@ -1016,7 +1017,7 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
       | Some(LiveBindingsViewPanel.LoopSaid.Said chip) -> freshnessChip chip
       | Some LiveBindingsViewPanel.LoopSaid.NothingSaid
       | None -> ()
-      Elem.span [ Attr.class' "live-pane-stamp"; Attr.create "title" (attrEnc (stamp + ". The values are read again after every eval.")) ] [
+      Elem.span [ Attr.class' "live-pane-stamp"; Sink.attr "title" (UserText.ofString (stamp + ". The values are read again after every eval.")) ] [
         textEnc stamp
         // How old the reading is, ticking in the browser: an absolute UTC time alone could not tell a frozen display from a current one.
         match source with

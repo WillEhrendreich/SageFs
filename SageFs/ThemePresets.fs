@@ -112,6 +112,21 @@ module ThemePresets =
     all |> List.tryFind (fun (n, _) -> n.Equals(name, System.StringComparison.OrdinalIgnoreCase))
     |> Option.map snd
 
+  /// A theme name nobody ships: what `/dashboard/set-theme` or the themes file asked for that is not in `all`.
+  type UnknownTheme = UnknownTheme of name: string
+
+  /// What the refusal says: the name, and the names there are.
+  let describeUnknown (UnknownTheme name) : string =
+    sprintf "There is no theme named %s. The themes are %s." name (all |> List.map fst |> String.concat ", ")
+
+  /// The preset a theme name means, in the preset's own spelling, matched without regard to case. Anything else is
+  /// refused: the dashboard writes a saved name into the page of every later tab for that directory, so a name that is not
+  /// a preset is never saved and never drawn.
+  let known (name: string) : Result<string, UnknownTheme> =
+    match all |> List.tryFind (fun (preset, _) -> preset.Equals(name, System.StringComparison.OrdinalIgnoreCase)) with
+    | Some(preset, _) -> Ok preset
+    | None -> Error(UnknownTheme(match isNull name with | true -> "" | false -> name))
+
   /// Get the next theme after the given one (cycles through all presets).
   let cycleNext (current: ThemeConfig) : string * ThemeConfig =
     let idx =

@@ -11,6 +11,7 @@ open SageFs
 open SageFs.Features
 open SageFs.Features.Tweak.WatchRows
 open SageFs.Server.DashboardFragments
+open SageFs.Server.DashboardSinks
 
 module WatchSignals =
   /// What the add box holds.
@@ -57,15 +58,15 @@ let stateWord (answer: Answer) : string =
   | Answer.NotFound _ -> "not found"
 
 let private postFor (endpoint: string) (expression: WatchExpression) : string =
-  Ds.post (sprintf "%s?e=%s" endpoint (Uri.EscapeDataString(WatchExpression.text expression)))
+  Sink.post (sprintf "%s?e=%s" endpoint (Uri.EscapeDataString(WatchExpression.text expression)))
 
 let private button (word: string) (label: string) (id: string) (click: string) : XmlNode =
   Elem.button
     [ Attr.class' "session-btn session-btn-labeled"
       Attr.type' "button"
       testid id
-      Attr.create "aria-label" (attrEnc label)
-      Ds.onClick click ]
+      Sink.attr "aria-label" (UserText.ofString label)
+      Sink.onClick click ]
     [ Elem.span [ Attr.class' "session-btn-word" ] [ textEnc word ] ]
 
 let private answerNodes (answer: Answer) : XmlNode list =
@@ -107,7 +108,7 @@ let [<Literal>] RunsCodeWords = "A name or a field is read from the session's va
 
 /// The tab's body: the box to add an expression, what the last attempt said, and the rows.
 let render (rows: WatchRowView list) : XmlNode =
-  let add = Ds.post WatchSignals.AddEndpoint
+  let add = Sink.post WatchSignals.AddEndpoint
   Elem.div [ Attr.id "live-watch-body"; Attr.class' "live-watch"; testid "live-watch" ] [
     Elem.div [ Attr.class' "live-watch-add" ] [
       Elem.input
@@ -120,7 +121,7 @@ let render (rows: WatchRowView list) : XmlNode =
           Attr.create "spellcheck" "false"
           testid "live-watch-input"
           Ds.bind WatchSignals.Input
-          Ds.onEvent ("keydown", attrEnc (sprintf "if (event.key === 'Enter') { event.preventDefault(); %s }" add)) ]
+          Sink.onEvent ("keydown", (sprintf "if (event.key === 'Enter') { event.preventDefault(); %s }" add)) ]
       button "Add" "Add the expression to the Watch tab" "live-watch-add" add ]
     Elem.div [ Attr.class' "live-watch-note"; testid "live-watch-note"; Attr.create "role" "status"; Ds.text (sprintf "$%s" WatchSignals.Note) ] []
     Elem.div [ Attr.class' "live-watch-help" ] [ textEnc RunsCodeWords ]
