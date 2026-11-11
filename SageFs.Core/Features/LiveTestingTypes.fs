@@ -2482,7 +2482,8 @@ module LiveTesting =
           | TestResult.Passed d -> Some (TestRunStatus.Passed d)
           | TestResult.Failed (f, d) -> Some (TestRunStatus.Failed (f, d))
           | TestResult.Skipped reason -> Some (TestRunStatus.Skipped reason)
-          | TestResult.NotRun -> None
+          // The last attempt found no runner that knew it: what it showed before is stale.
+          | TestResult.NotRun -> Some TestRunStatus.Stale
           // The test's run ended before it reported: there is no current
           // result, so it is neither running nor waiting to run — it is stale.
           | TestResult.NoResult _ -> Some TestRunStatus.Stale
@@ -2590,17 +2591,9 @@ module LiveTesting =
         | true -> maxDuration <- duration
         | false -> ()
 
-        match result.Result with
-        | TestResult.NotRun ->
-          let alreadyKnown =
-            latestById.ContainsKey result.TestId
-            || Map.containsKey result.TestId existing
-
-          match alreadyKnown with
-          | true -> ()
-          | false -> latestById[result.TestId] <- result
-        | _ ->
-          latestById[result.TestId] <- result
+        // A NotRun replaces an older verdict: no runner ran the test on this code (it was renamed or removed, or no
+        // worker answered), so the old green is not about this code.
+        latestById[result.TestId] <- result
 
     latestById, maxDuration
 

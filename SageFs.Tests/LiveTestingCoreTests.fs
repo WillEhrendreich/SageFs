@@ -234,7 +234,7 @@ let mergeResultsWithUpdatedStatusEntriesTests =
       |> Expect.equal "tests that have not reported yet should stay Running" TestRunStatus.Running
     }
 
-    test "buffered NotRun for an already-known result is a true no-op for derived status projection" {
+    test "WHY — a buffered NotRun for an already-known result makes its row stale, because the old verdict is not about this code" {
       let test1 = mkTestCase "Module.Tests.test1" TestFramework.Expecto TestCategory.Unit
       let test2 = mkTestCase "Module.Tests.test2" TestFramework.Expecto TestCategory.Unit
       let initialState =
@@ -256,10 +256,11 @@ let mergeResultsWithUpdatedStatusEntriesTests =
           [ [| mkResult test1.Id TestResult.NotRun |] ]
 
       changedEntries
-      |> Expect.isEmpty "ignored NotRun facts should not trigger any derived status-entry patch work"
+      |> Array.map (fun e -> e.TestId, e.Status)
+      |> Expect.equal "only the test that answered NotRun changes, and it goes stale" [| test1.Id, TestRunStatus.Stale |]
 
-      obj.ReferenceEquals(merged.StatusIndex.Entries, initialState.StatusIndex.Entries)
-      |> Expect.isTrue "when buffered facts do not change the projected truth, the status-entry array should be preserved by reference"
+      merged.LastResults |> Map.find test1.Id |> fun r -> r.Result
+      |> Expect.equal "the old pass is replaced" TestResult.NotRun
     }
   ]
 

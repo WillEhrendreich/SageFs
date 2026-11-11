@@ -592,3 +592,18 @@ let owedRunTests =
       |> Expect.equal "a run nobody edited under keeps its verdicts" [| passed |]
   ]
 
+[<Tests>]
+let renamedTestTests =
+  testList "A test no runner knows is not left green" [
+    testCase "WHY — a renamed or deleted test that answers NotRun loses its green row, because the green was about code that is gone" <| fun _ ->
+      let renamed = mkTest "Module.Tests.was_renamed" TestCategory.Unit
+      let result r : TestRunResult =
+        { TestId = renamed.Id; TestName = renamed.FullName; Result = r; Timestamp = System.DateTimeOffset.UnixEpoch; Output = None }
+      let state =
+        { LiveTestState.empty with Activation = LiveTestingActivation.Active; DiscoveredTests = [| renamed |] }
+        |> fun s -> LiveTesting.mergeResults s [| result (TestResult.Passed System.TimeSpan.Zero) |]
+        |> fun s -> LiveTesting.mergeResults s [| result TestResult.NotRun |]
+      LiveTesting.computeStatusEntriesWithHistory Map.empty state
+      |> Array.map (fun e -> e.Status)
+      |> Expect.equal "the row is stale, not the old pass" [| TestRunStatus.Stale |]
+  ]

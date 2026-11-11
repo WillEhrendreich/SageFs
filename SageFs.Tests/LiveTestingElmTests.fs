@@ -1190,7 +1190,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
 
 [<Tests>]
 let sessionScopedIsolationTests = testList "session-scoped isolation" [
-  test "NotRun does not overwrite Passed result" {
+  test "WHY — a NotRun replaces a Passed result, because no runner ran the test on this code" {
     let tid = TestId.TestId "t1"
     let passed = mkResult tid (TestResult.Passed FixtureDurations.slowResult)
     let notRun = mkResult tid TestResult.NotRun
@@ -1200,11 +1200,11 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
     |> Map.find tid
     |> fun r ->
       match r.Result with
-      | TestResult.Passed _ -> ()
-      | other -> failwithf "Expected Passed preserved, got %A" other
+      | TestResult.NotRun -> ()
+      | other -> failwithf "Expected the old pass replaced by NotRun, got %A" other
   }
 
-  test "NotRun does not overwrite Failed result" {
+  test "WHY — a NotRun replaces a Failed result, because the failure was about code no runner has now" {
     let tid = TestId.TestId "t1"
     let failed = mkResult tid (TestResult.Failed (TestFailure.AssertionFailed "nope", FixtureDurations.usualResult))
     let notRun = mkResult tid TestResult.NotRun
@@ -1214,8 +1214,8 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
     |> Map.find tid
     |> fun r ->
       match r.Result with
-      | TestResult.Failed _ -> ()
-      | other -> failwithf "Expected Failed preserved, got %A" other
+      | TestResult.NotRun -> ()
+      | other -> failwithf "Expected the old failure replaced by NotRun, got %A" other
   }
 
   test "NotRun IS added when no prior result exists" {
