@@ -196,7 +196,22 @@ dotnet run --project SageFs.Tests -- --filter "CellGrid"
 
 For local development, prefer running tests inside SageFs's own REPL for instant feedback.
 
-`--summary` runs the default suite. The integration, browser and mutation tiers each have their own entry point (`--integration-host`, `--integration-browser` and so on), and `ci-pipeline.fsx` runs every one of them and prints a trust report. A pull request runs the whole pipeline on a Linux runner.
+`--summary` runs the default suite. The integration, browser and mutation tiers each have their own entry point (`--integration-host`, `--integration-browser` and so on), and `ci-pipeline.fsx` runs every one of them and prints a trust report.
+
+### What a pull request gets, and what the maintainer runs
+
+A pull request runs `dotnet fsi ci-pipeline.fsx -- ci` on a GitHub-hosted `ubuntu-latest` runner (job `pr` in `.github/workflows/main.yml`). That is every stage of the maintainer's gate except `release`: source ratchets, build, ratchets, then the default suite, the net10 default suite, the host shards, the mutation tier and the browser tiers. The job has a 60 minute cap. A run never touches the maintainer's machine.
+
+The stages run in order and the first red stage stops the rest, so most red PR checks fail in the first few minutes, at a ratchet, and name the case with its file and line (the `FAILURE case:` lines in the `Run pipeline` log). The 2026-10-23 runs ended that way, after about seven to ten minutes. Whether the whole tier set finishes inside 60 minutes on a hosted runner has not been shown: the last PR runs that got past the ratchets were on 2026-09-18, when the suite was smaller. The maintainer's own gate, with the tiers running in parallel on a 16-thread desktop, took 66 and 69 minutes on 2026-11-10 (8 minutes for a rerun that reused green tiers). A run that is still going at 60 minutes is cancelled, and that cancellation says nothing about your change.
+
+A release comes from the maintainer's local gate, `scripts/ship.fsx`: it builds, runs the ratchet lane, gates the exact commit on the maintainer's machine, then pushes it. The check on your PR is an early signal and the local gate has the last word. A green PR can still fail the local gate, and a PR whose run was cancelled at the cap is not a bad PR. To get the same early signal yourself, run the ratchet lane before you push:
+
+```bash
+dotnet build SageFs.Tests -c Release
+dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets
+```
+
+Then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary` runs the default suite. Fork PRs also wait for a maintainer to approve the run (next section).
 
 ### Test Categories
 
@@ -292,7 +307,7 @@ A PR whose head has no run at all has nothing to approve. Closing and reopening 
 - **Tests included**: new features need tests, bug fixes need a regression test
 - **Small and focused**: one logical change per PR
 - **Clear description**: what changed, why, and how to verify
-- **Passes CI**: green build, no new warnings
+- **Passes the early checks**: a clean build, no new warnings, and the ratchet lane green (see "What a pull request gets" above for what the PR check can and cannot tell you)
 
 ### What We'll Review
 
