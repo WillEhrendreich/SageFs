@@ -20,6 +20,29 @@ let daemonPort (daemonArgs: string list) : int = DaemonPort.resolve daemonArgs
 let jitterSeed (workingDirectory: string) (port: int) (crashedAt: DateTime) : RestartPolicy.JitterSeed =
   SessionLifecycle.jitterSeedFor (sprintf "%s:%d" workingDirectory port) crashedAt
 
+/// What the watchdog launches on a start or restart: the executable, the daemon's argv as separate
+/// elements, and the directory it runs in.
+type DaemonLaunch = {
+  ExePath: string
+  Args: string list
+  WorkingDirectory: string
+}
+
+/// The process start info for one daemon launch. The argv goes in `ArgumentList`, one element per
+/// argument, so a working directory with a space in it reaches the daemon as one argument. A joined
+/// `Arguments` string is split again by the child's command-line parser, and `--dir "/my project"`
+/// then arrives as two arguments.
+let daemonStartInfo (launch: DaemonLaunch) : ProcessStartInfo =
+  let psi =
+    ProcessStartInfo(
+      launch.ExePath,
+      WorkingDirectory = launch.WorkingDirectory,
+      UseShellExecute = false,
+      RedirectStandardOutput = false,
+      RedirectStandardError = false)
+  launch.Args |> List.iter psi.ArgumentList.Add
+  psi
+
 /// Impure watchdog runner that monitors and restarts the daemon process.
 /// Uses the pure Watchdog module for all decisions.
 let run
@@ -42,14 +65,8 @@ let run
   let startDaemon () =
     let exePath =
       Process.GetCurrentProcess().MainModule.FileName
-    let args = String.concat " " daemonArgs
     let psi =
-      ProcessStartInfo(
-        exePath, args,
-        WorkingDirectory = workingDirectory,
-        UseShellExecute = false,
-        RedirectStandardOutput = false,
-        RedirectStandardError = false)
+      daemonStartInfo { ExePath = exePath; Args = daemonArgs; WorkingDirectory = workingDirectory }
     // The daemon inherits this process's environment, which holds only what a person set: it works out its own
     // settings snapshot and tier, from the same files.
     psi.Environment["SAGEFS_SUPERVISED"] <- "1"

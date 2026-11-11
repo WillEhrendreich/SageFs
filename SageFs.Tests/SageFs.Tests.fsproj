@@ -1166,6 +1166,7 @@
         <Compile Include="UpdateCheckTests.fs" />
         <Compile Include="UpdateCheckServiceTests.fs" />
         <Compile Include="SessionScopedRoutingTests.fs" />
+        <Compile Include="WatchdogArgvTests.fs" />
         <Compile Include="HotPathPerfTests.fs" />
         <Compile Include="AfterTypeCheckVerdictTests.fs" />
         <Compile Include="Program.fs" />
