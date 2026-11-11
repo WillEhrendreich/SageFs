@@ -217,6 +217,52 @@ let claimToolTests =
       claimIdAndFence text |> Expect.equal "names the same claim and the fence release_claim needs" (firstId, firstFence)
       text |> Expect.stringContains "says the lease is renewed" "renewed"
     }
+
+    testTask "WHY — the conductor holding a claim is refused leave_cohort with the claim and the way out, and stays seated" {
+      let! ctx, _ = scene ()
+      let! claimed = McpCohortTools.acquireClaim ctx "alice" "file:src/A.fs" "edit A" wd
+      let claimId, _ = claimIdAndFence (ok "alice's acquire_claim" claimed)
+      let! left = McpCohortTools.leaveCohort ctx "alice" wd
+      let text = refused "the conductor leaving with a claim" left
+      text |> Expect.stringContains "names the claim it would orphan" claimId
+      text |> Expect.stringContains "says to hand the seat on first" "delegate_conductor"
+      text |> Expect.stringContains "or to release the claim" "release_claim"
+      let! (status: string) = status ctx
+      let conductorLine = status.Split '\n' |> Array.find (fun line -> line.StartsWith "Conductor: ")
+      conductorLine |> Expect.stringContains "alice still holds the seat" "alice"
+    }
+
+    testTask "WHY — a member leaving with a claim is told which claim it orphaned, over which scope, and who hands it on" {
+      let! ctx, _ = scene ()
+      let! claimed = McpCohortTools.acquireClaim ctx "bob" "file:src/B.fs" "edit B" wd
+      let claimId, _ = claimIdAndFence (ok "bob's acquire_claim" claimed)
+      let! left = McpCohortTools.leaveCohort ctx "bob" wd
+      let text = ok "bob's leave_cohort" left
+      text |> Expect.stringContains "names the orphaned claim" claimId
+      text |> Expect.stringContains "names its scope" "file:src/B.fs"
+      text |> Expect.stringContains "says who hands it on" "reassign_claim"
+    }
+
+    test "WHY — decide refuses Depart for the conductor holding a claim, and leaves every other departure alone" {
+      let alice, bob = MemberId.Minted "alice", MemberId.Minted "bob"
+      let at = DateTime(2026, 11, 11, 0, 0, 0, DateTimeKind.Utc)
+      let step (state: CohortState<MemberId>) cmd =
+        match Cohort.decide at [| 1uy |] state cmd with
+        | Result.Ok(next, _, _) -> next
+        | Result.Error err -> failtestf "%A was refused: %A" cmd err
+      let scope = CohortScope.Machine
+      let joined =
+        [ CohortCommand.Join(alice, JoinableRole.Implementer, None, scope); CohortCommand.Join(bob, JoinableRole.Implementer, None, scope) ]
+        |> List.fold step (CohortState.empty ())
+      let claimed = step joined (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "edit A", scope))
+      let claimId = claimed.Claims |> Map.toList |> List.head |> fst
+      Cohort.decide at [||] claimed (CohortCommand.Depart(alice, scope))
+      |> Result.map ignore
+      |> Expect.equal "the conductor holding a claim may not leave" (Result.Error(CohortError.ConductorHoldsClaims(alice, [ claimId ])))
+      Cohort.decide at [||] joined (CohortCommand.Depart(alice, scope)) |> Result.isOk |> Expect.isTrue "a conductor with no claim may leave"
+      let bobClaimed = step joined (CohortCommand.AcquireClaim(bob, ClaimScope.File "src/B.fs", "edit B", scope))
+      Cohort.decide at [||] bobClaimed (CohortCommand.Depart(bob, scope)) |> Result.isOk |> Expect.isTrue "a member with a claim may leave"
+    }
   ]
 
 [<Tests>]

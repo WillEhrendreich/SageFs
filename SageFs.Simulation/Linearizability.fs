@@ -62,6 +62,7 @@ module Linearizability =
   type private ErrorKind =
     | DuplicateJoin
     | MemberNotPresent
+    | ConductorHoldsClaims
     | ClaimConflict
     | NotClaimHolder
     | UnknownClaim
@@ -109,6 +110,7 @@ module Linearizability =
     match err with
     | CohortError.DuplicateJoin _ -> ErrorKind.DuplicateJoin
     | CohortError.MemberNotPresent _ -> ErrorKind.MemberNotPresent
+    | CohortError.ConductorHoldsClaims _ -> ErrorKind.ConductorHoldsClaims
     | CohortError.ClaimConflict _ -> ErrorKind.ClaimConflict
     | CohortError.NotClaimHolder _ -> ErrorKind.NotClaimHolder
     // A pruned id is the same refusal as an unknown one; only the shell can tell them apart, from its ledger.

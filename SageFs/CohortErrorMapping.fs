@@ -21,12 +21,15 @@ module CohortErrorMapping =
     | Cohort.VacancyReason.NeverBound -> "no conductor was ever bound"
     | Cohort.VacancyReason.Replaced -> "a person replaced the conductor"
 
+  /// A claim scope as `acquire_claim` takes it: `file:<path>` or `project:<path>`.
+  let claimScopeText (scope: Cohort.ClaimScope) : string =
+    match scope with
+    | Cohort.ClaimScope.File f -> sprintf "file:%s" f
+    | Cohort.ClaimScope.Project p -> sprintf "project:%s" p
+
   let toSageFsError (err: Cohort.CohortError<MemberTable.MemberId>) : SageFsError =
     let mid = MemberTable.MemberId.display
-    let scopeStr (scope: Cohort.ClaimScope) =
-      match scope with
-      | Cohort.ClaimScope.File f -> sprintf "file:%s" f
-      | Cohort.ClaimScope.Project p -> sprintf "project:%s" p
+    let scopeStr = claimScopeText
     let failed reason suggestion = SageFsError.CohortRefused(CohortFailureKind.ofError err, reason, suggestion)
     match err with
     | Cohort.CohortError.WrongCohortScope(requested, cohort) ->
@@ -52,6 +55,13 @@ module CohortErrorMapping =
           (since.ToString "u")
           (int Cohort.leaseWindow.TotalMinutes))
         "Call join_cohort again with the same working_directory. get_cohort_status then lists any claim still orphaned under your name: the conductor hands it back with reassign_claim, or clears it so you can acquire_claim the scope again."
+    | Cohort.CohortError.ConductorHoldsClaims(who, claims) ->
+      failed
+        (sprintf
+          "%s holds the conductor seat and still holds %s, so it was not let go: leaving would orphan those claims and leave the seat empty, with nobody seated to hand them on."
+          (mid who)
+          (claims |> List.map (fun (Cohort.ClaimId cid) -> sprintf "claim %s" cid) |> String.concat ", "))
+        "Hand the seat to another present member with delegate_conductor and then leave_cohort, or release each claim with release_claim (get_cohort_status shows its fence) and then leave_cohort."
     | Cohort.CohortError.ClaimConflict(scope, holder) ->
       failed
         (sprintf "The scope %s is already claimed by %s." (scopeStr scope) (mid holder))

@@ -122,7 +122,8 @@ let private claim who file = CohortCommand.AcquireClaim(who, ClaimScope.File fil
 /// The states the panel has a sentence for, each with the number of Seat buttons it must draw.
 let private cohortStates : (string * CohortCommand<MemberId> list * int) list =
   [ "one member", [ join alice ], 0
-    "vacant seat, nobody present", [ join alice; claim alice "src/A.fs"; CohortCommand.Depart(alice, machine) ], 0
+    // The orphan is bob's: a conductor holding a claim may not leave, so alice leaves empty-handed.
+    "vacant seat, nobody present", [ join alice; join bob; claim bob "src/A.fs"; CohortCommand.Depart(bob, machine); CohortCommand.Depart(alice, machine) ], 0
     "vacant seat, a member present", [ join alice; join bob; CohortCommand.Depart(alice, machine); claim bob "src/B.fs" ], 1 ]
 
 /// The page with the cohort panel drawn from `commands`, opened so its sentence is on screen.

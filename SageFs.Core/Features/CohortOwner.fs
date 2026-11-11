@@ -350,7 +350,7 @@ module CohortOwner =
       lastEvent (function CohortEvent.MemberPurged(purged, since) when purged = who -> Some since | _ -> None)
       |> Option.map (fun since -> CohortError.MemberNotPresent(who, MemberAbsence.DepartedAt since))
       |> Option.defaultValue err
-    | _ -> err
+    | other -> other
 
   /// What the loop does for the caller of a message whose step threw (`ResilientActor.wrapLoopAnswering`'s `onFault`): the
   /// command was not applied, and the caller is told so with a typed refusal instead of waiting on a reply the failed step

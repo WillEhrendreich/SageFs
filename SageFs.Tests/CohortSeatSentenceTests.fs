@@ -42,7 +42,8 @@ let private claim who file = CohortCommand.AcquireClaim(who, ClaimScope.File fil
 /// claim keeps the panel on the page), and an empty seat with someone present.
 let private noCohort = frameAfter []
 let private oneMember = frameAfter [ join alice ]
-let private vacantNobodyPresent = frameAfter [ join alice; claim alice "src/A.fs"; depart alice ]
+// The orphan is bob's: the conductor may not leave holding a claim (`ConductorHoldsClaims`), so alice leaves empty-handed.
+let private vacantNobodyPresent = frameAfter [ join alice; join bob; claim bob "src/A.fs"; depart bob; depart alice ]
 let private vacantWithMember = frameAfter [ join alice; join bob; depart alice; claim bob "src/B.fs" ]
 
 let private html (frame: CohortFrame<MemberId>) = renderCohortPanel frame |> renderNode

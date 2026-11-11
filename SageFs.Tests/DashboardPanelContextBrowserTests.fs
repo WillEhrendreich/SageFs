@@ -47,9 +47,12 @@ let blocked =
 
 let orphanedOnly =
   ledgerAfter
-    [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+    // lead conducts and leaves last, empty-handed: a conductor holding a claim may not leave.
+    [ CohortCommand.Join(MemberId.Minted "lead", JoinableRole.Implementer, None, CohortScope.Machine)
+      CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
       CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine)
-      CohortCommand.Depart(alice, CohortScope.Machine) ]
+      CohortCommand.Depart(alice, CohortScope.Machine)
+      CohortCommand.Depart(MemberId.Minted "lead", CohortScope.Machine) ]
 
 let viewing workflow activity = ViewedSession.Viewing(workflow, activity)
 

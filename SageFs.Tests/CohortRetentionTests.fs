@@ -255,7 +255,9 @@ let retentionTests =
 
     test "two orphans on the same file collapse to the newest one (several orphans per file was the live symptom)" {
       let t = t0
-      let s0, _ = ok t 1 (CohortState.empty ()) (CohortCommand.Join("a", JoinableRole.Implementer, None, cohort))
+      // "c" conducts and stays, so a and b leave as ordinary members (a conductor holding a claim may not leave).
+      let sc, _ = ok t 0 (CohortState.empty ()) (CohortCommand.Join("c", JoinableRole.Implementer, None, cohort))
+      let s0, _ = ok t 1 sc (CohortCommand.Join("a", JoinableRole.Implementer, None, cohort))
       let s1, _ = ok t 2 s0 (CohortCommand.Join("b", JoinableRole.Implementer, None, cohort))
       let s2, _ = ok t 3 s1 (CohortCommand.AcquireClaim("a", ClaimScope.File "/r/f.fs", "first", cohort))
       let first = claimIdOf s2 (ClaimScope.File "/r/f.fs")

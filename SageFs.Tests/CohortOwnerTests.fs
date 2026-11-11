@@ -298,7 +298,8 @@ let prunedRefusalTests =
       let! released = commit (CohortCommand.ReleaseClaim(alice, claimId, fence, machine))
       let releasedFence = released |> List.pick (function CohortEvent.ClaimReleased(_, _, f) -> Some f | _ -> None)
       let! _ = commit (CohortCommand.Depart(bob, machine))
-      clock.Advance(Cohort.settledRetention + TimeSpan.FromMinutes 1.)
+      // Twice the window, so everything settled at the epoch has aged past it.
+      clock.Advance(Cohort.settledRetention + Cohort.settledRetention)
       let! _ = commit (CohortCommand.RenewLease(alice, machine))
       let! swept = commit (CohortCommand.Tick machine)
       swept |> List.exists (function CohortEvent.LandingPruned _ -> true | _ -> false) |> Expect.isTrue "the landing was swept"

@@ -231,8 +231,18 @@ module CohortVacancySpec =
       | _ -> false
     | _ -> true
 
+  /// The conductor does not walk away from claims it holds: an accepted `Depart` of the seat's holder had no `Held`
+  /// claim of theirs before it. Leaving with one would orphan it while the seat empties, and an orphaned claim needs a
+  /// seated conductor's `reassign_claim`. A lapse (`Tick`) is not a choice and still orphans them.
+  let conductorDepartsEmptyHanded (before: CohortState<Member>) (command: CohortCommand<Member>) (_after: CohortState<Member>) : bool =
+    match (match command with CohortCommand.Depart(who, _) -> Some who | _ -> None) with
+    | Some who when before.Conductor = ConductorBinding.Bound who -> heldBy before who |> List.isEmpty
+    | Some _
+    | None -> true
+
   let stepRules : (string * (CohortState<Member> -> CohortCommand<Member> -> CohortState<Member> -> bool)) list =
-    [ "SEATING-FILLS-ONLY-AN-EMPTY-SEAT", seatingFillsOnlyAnEmptySeat
+    [ "CONDUCTOR-DEPARTS-EMPTY-HANDED", conductorDepartsEmptyHanded
+      "SEATING-FILLS-ONLY-AN-EMPTY-SEAT", seatingFillsOnlyAnEmptySeat
       "SEATING-NAMES-A-PRESENT-MEMBER", seatingNamesAPresentMember
       "REPLACE-NAMES-THE-HOLDER", replaceNamesTheHolder
       "REPLACE-MOVES-ONLY-THE-SEAT", replaceMovesOnlyTheSeat
@@ -471,6 +481,18 @@ module CohortVacancySpec =
         let kept = { after.Claims.[claimId] with Fence = fence }
         Ok({ after with Claims = Map.add claimId kept after.Claims }, events, effects)
       | result, _ -> result
+
+  /// The departure before the guard: the conductor leaves holding claims, and they are orphaned as the seat empties. It is
+  /// re-imposed through `Tick` with only the conductor's lease run out, the one path that still departs a holder of claims.
+  let faultConductorLeavesWithClaims : Decide =
+    fun clk ent state command ->
+      match Cohort.decide clk ent state command, command with
+      | Error(CohortError.ConductorHoldsClaims _), CohortCommand.Depart(who, scope) ->
+        let lapsed = state.Members |> Map.map (fun m r -> { r with LastRenewal = (if m = who then clk - Cohort.leaseWindow else clk) })
+        Cohort.decide clk ent { state with Members = lapsed } (CohortCommand.Tick scope)
+      | result, _ -> result
+
+  let departFaultsWithClaims () : ExploreResult = explore faultConductorLeavesWithClaims defaultCap
 
   let clearFaultsAny () : ExploreResult = explore faultClearsAnyClaim defaultCap
   let clearFaultsNonConductor () : ExploreResult = explore faultAnyMemberClears defaultCap

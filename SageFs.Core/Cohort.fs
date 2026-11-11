@@ -860,6 +860,8 @@ module Cohort =
   type CohortError<'m> =
     | DuplicateJoin of 'm
     | MemberNotPresent of 'm * MemberAbsence
+    /// `Depart` by the conductor while it holds these claims: leaving would orphan them with nobody seated to hand them on.
+    | ConductorHoldsClaims of 'm * ClaimId list
     | ClaimConflict of ClaimScope * holder: 'm
     | NotClaimHolder of ClaimId * requester: 'm
     | UnknownClaim of ClaimId
@@ -1360,8 +1362,12 @@ module Cohort =
       | Ok () ->
       if not (isPresent state who) then Error(notPresent state who)
       else
-        let newState, events = departMember VacancyReason.ConductorLeft who clock state
-        Ok(newState, events, [])
+        let held = state.Claims |> Map.toList |> List.choose (fun (cid, c) -> if c.State = ClaimState.Held who then Some cid else None)
+        match state.Conductor, held with
+        | ConductorBinding.Bound c, _ :: _ when c = who -> Error(CohortError.ConductorHoldsClaims(who, held))
+        | ConductorBinding.Bound _, _
+        | ConductorBinding.NeverBound, _
+        | ConductorBinding.Vacant _, _ -> Ok(departMember VacancyReason.ConductorLeft who clock state |> fun (s, evs) -> s, evs, [])
 
     | CohortCommand.RenewLease(who, scope) ->
       match checkScope scope with

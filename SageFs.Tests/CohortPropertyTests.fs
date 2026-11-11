@@ -1000,7 +1000,9 @@ let cohortPropertyTests =
 
       testPropertyWithConfig raceConfig "12: a departed member's stale-fence command never changes the claim it no longer holds" <| fun (scope: ClaimScope) (Cycles bystanders) ->
         let a = agentOf 1
-        let h0 = initHarness ()
+        // A conductor of its own, so `a` departs as a member: a conductor holding a claim may not leave.
+        let lead = { Id = 99; Display = "lead" }
+        let h0 = applyCommand (initHarness ()) (CohortCommand.Join(lead, JoinableRole.Implementer, None, machine))
         let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
         // Other members are present around the one that departs; none of them may change what happens to its claim.
         let h2 =
