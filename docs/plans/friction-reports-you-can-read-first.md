@@ -2,6 +2,66 @@
 
 Roadmap item: `friction-reports-you-can-read-first` (Later, Dashboard). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898 (0.6.945). Every `path:line` below was read that day; where the older plan under this section disagrees, this wins. Both items this plan depended on are Done: `dashboard-follows-context` (`PanelContext.decide`, `PanelPresence`) and `more-settings-editable` (0.6.940), so nothing blocks it.
+
+### 1. Outcome
+
+Before a friction report leaves the machine, the dashboard shows the exact JSON that will be sent, its byte count and its SHA-256, and where it goes. Three destinations: an endpoint you name (https, or http on loopback), a prefilled GitHub issue (the browser opens the form, the daemon sends nothing), or a JSON file download. Send sends the previewed bytes; if the store changed since the preview, the send is refused and a new preview is shown. The receipt keeps the hash. Outcome gate: an `--integration-browser` journey with a loopback `HttpListener` receiver that compares the body it received to the `<pre>` text the page showed, byte for byte, over {empty store, events only, feedback full of paths, emails, IPs and hex ids, a store at the 5000-row cap} x {endpoint, GitHub link, file} x {375, 1400 px}. Linux only; nothing here is platform-specific.
+
+### 2. Where the code is today
+
+- Store: `SageFs/FrictionSqlite.fs` API at `:44-49` (`AppendEvent`, `AppendFeedback`, `RecordSentReport`, `ListSentReports`); the `PRAGMA user_version` migration pattern at `:309-330`, currently two steps; `SentReport.DestinationKind` is a `string` (`:14`), written at `:494`, read at `:519`. Tests: `FrictionSqlitePersistenceTests.fs`, `FrictionSqliteEndToEndTests.fs`.
+- Sanitiser: `SageFs.Core/Features/FrictionSanitize.fs`: `MaxTextLen = 200` (`:15`), `sanitizeText` (`:48`), `CurrentSchemaVersion = 1` (`:113`), `toOutgoing` (`:120`) stamping `DateTimeOffset.UtcNow` inside at `:134`, so two builds of one report differ. Tests: `FrictionSendSafetyTests.fs`.
+- View model: `SageFs/FrictionReviewView.fs` (module `SageFs.Features.FrictionReviewView`): `build` (`:45`), `withEdits` (`:59`), `parseEditsJson` (`:78`), `buildOutgoingForSend` (`:103`). Tests: `FrictionReviewViewTests.fs`.
+- Panel: `renderFrictionPanel` (`SageFs/DashboardFragments.fs:3150`); the Send button's hand-written script at `:3227` gathers `.friction-edit` textareas into a hidden input and posts `/dashboard/friction/send`; `Ds.bind Signals.FrictionEdits` at `:3234`. Signals `FrictionEndpoint`, `FrictionToken` at `SageFs/DashboardTypes.fs:388-389`. It never shows the JSON.
+- Send: `isAllowedFrictionEndpoint` (`SageFs/Dashboard.fs:2980`), `frictionPayloadJson` (`:2992`), `createFrictionSendHandler` (`:3008`), route at `:3952`. It rebuilds the report at send time and writes `DestinationKind = "cloudflare-worker"` for every endpoint (`:3079`). Post timeout `Timeouts.frictionReportPost` (`SageFs.Core/Timeouts.fs:259`, 15 s).
+- Visibility: `QuietBecause.FrictionNotRequested` (`SageFs/DashboardPanelContext.fs:140`, text `:197`), `PanelFacts.frictionOptInOfQuery` (`:222`), the decision at `:260`, `decisions` (`:312`); the opt-in is recorded per page at `Dashboard.fs:3790`. Per-page state: `PageChoices<'v>(capacity)` with `Set`, `Update`, `Find` (`SageFs/PageChoices.fs:18-67`).
+- Report shape: every list truncated to 5 (`SageFs.Core/Features/FrictionTelemetry.fs:247-257`).
+- Receiver: `friction-receiver/src/index.ts` mints a random id per post (`:231`, `makeReportId` at `:431`). It does not deduplicate a retry: that "Measure first" question is answered, and a lost reply after acceptance makes two reports unless the receiver changes.
+- MCP: `manage_local_data` (`SageFs/McpTools.fs:1784`), `get_friction_summary` (`:1866`); `docs/mcp-tools.md:519` says "They don't phone home".
+- Settings: `SettingValue` (`SageFs.Core/Settings.fs:287`) has no URL case; a persisted endpoint needs a new `VEndpoint` whose parser is `isAllowedFrictionEndpoint` moved into Core.
+- `.github/ISSUE_TEMPLATE` does not exist. `[not verified]`: GitHub's limit on an issue-form URL length.
+
+### 3. Steps
+
+1. **Pure.** RED `SageFs.Tests/FrictionSendTests.fs`, default tier: "WHY - the bytes the transport receives are the bytes the preview showed" and "WHY - a send for a superseded preview is refused and the transport sees nothing". Register in `SageFs.Tests.fsproj` beside `FrictionSendSafetyTests.fs` (`:1020`). Then `toOutgoing` takes `now: DateTimeOffset` (callers: `buildOutgoingForSend`, the handler) and new `SageFs/FrictionSend.fs` (`Destination`, `PreviewId`, `Preview`, `SendRefusal`, `SendOutcome`, `prepare`, `send` over a transport function), compiled before `Dashboard.fs`. Property: `prepare` output has no sensitive pattern and parses back.
+2. **Pure, parallel with 1.** `IssueLink.fs`: `build` returns `FullBody of Uri | SummaryOnly of Uri * copyInstruction`; host `github.com`, path the SageFs issues form, always. First do the measurement: build a report with every list at 5 and every text at 200 percent-encoding characters, print the URL-encoded length from the REPL, and compare it with what GitHub accepts (open the link once in a browser; nobody has written the limit down). The result decides which case is common.
+3. **Edge.** Migration `user_version = 3` in `FrictionSqlite.fs`: `sent_reports` gains `payload_sha256` and `destination`; `DestinationKind` becomes a DU (`Endpoint | GitHubIssue | File`) with one `toString`, and `"cloudflare-worker"` reads as `Endpoint`. RED: `FrictionSqliteMigrationTests.fs`, a database at version 2 opens, migrates, keeps rows.
+4. **Edge.** `SageFs/FrictionSendRoute.fs`: `POST /dashboard/friction/preview`, `/edit`, `/send`, the pending `Preview` per page in a `PageChoices<Preview>`; `createFrictionSendHandler` moves out of `Dashboard.fs` (which frees lines against its 4,259 budget). Transport is `HttpClient` with `Timeouts.frictionReportPost`.
+5. **Edge.** The panel: `<pre>` with the JSON, byte count, hash, destination chooser, three actions, `Ds.indicator Signals.FrictionSending`; the textareas post edits through Datastar bindings and the `:3227` script goes. Fragments has two lines of budget (4,457 of 4,459): write the new panel in a new `FrictionPanelView.fs` and leave one call in Fragments.
+6. **Edge.** `VEndpoint` setting `friction.reportEndpoint` in the catalog; the token stays a per-send signal.
+7. **DECISION, then text.** Visibility: show the panel collapsed whenever `Events + Feedback > 0` (recommendation), or keep it behind `?panels=friction`. Then `docs/mcp-tools.md:519` gains "a report leaves only when you press Send, after you have read it". Trailer `Plugin: n/a dashboard only, no wire change` on commits touching `DashboardTypes.fs` or `docs/mcp-tools.md`.
+8. **Pure, then edge.** `SageFs.Simulation/FrictionSendSim.fs` with the rebuild-at-send twin; then the browser journey from section 1.
+
+### 4. How to check it
+
+- REPL first: a session on `SageFs.Tests`; `send_fsharp_code` `FrictionSanitize.toOutgoing` twice on one report and show the bytes differ, before step 1's test.
+- `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Inner loop: `... SageFs.Tests.dll --summary --filter-test-list "Friction"`; read `ran=`.
+- Acceptance: unfiltered `--summary`; `--integration-browser` unfiltered for the journey.
+
+### 5. Traps in this repo
+
+- `Dashboard.fs` 4,256 of 4,259 and `DashboardFragments.fs` 4,457 of 4,459 (`RatchetBudgets.fs:343-344`): new code goes in new files.
+- `SageFs.Json` only (`JsonCentralizationTests`): `frictionPayloadJson` already uses `Json.camelCase`; `Preview.Json` must come from the same call, never a second serializer.
+- No magic strings: `DestinationKind` as a DU, `Destination` as a DU; the GitHub URL built from parts, not a literal with holes.
+- No timing-sensitive tests: the receiver signals a `TaskCompletionSource`; the journey waits on it with `Started.asTask`, never a stopwatch.
+- `TimeoutLiteralsTests`: the preview's staleness window, if any, is a `Timeouts` constant.
+- Commit `SageFs.fsproj` and `SageFs.Tests.fsproj` whole, with a pathspec.
+
+### 6. Size and order
+
+A week and a half for one person. 1 and 2 in parallel; 3 beside them; 4 after 1 and 3; 5 after 4; 6 and 7 after 5; 8 last. First commit: `test(friction): the bytes the transport receives are the bytes the preview showed`, RED.
+
+### 7. Not now
+
+- A hosted SageFs receiver: the Worker in `friction-receiver/` exists; nobody runs one by default, and the GitHub path makes that fine.
+- Receiver-side deduplication (an idempotency key): a change to `friction-receiver/src/index.ts`, after someone runs a receiver.
+- An `ISSUE_TEMPLATE` with labels: nice for triage, not needed for the prefilled link.
+- Building the hidden panel only when shown: measure `reportDirect` on a 5000-row store first (the plan's second "Measure first"); if it is under a millisecond, leave it.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -38,7 +98,7 @@ Verified by reading the code.
   aggregates (`SAGEFS_FRICTION_MAX_AGE_DAYS`, `_MAX_ROWS`, `_MAX_AGGREGATE_VERSIONS`), pruned on start and every
   `SAGEFS_DATA_PRUNE_INTERVAL_MINUTES` (60). So "local and bounded" is true today.
 - Reading: the MCP tools `get_friction_summary`, `get_friction_report`, `report_friction`, `manage_local_data`
-  (`SageFs/McpTools.fs` lines ~1730 to 1850; `docs/mcp-tools.md` line 396 says "local only. They don't phone home").
+  (`SageFs/McpTools.fs`, `manage_local_data` at line 1784 and `get_friction_summary` at 1866 on 2026-11-11; `docs/mcp-tools.md` line 519 says "They don't phone home").
   `McpFrictionRecorder.Recorder.reportDirect` builds `FrictionReportWithSignals` (the report plus observed signals).
   `FrictionTelemetry` truncates each list in the report to 5 (`FrictionTelemetry.fs` lines 244 to 254), so the report is bounded.
 - Sanitising: `SageFs.Core/Features/FrictionSanitize.fs`. `sanitizeText` redacts Windows, UNC and Unix paths, IPv4, emails and
@@ -46,11 +106,11 @@ Verified by reading the code.
   `SubmittedAtUtc = DateTimeOffset.UtcNow` inside the function, so two builds from the same data differ.
 - View model: `SageFs/FrictionReviewView.fs` (`FrictionReviewSnapshot`, `build`, `withEdits`, `parseEditsJson`,
   `buildOutgoingForSend`).
-- Panel: `renderFrictionPanel` (`DashboardFragments.fs` line 2822). It shows a compact preview (top tools, editable reason
+- Panel: `renderFrictionPanel` (`DashboardFragments.fs` line 3150 on 2026-11-11). It shows a compact preview (top tools, editable reason
   textareas), an endpoint input and optional token input bound to `Signals.FrictionEndpoint` and `FrictionToken`, and a Send
   button whose click gathers edits with a hand-written JavaScript string in `Ds.onEvent` and posts `/dashboard/friction/send`.
   It never shows the JSON.
-- Send: `createFrictionSendHandler` (`Dashboard.fs` line ~2747). It validates the endpoint (`isAllowedFrictionEndpoint`: https,
+- Send: `createFrictionSendHandler` (`Dashboard.fs` line 3008 on 2026-11-11). It validates the endpoint (`isAllowedFrictionEndpoint`: https,
   or http to loopback), rebuilds the report from the store at send time, serialises with `frictionPayloadJson`
   (`Json.camelCase`), posts with `X-SageFs-Token`, and records a `SentReport` only after remote acceptance and a successful local
   write. The receipt's `DestinationKind` is the literal `"cloudflare-worker"` for every endpoint, and `DestinationUrlHash` is the
@@ -196,9 +256,9 @@ budget. Zero console and `PatchElementsNoTargetsFound` errors.
   decides between `FullBody` and `SummaryOnly` as the common case.
 - What does the hidden friction build cost per snapshot? Time `reportDirect` plus `ListSentReports` on a store at the 5000-row cap.
   If it is over a millisecond per uncached push, build the panel only when shown.
-- Does the receiver `friction-receiver` deduplicate a retried send? Read `src/index.ts` (it mints a new `reportId` per post, from
-  what I read). If it does not, an "accepted but reply lost" retry creates two reports; the Idempotency header on a retry would
-  need the receiver changed too.
+- Does the receiver `friction-receiver` deduplicate a retried send? Answered 2026-11-11: no. `src/index.ts:231` draws a random
+  id per post and `makeReportId` (`:431`) uses it, so an "accepted but reply lost" retry creates two reports; an Idempotency
+  header on a retry would need the receiver changed too.
 
 ## Risks and dependencies
 
@@ -206,8 +266,8 @@ budget. Zero console and `PatchElementsNoTargetsFound` errors.
   secret it does not recognise. The preview is the guard; the issue path should say "public" next to the button.
 - Dropping the hand-written edit-gathering script changes how reasons reach the server; the new binding needs a per-field signal
   or a per-field post. Test with several feedback entries.
-- Depends on `dashboard-follows-context` (the friction reason) and `more-settings-editable` (the endpoint setting). Nothing
-  depends on it.
+- Depended on `dashboard-follows-context` (the friction reason) and `more-settings-editable` (the endpoint setting); both are
+  Done as of 0.6.940. Nothing depends on it.
 
 ## Size
 

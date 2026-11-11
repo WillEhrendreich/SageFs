@@ -2,6 +2,63 @@
 
 Roadmap item: `tokens-survive-a-restart` (Later, Agents). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898 (0.6.945). Every `path:line` below was read that day; where the older plan under this section disagrees, this wins.
+
+### 1. Outcome
+
+An agent holding a checkout-bound member token keeps working through a daemon restart (an `install-local --force`, a crash, a reboot) with the same token and the same `cap:<id>`, so its claims and seat are still its own. A token revoked before the restart is still refused after it. An expired or idle-lapsed token is refused with the reason `Capability.resolve` already gives. A session-bound token is not carried, and the refusal says so. Outcome gate: an `--integration-host` list that starts a daemon on its own `SAGEFS_DATA_DIR`, mints tokens in each state, restarts the daemon (clean stop, then `kill -9`) on the same data dir, and asserts the result of the next call per token: {active checkout-bound, active session-bound, revoked, expired, lapsed} x {clean, kill -9}. Linux only; the file write and `link(2)`-style publish are the same code on macOS and are unproven there.
+
+### 2. Where the code is today
+
+- The table: `CapabilityState = { Records: Map<TokenHash, CapabilityRecord> }` at `SageFs.Core/Capability.fs:751`, with the "in memory only" comment at `:748-750`. `CapabilityRecord` at `:738` (`Id`, `MintedBy`, `MintedAt`, `LastSeen`, `Grant`, `Status`); `CapabilityStatus = Active | Revoked of at` at `:733`; `TokenHash` is private at `:671` with `tryOfHex` at `:682`; `CapabilityId` at `:704`; `PresentRefusal` (`Unknown | Expired | LeaseLapsed | Revoked`) at `:798`; `resolve` at `:807`, which uses `Cohort.leaseWindow` (`Timeouts.cohortLeaseWindow`, 30 minutes, `SageFs.Core/Timeouts.fs:500`). `RouteBinding = BoundToSession | BoundToCheckout` at `:332`.
+- The store: `SageFs/CapabilityStore.fs:22` `CapabilityStore(initialPolicy)` behind one lock; members `Mint` (`:40`), `Present` (`:48`), `Revoke` (`:56`), `Records` (`:63`). The design comment is `:18`. There is no `Touch` member: the older plan names one, and `LastSeen` moves inside `Present` `[not verified which line]`.
+- Persistence precedents: `ManifestOwner.start logger sageFsDir` (`SageFs.Core/Features/ManifestOwner.fs:254`), its `Handle` (`:188`), the quarantine (`:138`, `QuarantineCorrupt` at `:85`). Format: `BinaryFormat.Crc32` (`SageFs.Core/BinaryFormat.fs:8`), `writeLpString` (`:35`), `readLpStringBounded` (`:46`). The data dir is made owner-only by `DaemonState.ensureDataDir` (`SageFs.Core/DaemonState.fs:168`).
+- `SageFs/OperatorStore.fs` already keeps a secret in the data dir: `operator.token`, owner-only mode (`:22`), published with `link(2)` (`:62`). So "a stolen data directory holds nothing to steal" (`CapabilityStore.fs:18`) stopped being true when slice 0 of `a-token-for-every-daemon-call` shipped. This item removes the sentence; it does not create the exposure.
+- Restart drops session ids: `resumePreviousSessions` (`SageFs/DaemonMode.fs:1720`) logs "retired old id" at `:1878`. A `BoundToSession` record points at a dead id after a restart.
+- The sentence to retire, five places: `SageFs/McpCapability.fs:445` (the mint reply), `SageFs/CohortErrorMapping.fs:336`, `SageFs/McpTools.fs:3091` (the `mint_member` description, which is on `tools/list`), `docs/decisions.md:1692`, `docs/plans/drive-real-agents-as-members.md:124`.
+- Simulation: `SageFs.Simulation/CapabilitySim.fs` has `SimEvent` (`:47`) and `Behavior` (`:62`) with eleven twins; invariants in `CapabilitySimInvariants.fs` (`noRawTokenInLedger :65`, `scopeNeverWidens :84`, `mintNeverSubstitutes :120`, `revokedStaysRevoked :142`). Tests `SageFs.Tests/CapabilitySimTests.fs`.
+- Integration harness: `CapabilityHttpIntegrationTests.fs:172` `Integration.hostList "Capability tokens over HTTP"`, spawning with `CohortMcpToolsIntegrationTests.startIsolatedDaemonWith [ "SAGEFS_DATA_DIR", dataDir; ... ]` (`CohortMcpToolsIntegrationTests.fs:55`, polls `/health` at `:98`, kills the tree at `:116`).
+- Compile order: `Capability.fs` is `SageFs.Core/SageFs.Core.fsproj:73` and `BinaryFormat.fs` is `:115`. A codec that uses `BinaryFormat` cannot sit "after Capability.fs" as the older plan says; it goes after `:115`. `CapabilityStore.fs` is `SageFs/SageFs.fsproj:176`, `OperatorStore.fs` `:178`.
+
+### 3. Steps
+
+1. `DECISION:` build it now or wait for a count. The older plan asks for a count of re-mints after restarts; nobody has written where to count them, and the 2026-11-01 note under "Decisions for Will" already made the need concrete (a sub-agent whose token dies gets an empty tool list). Recommendation: skip the count and build. If Will wants the number first, it is the number of `mint_member` log lines within 30 minutes after a daemon start, from the daemon's `mcp-server<yyyyMMdd>.log` files (`docs/TROUBLESHOOTING.md:220`) `[exact line text not verified]`.
+2. **Pure.** RED `SageFs.Tests/CapabilityCodecTests.fs`, default tier: "WHY - a revoked token is still revoked after the store is restored", "WHY - the persisted bytes contain no raw token", "WHY - a session-bound token is not carried and the report says why", "WHY - a file with one flipped byte restores nothing" (exhaustive over every byte of a small file), and the round-trip property. Register in `SageFs.Tests.fsproj` next to `CapabilityTests.fs` (`:1105`). Then `SageFs.Core/CapabilityCodec.fs` after `BinaryFormat.fs` (`SageFs.Core.fsproj:115`): `Carry`, `encode`, `decode`, `restore : now -> persisted -> CapabilityState * RestoreReport`. Header: magic, version byte, kind byte, CRC-32 over the payload. Commit the `.fsproj` whole.
+3. **Pure, parallel with 2 once the types compile.** `CapabilitySim.fs`: `SimEvent.Restart of RestartKind` (`Clean | Crash`), a crash drops `LastSeen` updates since the last flush; four new twins in `Behavior` (`RestoreRevivesRevokedTwin`, `RestoreRenewsExpiryTwin`, `PersistsRawTokenTwin`, `RestoreIgnoresCarryTwin`); invariants in `CapabilitySimInvariants.fs` (revoked never admitted after, `NotAfter` unchanged, lapsed never active). Each twin must trip; `CapabilitySimTests.fs` asserts it.
+4. **Edge.** `SageFs/CapabilityOwner.fs` after `OperatorStore.fs` (`SageFs.fsproj:178`), shaped like `ManifestOwner`: one mailbox, ordered commits, temp file and rename, owner-only mode from `OperatorStore.ownerOnlyUnixMode`, quarantine on CRC failure. `CapabilityStore` takes the owner at construction; `Mint` and `Revoke` write through; `LastSeen` is flushed on `Timeouts.capabilityFlushInterval` (new, `envOrDefaultMinutes`, `Timeouts.fs:45`) and at shutdown. No literal duration anywhere (`TimeoutLiteralsTests`).
+5. **Edge.** `DaemonMode.fs`: load and `restore` before the store is built, log the `RestoreReport` once. Flush in the shutdown block, and root the timer there so the GC cannot collect it (the `daemon Timer GC` lesson).
+6. **Edge.** The integration matrix in `CapabilityHttpIntegrationTests.fs`, a new `Integration.hostList "Tokens across a daemon restart"`. Restart waits on `/health` as `startIsolatedDaemonWith` does; the crash cell kills by the process handle.
+7. **Text.** The five sentences in section 2, `docs/mcp-tools.md`'s member-token section, a `docs/decisions.md` entry that reopens "in memory by design" and says why. `McpTools.fs:3091` is a tool description, so this commit touches the wire surface: trailer `Plugin: n/a, text in a tool description`.
+
+### 4. How to check it
+
+- REPL first: a session on `SageFs.Tests`; prove `encode >> decode >> restore` on a hand-built `CapabilityState` with `send_fsharp_code` before writing the test.
+- `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (tool-list weight, timeout literals, file sizes).
+- Inner loop: `... SageFs.Tests.dll --summary --filter-test-list "Capability"`; read `ran=`.
+- Acceptance: unfiltered `--summary`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary --filter-test-list "Tokens across a daemon restart"` for the loop and the unfiltered `--integration-host --summary` for the gate.
+
+### 5. Traps in this repo
+
+- Budgets only go down: `McpTools.fs:3091` is counted by `RatchetBudgets.toolList`; replace the sentence, do not lengthen it.
+- SAGE-005: `restore (now: DateTime) (flushedAt: DateTime)` is two same-primitive parameters; take a record.
+- No timing-sensitive tests: the flush interval is injected in the sim and in unit tests; the integration cell waits on `/health`, never on a sleep.
+- `SpawnEnvironment.apply` for the child daemon: `startIsolatedDaemonWith` already does it; do not spawn another way.
+- A `kill -9` cell leaves a daemon if the test dies first; use the harness's kill-tree path (`CohortMcpToolsIntegrationTests.fs:116`).
+- Commit `SageFs.Core.fsproj`, `SageFs.fsproj` and `SageFs.Tests.fsproj` whole, with a pathspec.
+
+### 6. Size and order
+
+Three to five days for one person. Step 2 first; 3 beside it; 4 and 5 after 2; 6 after 5; 7 last. First commit: `test(capability): a revoked token is still revoked after the store is restored` carrying the RED tests and the `.fsproj` line, marked red-first as `sagefs-workflow` describes.
+
+### 7. Not now
+
+- Carrying `BoundToSession` tokens by re-pointing them at the resumed session: `resumePreviousSessions` retires ids on purpose, and a wrong re-point hands a token someone else's session.
+- An HMAC over the file keyed by `operator.token`: write it down in decisions.md as the option; build it when the credential item's step 6 lands.
+- Persisting `SessionOwners` (who made a session): same shape, different store, its own item.
+- Viewer link grants from `watch-your-agents-from-your-phone`: they stay memory-only.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -24,12 +81,12 @@ This item is gated on a need. The roadmap says it waits until someone needs it, 
 
 ## What exists today
 
-- `SageFs/CapabilityStore.fs` holds `CapabilityState` (`Records: Map<TokenHash, CapabilityRecord>`) in memory behind one lock. Its comment states the design: "In memory by design. Tokens do not survive a daemon restart, so a stolen ledger or data directory holds nothing to steal." `SageFs.Core/Capability.fs` (line 728) says the same and that the table is "Not the cohort ledger, so a token's existence is never in a ledger row."
-- `CapabilityRecord` (Capability.fs:715): `Id`, `MintedBy`, `MintedAt`, `LastSeen`, `Grant` (preset, `ScopePrefix`, `RouteBinding`, `NotAfter`), `Status` (`Active | Revoked of at`). `TokenHash` is a private SHA-256 hex string, `TokenHash.tryOfHex` re-reads one.
+- `SageFs/CapabilityStore.fs` holds `CapabilityState` (`Records: Map<TokenHash, CapabilityRecord>`) in memory behind one lock. Its comment states the design: "In memory by design. Tokens do not survive a daemon restart, so a stolen ledger or data directory holds nothing to steal." `SageFs.Core/Capability.fs` (line 748 on 2026-11-11) says the same and that the table is "Not the cohort ledger, so a token's existence is never in a ledger row." Since slice 0 of `a-token-for-every-daemon-call`, `operator.token` lives in the same data directory (`SageFs/OperatorStore.fs`), so the "nothing to steal" sentence is already out of date.
+- `CapabilityRecord` (Capability.fs:738): `Id`, `MintedBy`, `MintedAt`, `LastSeen`, `Grant` (preset, `ScopePrefix`, `RouteBinding`, `NotAfter`), `Status` (`Active | Revoked of at`). `TokenHash` is a private SHA-256 hex string, `TokenHash.tryOfHex` re-reads one.
 - `Capability.resolve` already names the refusal: `Unknown`, `Expired`, `LeaseLapsed` (idle for `Cohort.leaseWindow`, `Timeouts.cohortLeaseWindow`), `Revoked`. A revoked hash can never be minted again (`MintOverwrites` is a simulation twin in `SageFs.Simulation/CapabilitySim.fs`).
 - The cohort ledger (`~/.SageFs/cohort.ledger.db`) replays the seat of a member across a restart. After a restart a `cap:<id>` seat can exist with no token behind it. `docs/mcp-tools.md` says "Because no token outlives a restart, there are no tokens from before the route binding existed and nothing to migrate." That sentence stops being true here.
 - Single-writer persistence precedent: `SageFs.Core/Features/ManifestOwner.fs` owns `daemon.sagefm`: a mutation is applied in order, written atomically, and the reply means it is durable; a corrupt file is renamed aside by its owner (`QuarantineCorrupt`, used in `DaemonMode.resumePreviousSessions`). Format primitives: `SageFs.Core/BinaryFormat.fs` (`Crc32`, `BinaryPrimitives.writeLpString` and the bounded readers), spec in `docs/binary-format-spec.md`. The data dir is made owner-only by `DaemonState.ensureDataDir`.
-- Session ids do not survive a restart. `resumePreviousSessions` (`SageFs/DaemonMode.fs:1694`) calls `sessionOps.CreateSession` for each previous entry and logs "Resumed session ... (retired old id ...)" (line 1852). A `RouteBinding.BoundToSession id` token therefore points at an id that no longer exists. `RouteBinding.BoundToCheckout` survives, because a checkout is a path.
+- Session ids do not survive a restart. `resumePreviousSessions` (`SageFs/DaemonMode.fs:1720`) calls `sessionOps.CreateSession` for each previous entry and logs "Resumed session ... (retired old id ...)" (line 1878). A `RouteBinding.BoundToSession id` token therefore points at an id that no longer exists. `RouteBinding.BoundToCheckout` survives, because a checkout is a path.
 - `SessionOwners` (who created a session) is also in memory and is forgotten on restart; `docs/mcp-tools.md` says so ("a daemon restart forgets who made what").
 
 ## Design
@@ -54,7 +111,7 @@ and MemoryOnlyReason =
 
 Restore is a pure function `restore : now -> persisted list -> CapabilityState * RestoreReport`. It rebuilds `Records` and applies no new rule: every record goes back as stored, and the existing `Capability.resolve` decides at the next `Present` whether it is expired or lapsed. The `RestoreReport` is what the daemon logs and what `get_daemon_status` could show: counts restored, counts already expired, counts revoked, counts dropped with a reason each. A file that fails its CRC restores nothing and says so; it never restores part of a table.
 
-Wiring: `CapabilityStore` takes the owner at construction and writes through it on `Mint` and `Revoke`. `Touch` updates `LastSeen` in memory and is written on a timer and at shutdown only; writing on every call would put disk IO on the hot path of every token call. The cost of that choice: after a `kill -9` a token can look idle for up to one flush interval longer than it was. That errs toward refusing, which fails closed. The flush interval is a named constant in `Timeouts`, not a literal.
+Wiring: `CapabilityStore` takes the owner at construction and writes through it on `Mint` and `Revoke`. `Present` (there is no separate `Touch` member) updates `LastSeen` in memory, and that is written on a timer and at shutdown only; writing on every call would put disk IO on the hot path of every token call. The cost of that choice: after a `kill -9` a token can look idle for up to one flush interval longer than it was. That errs toward refusing, which fails closed. The flush interval is a named constant in `Timeouts`, not a literal.
 
 The seat: on restore the cohort ledger already replays the seat; nothing is committed to the cohort at restore. The first call the token makes renews the seat through the call filter's `recordMemberActivity`, as today.
 
@@ -78,7 +135,7 @@ RED first.
 ## Steps
 
 1. Measure the need (below). Stop here if the answer is no.
-2. RED tests 1 to 5 and `CapabilityCodec.fs` (pure encode, decode, `Carry`, `restore`) in `SageFs.Core`, listed in `SageFs.Core.fsproj` after `Capability.fs`. Owns those files and the unit test file.
+2. RED tests 1 to 5 and `CapabilityCodec.fs` (pure encode, decode, `Carry`, `restore`) in `SageFs.Core`, listed in `SageFs.Core.fsproj` after `BinaryFormat.fs` (line 115; `Capability.fs` is line 73 and compiles before the format primitives). Owns those files and the unit test file.
 3. Simulation extension (test 6). Owns `CapabilitySim.fs` and `CapabilitySimInvariants.fs`; parallel with step 2 once the codec types exist.
 4. `CapabilityOwner` and wiring into `CapabilityStore`, flush timer, shutdown flush; owns `SageFs/CapabilityStore.fs` and a new `SageFs/CapabilityOwner.fs`, plus the `SageFs.fsproj` entries. After step 2.
 5. Integration test 7. After 4.

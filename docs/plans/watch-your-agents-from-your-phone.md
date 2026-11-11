@@ -2,6 +2,64 @@
 
 Roadmap item: `watch-your-agents-from-your-phone` (Later, Agents). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898 (0.6.945). Every `path:line` below was read that day. The plan under this section is older; where its numbers disagree with these, these win.
+
+### 1. Outcome
+
+A person opens one link on a phone that is on their tailnet and sees the dashboard read-only: sessions, eval output, the cohort panel with members, claims and the landing queue, live test state. No eval box, no stop, reset, create or tidy button, no settings. A mutating request sent to that listener is refused with a reason, whatever the page shows. Later (slice 2) a second kind of link, minted for one landing, shows that landing and one button (veto or resolve-veto) that acts once.
+
+Outcome gate: a `--integration-browser` journey (`SageFs.Tests/Program.fs:374`, the `DashboardBrowserRunner` entry) that starts a daemon with the viewer listener on a free port and `SAGEFS_VIEWER_HOST=localhost`, loads the page in headless Chromium, and asserts over the matrix {view link, expired link, forged link} x {every viewer route, plus `POST /dashboard/eval`, `/dashboard/reset`, `/dashboard/session/stop/{id}` asked of the viewer port}: the page has no `data-on-click` that posts, no form and no input; a mutating POST is answered with the refusal; zero Datastar console errors. Proven on Linux only. A real phone browser (iOS Safari, Android Chrome) holding the SSE stream through `tailscale serve` is unproven everywhere; nobody on this project can test it until someone with a tailnet runs the "Measure first" check.
+
+### 2. Where the code is today
+
+- The dashboard is a second `WebApplication`: `startDashboardServer` at `SageFs/DaemonMode.fs:1671`, called at `:5301` with `dashboardEndpoints` (`:5271`) plus the hot reload proxy and live bindings endpoints. Loopback only through `LoopbackHost.listenUrl` (`SageFs.Core/SageFsConfig.fs:171`); `LoopbackHost.parse` (`:177`) refuses any other host with the text at `:185`.
+- The origin guard: `HttpOriginGuard.isLoopbackHost` (`SageFs.Core/HttpOriginGuard.fs:93`) and `isLoopbackOrigin` (`:101`). A request that arrives through `tailscale serve` with a `*.ts.net` Host is refused by it today. Tests: `SageFs.Tests/HttpOriginGuardTests.fs`, `OriginGuardOutcomeTests.fs`.
+- Mutating controls are in the markup. Lines carrying `Ds.post`, `Ds.onClick` or `Ds.onSubmit` (`grep -c`, so a floor): `SageFs/DashboardFragments.fs` 37, `SageFs/LiveBindingsDock.fs` 7, `SageFs/Dashboard.fs` 3, `SageFs/PaneMenuView.fs` 2, `SageFs/AppOutputView.fs` 0. The stream handler is `createStreamHandler` (`Dashboard.fs:1582`), mapped at `:3899`; the page's first `Ds.onInit` is at `:383`.
+- Veto and resolve exist: `CohortCommand.VetoLanding` (`SageFs.Core/Cohort.fs:753`), `ResolveVeto` (`:771`). The cohort panel is `renderCohortPanelCore` (`DashboardFragments.fs:3317`) and `renderCohortPanelFor` (`:3551`).
+- The credential item shipped slice 0, and that changes this plan's dependency line. `sfo_` operator credential (`SageFs.Core/EdgeCredential.fs:22`), `EdgeAccess = Open | OperatorOnly` (`:106`), `decide` (`:132`); `Endpoint.createOperatorOnly` (`SageFs.Core/EndpointContracts.fs:30`) and `POST /api/members/mint` (`:77`); the CLI verb `member` (`SageFs/Program.fs:164`, usage `:692`). `apiVersion` is 4 (`EndpointContracts.fs:38`), so the plan's "already 5" is wrong. There is no `sfv_` viewer credential, no `/auth/exchange`, no cookie exchange: the plan's section 3 still has to build them, but it can copy the mint route and the `member` verb instead of waiting for the full credential item.
+- Ratchets that bite here: `routes open to every caller` budget 63 (`SageFs.Tests/EdgeAccessBudgetTests.fs:24`), so every viewer route must carry a non-`Open` access; file sizes `DashboardFragments.fs` 4459 and `Dashboard.fs` 4259 (`SageFs.Tests/RatchetBudgets.fs:343-344`) against 4457 and 4256 real lines, two and three lines of room.
+- Not built: `ViewMode`, `mutating`, `ViewerRoutes.fs`, `ViewerLink.fs`, `startViewerServer`, `SAGEFS_VIEWER_HOST`, `sagefs link`. `[not verified]`: whether `tailscale serve` passes the Host header and `text/event-stream` through unchanged.
+
+### 3. Steps
+
+1. **Pure.** RED `SageFs.Tests/DashboardViewModeTests.fs`, default tier, `[<Tests>]`: "WHY - a viewer render contains no control that posts". Render `renderMainContent` (`DashboardFragments.fs:2773`) with `ViewMode.Viewer` over a snapshot with a session, a vetoed landing and every panel shown, assert no `data-on-click` containing `@post(`, no `<form`, no `<input`. Fails to compile. Then new `SageFs/DashboardViewMode.fs` (`ViewMode`, `mutating`), listed in `SageFs/SageFs.fsproj` before `DashboardFragments.fs`; `renderMainContentIn` gains a `ViewMode` argument and `renderMainContent` passes `Operator`. Wrap call sites one file at a time (LiveBindingsDock, PaneMenuView, Dashboard, then Fragments). Add a ratchet table `postsOutsideMutating` in `RatchetBudgets.fs`, start at the real count, lower with `--ratchets --tighten`. Keep each wrap on one line: Fragments has two lines of budget.
+2. **Pure, parallel with 1.** `SageFs.Core/ViewerLink.fs`: `LinkGrant`, `Spent`, an injected clock, `exchange` and `confirm` as a total function. Tests in `SageFs.Tests/ViewerLinkTests.fs` (property: at most one confirm per grant, none after `until`). Then `SageFs.Simulation/ViewerLinkSim.fs` with the twins the plan names, test file `ViewerLinkSimTests.fs`. Register all three in `SageFs.Tests/SageFs.Tests.fsproj` beside `CapabilitySimTests.fs` (`:912`).
+3. **Edge.** `EdgeAccess` gains a `ViewerLink` case; `EdgeCredential.decide` refuses it on the loopback listeners. `EndpointContracts.fs` gains `viewerEndpoints`, each created with that access, so the open-route count stays 63. `SageFs/ViewerRoutes.fs` (the closed `ViewerRoute` list from the plan), `startViewerServer` beside `startDashboardServer`, started only when `SAGEFS_VIEWER_HOST` is set. The guard gets an allowed-host set for this listener only; test in `HttpOriginGuardTests.fs`. `DECISION:` the setting's type. `SettingValue` (`SageFs.Core/Settings.fs:287`) has `VBindHost of LoopbackHost` and no host-name case; add `VViewerHost` with a parser that accepts a DNS name and refuses anything with a scheme, path or port. Recommendation: add the case; a string setting is a magic string.
+4. **Edge.** `sagefs link view --ttl 30m`: a `Link` verb in `Program.fs` after `Member` (`:164`), posting to a new `OperatorOnly` route `POST /api/viewer/link` that mints a grant (hash only, in the credential table) and prints `https://<SAGEFS_VIEWER_HOST>/dashboard#c=<code>`. `POST /auth/exchange` on the viewer listener spends the code and sets the `HttpOnly; SameSite=Strict` cookie. Wire change: `EndpointContracts.fs` is on the wire-surface list, so the commit carries `Plugin: n/a, a listener and a CLI verb no editor uses`.
+5. **Edge.** The browser journey from section 1. That is the end of slice 1 (read-only view).
+6. **Slice 2.** `sagefs link act --landing <id> --action veto|resolve-veto`, the action page (GET shows, POST acts once), running `VetoLanding` or `ResolveVeto` as the minting member. Needs a notification story to be useful; see "Not now".
+
+### 4. How to check it
+
+- REPL first: a session on `SageFs.Tests`, `send_fsharp_code` the render of step 1 and read the markup before you write the test.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (the open-route, file-size and new `postsOutsideMutating` budgets live there).
+- Inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary --filter-test-list "viewer"`; read the TRUST line's `ran=`.
+- Acceptance: the unfiltered default suite (`--summary`), then `--integration-browser` for the journey. Both must be Trusted.
+
+### 5. Traps in this repo
+
+- Open-route budget 63 (`EdgeAccessBudgetTests.fs:24`): a viewer route created with `Endpoint.create` fails the ratchet. Use the new access case.
+- File-size budgets with two and three lines of room on the two files you must touch most. Put every new function in `DashboardViewMode.fs`, never in Fragments or Dashboard.
+- SAGE-005: `startViewerServer` will want `(port: int) (host: string)` beside the dashboard's `(port: int)`; take a `ViewerListener` record, not two primitives.
+- `EndpointContracts.fs` is wire surface: `Plugin:` trailer on every commit that touches it, and `scripts/ship.fsx` refuses without one.
+- Linux-only machine: the phone and `tailscale serve` cells are manual, by someone with a tailnet. Say so in the docs; do not mark them proven.
+- No new NuGet package. Cookies and the one-time code are ASP.NET Core and `RandomNumberGenerator`.
+
+### 6. Size and order
+
+Slice 1 (read-only): about a week for one person. Steps 1 and 2 run in parallel (disjoint files); 3 after 1; 4 after 2 and 3; 5 last. First commit: `test(dashboard): a viewer render contains no control that posts` with the RED test and `DashboardViewMode.fs`. Slice 2: another week, after the measurement below.
+
+Measure first, by whoever has a tailnet, before slice 2 and ideally before step 3: run `tailscale serve --bg --https=443 http://127.0.0.1:37750`, open `https://<machine>.<tailnet>.ts.net/dashboard` from a phone, and record (a) whether the guard refused it (then the Host arrives unchanged, which is what step 3 assumes), (b) how often the connection banner reconnects over an hour with the screen locked between looks.
+
+### 7. Not now
+
+- Binding the tailnet address directly: `LoopbackHost.parse` says why (`SageFsConfig.fs:185`), and `tailscale serve` gives TLS for free.
+- Push notifications to the phone: without one the action link needs the person to be looking already. Separate decision.
+- Persisting link grants across a restart: `tokens-survive-a-restart` does not cover them, on purpose.
+- Hiding eval output from a viewer: a setting, after the first person asks.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -24,13 +82,13 @@ This item cannot start before `a-token-for-every-daemon-call` ships its credenti
 
 ## What exists today
 
-- The dashboard is a second `WebApplication` started by `startDashboardServer` (`SageFs/DaemonMode.fs:1644`) on `mcpPort + 1` (37750), bound through `LoopbackHost.listenUrl`. It carries `useOriginGuard` and the Falco endpoints from `Dashboard.fs`, nothing else. There is no authentication.
-- The routes it serves include mutating ones in the same table as the reads: `/dashboard/eval`, `/dashboard/eval-file`, `/dashboard/hard-reset`, `/dashboard/reset`, `/dashboard/session/stop/{id}`, `/dashboard/session/purge/{id}`, `/dashboard/session/create`, `/dashboard/run-app/{id}`, `/dashboard/hygiene/tidy/{plan}`, `/dashboard/config/*`, `/dashboard/settings/*`, `/api/shutdown`, `/api/dispatch`. Reads: `GET /dashboard`, `/dashboard/stream/{clientId}` (the SSE morph), `/dashboard/dashboard.css`, `/dashboard/datastar.js`, `/dashboard/inspect/{kind}/{id}`, `/dashboard/app-output/stream`. (From `grep` over `SageFs/Dashboard.fs`; the full list is in `dashboardEndpoints`, `DaemonMode.fs:4560`.)
-- The page is one server-rendered shell that is morphed whole on every push (`#main`). It contains the mutating controls in the markup: `DashboardFragments.fs` has 34 `Ds.post`, `Ds.onClick` or `Ds.onSubmit` sites and `Dashboard.fs` 3. The taste record for this repo insists on one authoritative whole-page render path and no per-panel fragmenting, so a read-only mode must come from a parameter to that path.
-- Landing veto and resolve exist as cohort commands (`Cohort.CohortCommand.VetoLanding of by * LandingId * reason * scope`, `ResolveVeto of by * LandingId * scope`, `SageFs.Core/Cohort.fs:652` and `:670`) and as tools `veto_landing` (a seated Implementer, Verifier or the conductor) and `resolve_veto` (conductor only). `LandingState.Blocked(LandingBlocker.VetoedBy(by, reason), _)` is the state the conductor acts on, and `renderCohortPanel` (`DashboardFragments.fs:2980`) already prints it.
+- The dashboard is a second `WebApplication` started by `startDashboardServer` (`SageFs/DaemonMode.fs:1671` on 2026-11-11) on `mcpPort + 1` (37750), bound through `LoopbackHost.listenUrl`. It carries `useOriginGuard` and the Falco endpoints from `Dashboard.fs`, nothing else. There is no authentication.
+- The routes it serves include mutating ones in the same table as the reads: `/dashboard/eval`, `/dashboard/eval-file`, `/dashboard/hard-reset`, `/dashboard/reset`, `/dashboard/session/stop/{id}`, `/dashboard/session/purge/{id}`, `/dashboard/session/create`, `/dashboard/run-app/{id}`, `/dashboard/hygiene/tidy/{plan}`, `/dashboard/config/*`, `/dashboard/settings/*`, `/dashboard/layout`, `/api/shutdown`, `/api/dispatch`. Reads: `GET /dashboard`, `/dashboard/stream/{clientId}` (the SSE morph), `/dashboard/dashboard.css`, `/dashboard/datastar.js`, `/dashboard/inspect/{kind}/{id}`, `/dashboard/app-output/stream`. (From `grep` over `SageFs/Dashboard.fs`; the full list is in `dashboardEndpoints`, `DaemonMode.fs:5271`.)
+- The page is one server-rendered shell that is morphed whole on every push (`#main`). It contains the mutating controls in the markup: on 2026-11-11 `DashboardFragments.fs` has 37 lines with `Ds.post`, `Ds.onClick` or `Ds.onSubmit`, `LiveBindingsDock.fs` 7, `Dashboard.fs` 3 and `PaneMenuView.fs` 2. The taste record for this repo insists on one authoritative whole-page render path and no per-panel fragmenting, so a read-only mode must come from a parameter to that path.
+- Landing veto and resolve exist as cohort commands (`Cohort.CohortCommand.VetoLanding of by * LandingId * reason * scope`, `ResolveVeto of by * LandingId * scope`, `SageFs.Core/Cohort.fs:753` and `:771`) and as tools `veto_landing` (a seated Implementer, Verifier or the conductor) and `resolve_veto` (conductor only). `LandingState.Blocked(LandingBlocker.VetoedBy(by, reason), _)` is the state the conductor acts on, and `renderCohortPanelCore` (`DashboardFragments.fs:3317`) already prints it.
 - The bind policy: `LoopbackHost.parse` in `SageFs.Core/SageFsConfig.fs` has no non-loopback case on purpose, and the error says SageFs "has no authentication, so it only listens on loopback". Exposing a listener on a tailnet address breaks that rule. Tailscale's own documentation says `tailscale serve` proxies to a local backend (only `http://127.0.0.1` is supported as a target) and terminates HTTPS with an automatically provisioned certificate, so the daemon can keep its rule and let Tailscale do the exposure. This was read from tailscale.com/kb/1242 on 2026-10-26. That page does not say whether `serve` adds identity headers; I did not verify that and the plan does not rely on it.
 - `HttpOriginGuard` rejects any request whose Host is not loopback, as DNS rebinding. A request that arrives through `tailscale serve` carries the tailnet host name, so the guard would refuse every phone request unless the viewer listener has its own allowed-host set.
-- Credential kinds and the one-time exchange do not exist yet; they are designed in `docs/plans/a-token-for-every-daemon-call.md` (`sfv_` viewer prefix, `/auth/exchange`, an `HttpOnly; SameSite=Strict` cookie).
+- Credential kinds and the one-time exchange: slice 0 of `docs/plans/a-token-for-every-daemon-call.md` shipped the operator credential (`sfo_`, `SageFs.Core/EdgeCredential.fs`), `EdgeAccess.OperatorOnly` routes and `sagefs member mint`. The `sfv_` viewer prefix, `/auth/exchange` and the `HttpOnly; SameSite=Strict` cookie are still designed only.
 
 ## Design
 
@@ -90,7 +148,7 @@ The daemon holds link grants in the same in-memory credential table as other tok
 
 No new MCP tool. The catalog does not grow. `sagefs link` is a CLI verb and the routes are HTTP, so the token cost is zero.
 
-Wire and clients: new HTTP routes on the viewer listener, one daemon route for minting links, and the `ViewMode` parameter, which is internal. `EndpointContracts.fs` gains a `viewerEndpoints` list; `apiVersion` is already 5 from the credential item. `sagefs-vscode` and `sagefs.nvim` are unaffected; trailer `Plugin: n/a, a listener and a CLI verb that no editor uses`. Persistence: none.
+Wire and clients: new HTTP routes on the viewer listener, one daemon route for minting links, and the `ViewMode` parameter, which is internal. `EndpointContracts.fs` gains a `viewerEndpoints` list; `apiVersion` is 4 today (`EndpointContracts.fs:38`), and whether a new listener bumps it is a call for whoever lands step 3. `sagefs-vscode` and `sagefs.nvim` are unaffected; trailer `Plugin: n/a, a listener and a CLI verb that no editor uses`. Persistence: none.
 
 Honest limits. A link is a bearer credential: anyone who has it can use it until it expires, and the tailnet is the only network boundary. A viewer sees eval output, which can contain secrets that the dashboard already shows to anyone at the keyboard. The first version offers no push: nothing tells the phone a landing needs the conductor, so the person must already be looking. A notification channel is a separate decision.
 
@@ -126,7 +184,7 @@ No wall-clock waits: expiry runs on an injected clock in tests 4 and 5; the brow
 
 ## Risks and dependencies
 
-- Fixing the render sites touches the two biggest files (`DashboardFragments.fs` 3,996 lines, `Dashboard.fs` 3,816), under file-size ratchets; the `mutating` change should not add lines net.
+- Fixing the render sites touches the two biggest files (`DashboardFragments.fs` 4,457 lines against a budget of 4,459, `Dashboard.fs` 4,256 against 4,259, on 2026-11-11), under file-size ratchets; the `mutating` change should not add lines net.
 - A mutating control missed in the render lands as a dead button on the phone. Test 2 enumerates panels to catch it, and the interface review lens (no dead controls) is the manual check.
 - Depends on `a-token-for-every-daemon-call` (viewer credential, exchange), and for the Act link on `delegate_conductor` and the cohort's veto rules (done). Feeds nothing.
 

@@ -2,6 +2,62 @@
 
 Roadmap item: `move-and-dock-dashboard-panes` (Later, Dashboard). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order: slice 2, the live bindings and app output as movable panes
+
+Written 2026-11-11 against master 8975e898 (0.6.945). Slice 1 shipped in 0.6.943 (commit e70b4aa0) and is described under "Slice 1, as built"; that section is accurate. The "What exists today" and "Design" sections further down pre-date slice 1 and name types (`PaneId`, `layouts.json`, `PaneLayoutJson.fs`) that were built differently; read "Slice 1, as built" for what is real. Every `path:line` here was read on 2026-11-11.
+
+### 1. Outcome
+
+The live bindings pane and the app output pane appear in the Panels menu like the six sidebar panels: To sidebar or To dock, Up, Down, Close, Reopen, and Reset puts them back under the output where they are today. A person in REPL mode can put the bindings tree in the sidebar beside the transcript, or close it, and the choice survives a reload, a daemon restart and a workflow switch, per workflow. The default page is byte-identical to today's. Outcome gate: `DashboardPaneLayoutBrowserTests.fs` grows two panels and the cells {bindings in sidebar, bindings closed, app output in sidebar, everything in the dock} at 375, 768 and 1400 px, each read by `layoutProblems` (no clipped pane, no sideways scroll, every open pane reachable, zero console errors), plus the tree open with knobs and the tweak strip in a 320 px sidebar. Linux headless Chromium only, as every dashboard cell is.
+
+### 2. Where the code is today
+
+- The pure model: `PanelId` has six cases (`SageFs.Core/PaneLayout.fs:16-22`: HotReload, LiveTesting, SessionContext, Friction, AgentTeam, Hygiene), `PaneRegion = Sidebar | Dock` (`:26`), `LayoutWorkflow` (`:35`), `LayoutRefusal` (`:43`), `BookEdit` (`:91`), `PaneLayout.apply` (`:318`), `render` (`:342`), `parse` (`:348`), `defaultFor` (`:264`), `LayoutBook.writesFor` (`:456`). A saved layout that does not name a pane puts it at the end of its default region (`:239-254`). That rule decides where a 0.6.943 layout file puts the two new panes, and the end of the dock region is under `#pane-dock`, which is below where the bindings dock is drawn today.
+- Persistence: `SageFs.Core/PaneLayoutStore.fs`, keys `dashboard.layout.<workflow>` (`:20`) on the global settings layer.
+- Render: `renderMainContentIn` (`SageFs/DashboardFragments.fs:2537`). The output is `snap.OutputPanel` (`:2687`); the dock resize handle follows; `snap.BindingsPanel` is drawn at `:2723` as one already-built `XmlNode`; `PaneMenuView.renderDock (nodesIn PaneRegion.Dock)` draws `#pane-dock` at `:2725`. `renderMainContent` (`:2773`) is the same with `PaneLayoutView.today`.
+- The dock node: `LiveBindingsDock.renderDockWithRemedy` (`SageFs/LiveBindingsDock.fs:1117`) decides both panes through `PaneState.decide` and ends with `shell (liveBindings @ appOutputPane)` where `shell` (`:1140`) is `div#live-dock.live-dock`. `renderDockWith` (`:1163`) and `renderDock` (`:1175`) wrap it. `DockPane = LiveBindings | AppOutput` (`SageFs/DockPanes.fs:15`), `DockPane.all` (`:21`). `AppOutputView.render` (`SageFs/AppOutputView.fs:153`).
+- CSS that assumes `.live-dock` is a direct flex child of `.main-area`: `max-height: var(--dock-max-height)` (`SageFs/dashboard.css:1413`, the variable at `:48`), `.live-dock:has(.live-tree) { height: var(--dock-max-height) }` (`:1422`), and inside the phone media query `max-height: none` and `order: -1` (`:3482-3493`), which put the bindings above the output on a phone. `.pane-dock` has its own ceiling `min(30vh, 22rem)` (`:6119`). `.sidebar-inner` is `:195`.
+- Controls and route: `PaneMenuView.row` (`SageFs/PaneMenuView.fs:165`), `PaneLayoutView.ofRead` (`:93`), `today` (`:107`); `createPaneLayoutEditHandler` (`SageFs/Dashboard.fs:3729`), `POST /dashboard/layout` (`:4103`).
+- Tests: `PaneLayoutTests.fs`, `PaneMenuViewTests.fs`, `DashboardPaneLayoutBrowserTests.fs` (`SageFs.Tests.fsproj:1031-1033`), `PaneLayoutSimDstTests.fs` (`:1007`); the browser lists are `Integration.Dedicated "--integration-browser"` (`DashboardPaneLayoutBrowserTests.fs:289, 347, 369`). `layoutProblems` is `let private` in `DashboardLiveBindingsDockBrowserTests.fs:69`, so slice 2 either copies it or lifts it into a shared module.
+- On 2026-11-11 the working tree has an uncommitted edit to `PaneMenuView.fs:82` and a new case in `PaneMenuViewTests.fs` (another agent's, about the no-session reason line). Check `git status` before you start; do not sweep it into your commit.
+
+### 3. Steps
+
+1. **Measurement, edge (browser).** A RED cell, in a new `DashboardLiveBindingsPaneBrowserTests.fs` or in `DashboardPaneLayoutBrowserTests.fs`: build the in-memory page as the pane tests do, move the node `#live-dock` (with a tree, knobs and the tweak strip) into `.sidebar-inner`, set `--sidebar-width` to 200, 320, 480 and 600 px, read `layoutProblems`. Expected red: the pane keeps `height: var(--dock-max-height)` and overflows the column. The output of this cell is the list of CSS rules step 3 must change. Command below.
+2. **Pure.** RED in `PaneLayoutTests.fs`: "WHY - a layout saved before the bindings pane existed draws it where today's page draws it" (the pane's default slot is first in the dock region, before any moved panel, for every workflow), and the existing properties over `PanelId.all` with eight cases. Then `PanelId.LiveBindings` and `PanelId.AppOutput`, their `token` (`PaneLayout.fs:108`), `defaultFor` (`:264`) putting both in `Dock` first, in that order. `DECISION:` one pane for the whole dock or two. Recommendation: two, matching `DockPane`; a person who wants the tree beside the transcript rarely wants the app log there too.
+3. **Pure.** Split `renderDockWithRemedy` at `shell (liveBindings @ appOutputPane)` into `renderBindingsPane` and `renderAppOutputPane`, each returning its own node with its own class (`live-pane-bindings`, `live-pane-app-output`); `renderDock*` compose them inside `shell` so the default output is unchanged. RED first: a Verify snapshot of `renderDock` over a rich `BindingsSource` taken before the change, asserted equal after. The snapshot carries `BindingsPanel` today as one node; `DashboardSnapshot` (`SageFs/DashboardTypes.fs`) gains a second node or a pair. `DashboardTypes.fs` is on the wire-surface list: trailer `Plugin: n/a dashboard markup only, no wire change`.
+4. **Edge (CSS).** The rules at `:1413`, `:1422` and `:3482-3493` move from `.live-dock` to a class the pane carries only when it is drawn in the dock region (`renderMainContentIn` knows the region). A pane in the sidebar gets the sidebar's scroll and no `order: -1`. Step 1's cell goes green here.
+5. **Edge.** `renderMainContentIn`: the two panes become entries of `nodesIn`, drawn by region like the six panels, with the dock resize handle drawn only when something is in the dock. Default layout renders the markup `renderMainContent` renders today; the snapshot test from slice 1 (`PaneMenuViewTests`) is the check.
+6. **Edge.** `PaneMenuView.row` gets the two panes with their relevance (`BindingsPresence`, `AppOutputPresence` from `DockPanes.fs:29, :42` decide "nothing to show"). Browser cells from section 1 added to `DashboardPaneLayoutBrowserTests.fs`.
+7. **Edge.** The daemon journey the slice 1 notes list under "What is left": move the bindings pane, reload, restart the daemon on the same data dir, switch workflow, Reset. `--integration-browser`, its own `SAGEFS_DATA_DIR`.
+
+### 4. How to check it
+
+- REPL first: a session on `SageFs.Tests`; `send_fsharp_code` `PaneLayout.defaultFor LayoutWorkflow.Repl` and `PaneLayout.parse` of a 0.6.943 layout string before writing step 2's test.
+- `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (file-size, inline-JS, type-scale and glyph ratchets).
+- Inner loop: `... SageFs.Tests.dll --summary --filter-test-list "PaneLayout"` and `--filter-test-list "PaneMenuView"`; read `ran=`.
+- Browser cells: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-browser --filter-test-list "pane layout"`. Acceptance: unfiltered `--summary` and unfiltered `--integration-browser`, both Trusted.
+
+### 5. Traps in this repo
+
+- `DashboardFragments.fs` is 4,457 lines against a budget of 4,459 (`RatchetBudgets.fs:343`). Step 5 must not add lines net; put new functions in `PaneMenuView.fs` or `LiveBindingsDock.fs`.
+- Relative units only (`DashboardTypeScaleTests`): the sidebar widths in step 1 are test inputs, the CSS stays in rem.
+- Inline-JS budget 6 KB (`DashboardSnapshotTests`): no script; the panes move by Datastar attributes, as slice 1 did.
+- `PanelId` is also the saved-text vocabulary (`PaneLayout.fs:108`): a case rename breaks every saved layout. Add, never rename.
+- `Ds.preserveAttr "open"` on the menu and the pane's own `<details>` state are signals; a moved pane must not lose them (the slice 1 "Measure first" question, still unmeasured; step 1's cell answers it by reading `details.open` after the morph).
+- Commit `SageFs.Tests.fsproj` whole. No new NuGet package.
+
+### 6. Size and order
+
+A week to a week and a half for one person. 1 first (it decides 4), then 2 and 3 in parallel (disjoint files), 4, 5, 6, 7. First commit: `test(dashboard): the bindings dock in a 200 to 600 px sidebar column, measured` with the RED browser cell from step 1, red on purpose.
+
+### 7. Not now
+
+- A menu on each pane's own header, and drag and drop: the plan's step 8; after the two panes move by button.
+- Different default layouts per workflow: a decision for Will, listed under "What is left".
+- Command palette entries: `command-palette-and-one-timeline` owns them.
+- A phone layout that honours docking: below 769 px panes stack in region order, by design.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
