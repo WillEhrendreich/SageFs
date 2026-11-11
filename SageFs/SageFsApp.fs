@@ -1840,14 +1840,7 @@ module SageFsUpdate =
         Instrumentation.coverageBitmapsCollected.Add(1L)
         let model', _ =
           tryUpdateLiveTestingState sessionId (fun cycle ->
-            // A reading that hit nothing is "ran somewhere unrecorded" (after a keystroke eval the tests run
-            // against evaluated code, which the host's coverage read skips), not "covers nothing". It never
-            // replaces a recorded bitmap and never creates one: absent means unknown, and unknown is kept
-            // by every selection that narrows with coverage.
-            let bitmaps =
-              match Features.LiveTesting.CoverageBitmap.popCount bitmap with
-              | 0 -> cycle.TestState.TestCoverageBitmaps
-              | _ -> testIds |> Array.fold (fun acc tid -> Map.add tid bitmap acc) cycle.TestState.TestCoverageBitmaps
+            let bitmaps = Features.LiveTesting.CoverageReading.store cycle.RunBasis testIds bitmap cycle.TestState.TestCoverageBitmaps
             { cycle with TestState = { cycle.TestState with TestCoverageBitmaps = bitmaps } }, ()) model
         model', []
 

@@ -790,6 +790,14 @@ Evidence: `CoverageBitmap.narrowByLines` and `LineEdit.between` in `SageFs.Core/
 Reopen it if: a narrowed run ever misses a test it should have run. That is the failure this design exists to make
 impossible, and a case for it should become a refusal rule, not a heuristic.
 
+That happened, found by reading on 2026-11-10. A keystroke's run is against evaluated code, which lives in a dynamic
+assembly the probes cannot see, so a test's reading after it has no hits in the file just edited, while its hits in
+every other file are real. The reading replaced the stored bitmap, and the next in-place keystroke on the same file
+narrowed that test away. The rule now: a reading taken during an evaluated run is added to the stored bitmap and never
+replaces it, and a test with no stored bitmap keeps none. Only a run against compiled binaries replaces
+(`CoverageReading.store` in `SageFs.Core/Features/LiveTestingCycle.fs`, the two-keystroke case in
+`SageFs.Tests/LiveTestingPerTestCoverageTests.fs`).
+
 ## Every row says what it ran against, and a real build confirms or contradicts an evaluated verdict
 
 A keystroke's tests run against code the live session evaluated, not against a build. That is the fast path and it

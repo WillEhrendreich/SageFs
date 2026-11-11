@@ -14,6 +14,24 @@ open SageFs.Measures
 // per-session cycle state. Daemon-only. The isolated FSI host compiles LiveTestingTypes.fs and never
 // this file, so what lives here costs the host nothing.
 
+/// What a coverage reading taken after a test may change in the stored per-test bitmaps.
+module CoverageReading =
+  /// A reading that hit nothing never replaces or creates a bitmap. A run against evaluated code is blind to that
+  /// code (it lives in a dynamic assembly the probes do not reach, and so does every buffer the session evaluated
+  /// since its build), so its reading is evidence only of what it hit: it is added to a stored bitmap of the same
+  /// size and never replaces one, and a test with no stored bitmap keeps none, which every narrowing reads as
+  /// unknown and keeps. A reading against compiled binaries is the whole truth about them and replaces.
+  let store (basis: RunBasis) (testIds: TestId array) (reading: CoverageBitmap) (stored: Map<TestId, CoverageBitmap>) =
+    match CoverageBitmap.popCount reading, basis with
+    | 0, _ -> stored
+    | _, RunBasis.Evaluated _ ->
+      testIds
+      |> Array.fold (fun acc tid ->
+        match Map.tryFind tid acc with
+        | Some old when old.Count = reading.Count -> Map.add tid (CoverageBitmap.union old reading) acc
+        | _ -> acc) stored
+    | _, (RunBasis.Compiled | RunBasis.ConfirmingBuild _) -> testIds |> Array.fold (fun acc tid -> Map.add tid reading acc) stored
+
 /// What a type-check decided, and which of four things that was. Every case but `Inactive` carries the decision
 /// the cycle records as the last one, so "nothing was judged" and "nothing was selected" are different answers.
 [<RequireQualifiedAccess>]

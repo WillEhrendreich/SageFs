@@ -363,4 +363,41 @@ let recordingTests =
       model.LiveTesting.TestState.TestCoverageBitmaps
       |> Map.containsKey testA.Id
       |> Expect.isFalse "unknown stays unknown instead of becoming 'covers nothing'"
+
+    testCase "WHY — two in-place keystrokes on one file still select the test the first one ran, because its evaluated reading cannot see the file" <| fun _ ->
+      // Module.fs slots 0..3 as in the fixture, plus slot 4 in Other.fs. A and B were recorded against the build.
+      let map = mapOf (Array.append fixtureMap.Slots [| slot "Other.fs" 1 1 |]) [| 3 |] [||]
+      let compiled = Map.ofList [ testA.Id, bitmapOf 5 [ 0; 2; 4 ]; testB.Id, bitmapOf 5 [ 1; 2 ] ]
+      let model =
+        let b = SageFsModel.initial ()
+        { b with
+            LiveTesting =
+              { b.LiveTesting with
+                  RunBasis = RunBasis.Evaluated (AnalysisIdentity.ofContent "keystroke 1", [ testA.Id ])
+                  TestState = { b.LiveTesting.TestState with TestCoverageBitmaps = compiled } } }
+      // Keystroke 1 edited line 10, so A ran against the evaluated module. Its probes in Module.fs were dark.
+      let afterRun, _ =
+        SageFsUpdate.update (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| testA.Id |], bitmapOf 5 [ 4 ]))) model
+      // Keystroke 2 edits line 20. Line 10 still differs from the build, so both lines are changed.
+      CoverageBitmap.narrowByLines moduleFs (ChangedLines.InPlace (Set.ofList [ 10; 20 ])) [| map |] afterRun.LiveTesting.TestState.TestCoverageBitmaps [| testA.Id; testB.Id |]
+      |> narrowedIds
+      |> Array.contains testA.Id
+      |> Expect.isTrue "A still runs line 10 as far as anyone knows"
+
+    testCase "an evaluated reading is not stored for a test with no bitmap, because it is blind to the evaluated code" <| fun _ ->
+      let model =
+        let b = SageFsModel.initial ()
+        { b with LiveTesting = { b.LiveTesting with RunBasis = RunBasis.Evaluated (AnalysisIdentity.ofContent "k", [ testA.Id ]) } }
+      let after, _ =
+        SageFsUpdate.update (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| testA.Id |], bitmapOf 4 [ 3 ]))) model
+      after.LiveTesting.TestState.TestCoverageBitmaps |> Map.containsKey testA.Id |> Expect.isFalse "unknown stays unknown"
+
+    testCase "a compiled reading replaces the stored bitmap" <| fun _ ->
+      let first, _ =
+        SageFsUpdate.update (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| testA.Id |], bitmapOf 4 [ 0; 2 ]))) (SageFsModel.initial ())
+      let second, _ =
+        SageFsUpdate.update (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| testA.Id |], bitmapOf 4 [ 1 ]))) first
+      second.LiveTesting.TestState.TestCoverageBitmaps |> Map.find testA.Id
+      |> CoverageBitmap.equivalent (bitmapOf 4 [ 1 ])
+      |> Expect.isTrue "a build's reading is the whole truth about that build"
   ]
