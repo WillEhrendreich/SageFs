@@ -2321,6 +2321,9 @@ let run
   // the moment it is ready, without a manual enable toggle.
   let mutable onSessionReadyExtra : (WorkerProtocol.SessionId -> unit) =
     fun _ -> ()
+  // Assigned after elmRuntime exists (below): the manager says the session list changed, and the model refreshes it.
+  let mutable onSessionsChangedCallback : (unit -> unit) =
+    fun () -> ()
 
   // Create SessionManager — the single source of truth for all sessions
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
@@ -2328,6 +2331,7 @@ let run
     SessionManager.createMonitored cts.Token
       { SessionManagerCallbacks.silent with
           OnSessionProgressChanged = fun () -> stateChangedEvent.Trigger SessionProgress
+          OnSessionsChanged = fun () -> onSessionsChangedCallback ()
           OnTestDiscovery = fun sid report -> onTestDiscoveryCallback sid report
           OnInstrumentationMaps = fun sid maps -> onInstrumentationMapsCallback sid maps
           OnSessionReady = fun sid -> stateChangedEvent.Trigger (SessionReady sid); onSessionReadyExtra sid
@@ -2454,6 +2458,8 @@ let run
         | true, pending -> appOutputPending.[sidStr] <- entry :: pending
         | false, _ -> appOutputPending.[sidStr] <- [ entry ])
   // The cohort's integration session is driven by the landing gate alone; the manager never levels the REPL of such a session.
+  // The model's session list follows the manager's snapshot: each one whose sessions differ dispatches a ListSessions (the loop folds piled-up ones).
+  onSessionsChangedCallback <- fun () -> elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
   whoDrivesCallback <-
     fun sid ->
       match Set.contains (WorkerProtocol.SessionId.value sid) (elmRuntime.GetModel()).VerifyingSessions with
@@ -5433,21 +5439,7 @@ let run
           log.LogWarning("Session resume failed: {Error}", ex.Message)
       } :> System.Threading.Tasks.Task)
 
-  // Periodic status polling — refreshes session status (Starting → Ready)
-  // so SSE subscribers see warmup progress in real time.
-  // 10s interval: steady-state polling is cheap (short-circuited when unchanged)
-  // but avoids the 2s cascade that dominated the render budget.
-  let _statusPollTask =
-    System.Threading.Tasks.Task.Run(fun () ->
-      task {
-        try
-          while not cts.Token.IsCancellationRequested do
-            do! System.Threading.Tasks.Task.Delay(Timeouts.sessionStatusPoll, cts.Token)
-            elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-        with
-        | :? OperationCanceledException -> ()
-        | ex -> log.LogWarning("Status poll failed: {Error}", ex.Message)
-      } :> System.Threading.Tasks.Task)
+  // No status poll: `OnSessionsChanged` (wired above) refreshes the model's list from every snapshot that differs.
 
   // Issue #136: "tell users and agents when they are running a stale
   // SageFs" — the daemon that has been up the longest is exactly the one

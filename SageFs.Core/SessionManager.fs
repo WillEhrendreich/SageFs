@@ -316,7 +316,6 @@ module SessionManager =
 
   let killWorkerPids = WorkerSpawn.killWorkerPids
 
-
   let private appSlotOf (session: ManagedSession) : AppRun.AppSlot =
     { Generation = session.AppGeneration; State = session.Info.App }
 
@@ -451,7 +450,8 @@ module SessionManager =
         (newState, Error err)
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
-        System.Threading.Interlocked.Exchange(snapshotRef, { QuerySnapshot.fromState state with SupervisorHealth = beat.Health }) |> ignore
+        let next = { QuerySnapshot.fromState state with SupervisorHealth = beat.Health }
+        SnapshotChange.announce callbacks.OnSessionsChanged (System.Threading.Interlocked.Exchange(snapshotRef, next)).Sessions next.Sessions
       // Hand `workers` to the reaper (a dedicated thread each) and note their pids in the book. Nothing here waits for a
       // worker: the loop returns as soon as the threads are started, and each worker's fate comes back as WorkerReaped.
       let reapAside (id: SessionId) (workers: ManagedSession list) (state: ManagerState) : ManagerState =
