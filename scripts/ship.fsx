@@ -3,6 +3,9 @@
 // A rerun of a commit whose gate failed does not rerun the tiers that were green (pass records, see
 // local-gate.fsx); `--fresh` runs every tier.
 //
+// A gate for a DIFFERENT commit that is already running is left alone: this ship stops with exit 65 and a message
+// naming that gate's commit and pid. `--supersede` stops that gate and gates this commit instead.
+//
 // Bump the version, gate that commit on this machine, then push exactly it to master.
 //
 // Pushes the GATED sha, never a moving HEAD: other agents may commit while
@@ -156,8 +159,12 @@ let runRatchets (target: string) : unit =
 // ---- the ship -------------------------------------------------------------------------------------------
 
 // `--fresh` runs every tier even if the gate has a green record for it from an earlier run of this commit.
-let reuse, shipArguments =
+let reuse, withSupersede =
   fsi.CommandLineArgs |> Array.skip 1 |> Array.filter (fun a -> a <> "--") |> List.ofArray |> ReleaseRules.splitFresh
+
+// `--supersede` lets this ship stop a gate that is running a different commit. Without it the gate refuses (exit 65)
+// and leaves the other gate alone.
+let supersede, shipArguments = ReleaseRules.splitSupersede withSupersede
 
 let private given = shipArguments |> List.tryHead
 
@@ -256,8 +263,18 @@ let gateFailureFile : string =
     | path -> path
   Path.Combine(home, "logs", sha.Substring(0, 8) + ".failure.txt")
 
-match (start repo "dotnet" (fsiScript "local-gate.fsx" [ "--"; sha ]) false).Code with
+let private gateArguments =
+  [ "--"; sha ]
+  @ (match supersede with
+     | ReleaseRules.StopOtherCommit -> [ "--supersede" ]
+     | ReleaseRules.RefuseOtherCommit -> [])
+
+match (start repo "dotnet" (fsiScript "local-gate.fsx" gateArguments) false).Code with
 | 0 -> ()
+| 65 ->
+  die
+    [ "ship: another gate, for a different commit, is running, so this ship stopped before it gated anything; nothing was installed or pushed."
+      "      the gate's message above names that gate's commit and pid. Wait for it, stop it yourself, or run ship again with --supersede." ]
 | code ->
   die
     [ sprintf "ship: the local gate failed (exit %d); nothing was installed or pushed." code

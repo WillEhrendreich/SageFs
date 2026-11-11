@@ -304,6 +304,54 @@ let parseGateArgs (argv: string list) : GateRequest =
   | "--force" :: rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), true, mode)
   | rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), false, mode)
 
+/// What a gate does when another gate, for a DIFFERENT commit, already holds the lock. Several agents ship from one
+/// checkout, and the older gate may be the other agent's disjoint work: its verdict is not worthless just because a
+/// newer commit exists. So the default is to leave it alone, and stopping it takes `--supersede`.
+type SupersedePolicy =
+  | RefuseOtherCommit
+  | StopOtherCommit
+
+/// `--supersede` anywhere in `argv` (the gate's own or ship's arguments), and the arguments without it, in their order.
+let splitSupersede (argv: string list) : SupersedePolicy * string list =
+  let kept = argv |> List.filter (fun a -> a <> "--supersede")
+  match kept.Length = argv.Length with
+  | true -> RefuseOtherCommit, kept
+  | false -> StopOtherCommit, kept
+
+/// The gate that holds the lock: what its `current` file names, and whether that pid is still a live process.
+type RunningGate = { Pid: int; Sha: string; Alive: bool }
+
+/// What a gate that could not take the lock does next.
+type TurnDecision =
+  /// The holder is gating this same commit and is doing the work: wait for it, then take its pass.
+  | WaitForSameCommit of RunningGate
+  /// The holder is gating another commit and the user asked to stop it.
+  | StopRunningGate of RunningGate
+  /// The holder is gating another commit and nobody asked to stop it: exit and kill nothing.
+  | RefuseBusy of RunningGate
+  /// The lock is held but no live gate is named for it (no `current` file, or its pid is gone): kill nothing, wait.
+  | WaitForUnnamedHolder
+
+/// Pure: decides from the commit this gate wants, the policy, and who holds the lock. Never kills anything by itself;
+/// `StopRunningGate` is the only case that does, and it needs `StopOtherCommit`.
+let decideTurn (sha: string) (policy: SupersedePolicy) (running: RunningGate option) : TurnDecision =
+  match running with
+  | Some gate when gate.Alive && gate.Sha = sha -> WaitForSameCommit gate
+  | Some gate when gate.Alive ->
+    match policy with
+    | StopOtherCommit -> StopRunningGate gate
+    | RefuseOtherCommit -> RefuseBusy gate
+  | Some _
+  | None -> WaitForUnnamedHolder
+
+/// What the refused gate prints: whose gate is running, which commit and pid, and the two ways forward.
+let busyMessages (mine: string) (gate: RunningGate) : string list =
+  [ sprintf "a gate for %s is already running (pid %d) and this one is for %s, so it was left alone." (shortSha gate.Sha) gate.Pid (shortSha mine)
+    "that gate may be another agent's work; stopping it throws away up to an hour of its wall clock and gives it no verdict."
+    "  see it:    dotnet fsi scripts/gate-tail.fsx -- --status"
+    "  wait:      run this again after it ends (its pass or failure is recorded under the gate's logs)"
+    sprintf "  stop it:   kill %d   (or rerun with --supersede, which stops that gate and gates %s instead)" gate.Pid (shortSha mine) ]
+
 /// Whether the pipeline may take a green tier's record from an earlier run of the same commit.
 type PassReuse =
   | AllowReuse

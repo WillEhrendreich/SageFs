@@ -2,6 +2,8 @@
 // scripts/local-gate.fsx --force <commit>            re-gate even if it already passed, and run every tier (no pass records)
 // scripts/local-gate.fsx --keep-going [<commit>]     do not cancel the other tiers at the first red one: every tier runs and the
 //                                                    trust table lists every red in one run (it gates only, ship still decides)
+// scripts/local-gate.fsx --supersede [<commit>]      if a gate for a DIFFERENT commit is running, stop it and gate this one
+//                                                    (without the flag that gate is left alone and this run exits 65)
 // scripts/local-gate.fsx --promote <commit> <dir>    copy a passed commit's release bundle into <dir>
 //                                                    (used by the self-hosted "main build" job)
 //
@@ -27,8 +29,9 @@
 // The pure parts (argument reading, the checkout's name, the console filter, the lease reply) are
 // ReleaseRules.fs, tested in SageFs.Tests; this file is the IO around them.
 //
-// Exit codes: 0 passed (or already had); 1 --promote of a commit with no pass; 64 bad arguments; 9 a git step
-// failed; any other code is the pipeline's own, passed through.
+// Exit codes: 0 passed (or already had); 1 --promote of a commit with no pass; 64 bad arguments; 65 another gate,
+// for a different commit, is running and --supersede was not given; 9 a git step failed; any other code is the
+// pipeline's own, passed through.
 #load "ReleaseRules.fs"
 #load "../SageFs.Core/GateCheckout.fs"
 
@@ -88,18 +91,21 @@ type Failure =
   | GitFailed of what: string * output: string
   | NoPassToPromote of sha: string
   | PipelineFailed of exitCode: int
+  | GateBusy of message: string list
 
 let exitCodeOf = function
   | Usage _ -> 64
   | GitFailed _ -> 9
   | NoPassToPromote _ -> 1
   | PipelineFailed code -> code
+  | GateBusy _ -> 65
 
 let describe = function
   | Usage m -> m
   | GitFailed (what, output) -> sprintf "git %s failed: %s" what output
   | NoPassToPromote sha -> sprintf "%s has no pass to promote" sha
   | PipelineFailed code -> sprintf "the pipeline exited %d" code
+  | GateBusy message -> String.Join("\n  ", message)
 
 exception Stop of Failure
 let fail f = raise (Stop f)
@@ -238,21 +244,24 @@ let runningGate () : (int * string) option =
 
 /// A manual gate and the runner's fallback must never share the checkout, the build output or the test ports.
 ///
-/// Superseding rather than queueing, because an older gate is validating a commit we are no longer shipping:
-/// its verdict is already worthless, and waiting for it just pays for that worthlessness in wall clock, twice,
-/// since the machine is saturated the whole time. The one exception is a gate already running THIS commit,
-/// which is doing your work for you.
+/// A gate already running THIS commit is doing your work for you: wait for it. A gate running a DIFFERENT commit is
+/// left alone, because with several agents shipping from one checkout it may be someone else's disjoint work, and
+/// stopping it costs up to an hour of wall clock and gives that commit no verdict. This run refuses (exit 65) and names
+/// the running gate's commit and pid. `--supersede` is the explicit way to stop it (ReleaseRules.decideTurn).
 type Turn =
   | MyTurn of FileStream
   | PassedWhileWaiting of FileStream
 
-let takeTurn (sha: string) (force: bool) : Turn =
+let takeTurn (sha: string) (force: bool) (policy: ReleaseRules.SupersedePolicy) : Turn =
   let short = ReleaseRules.shortSha sha
   match tryLock () with
   | Some held -> MyTurn held
   | None ->
-    match runningGate () with
-    | Some (_, runningSha) when runningSha = sha ->
+    let named =
+      runningGate ()
+      |> Option.map (fun (pid, runningSha) -> { ReleaseRules.RunningGate.Pid = pid; ReleaseRules.RunningGate.Sha = runningSha; ReleaseRules.RunningGate.Alive = isAlive pid })
+    match ReleaseRules.decideTurn sha policy named with
+    | ReleaseRules.WaitForSameCommit _ ->
       say (sprintf "%s is already being gated; waiting for that run" short)
       let held = waitForLock ()
       match not force && File.Exists(Path.Combine(passedDir sha, "ok")) with
@@ -260,22 +269,23 @@ let takeTurn (sha: string) (force: bool) : Turn =
         say (sprintf "%s passed while waiting" short)
         PassedWhileWaiting held
       | false -> MyTurn held
-    | running ->
-      let runningSha = running |> Option.map snd |> Option.defaultValue ""
-      say (sprintf "superseding the gate for %s - this run gates %s" (if runningSha = "" then "" else ReleaseRules.shortSha runningSha) short)
-      match running with
-      | Some (pid, _) when isAlive pid ->
-        killTree pid
-        // TERM first so a tier can flush its log, then insist.
-        let rec waitDead attempts =
-          match attempts > 0 && isAlive pid with
-          | true ->
-            Thread.Sleep supersedePollEvery
-            waitDead (attempts - 1)
-          | false -> ()
-        waitDead supersedeAttempts
-        (try Process.GetProcessById(pid).Kill() with _ -> ())
-      | _ -> ()
+    | ReleaseRules.RefuseBusy running -> fail (GateBusy (ReleaseRules.busyMessages sha running))
+    | ReleaseRules.StopRunningGate running ->
+      let pid = running.Pid
+      say (sprintf "--supersede: stopping the gate for %s (pid %d) - this run gates %s" (ReleaseRules.shortSha running.Sha) pid short)
+      killTree pid
+      // TERM first so a tier can flush its log, then insist.
+      let rec waitDead attempts =
+        match attempts > 0 && isAlive pid with
+        | true ->
+          Thread.Sleep supersedePollEvery
+          waitDead (attempts - 1)
+        | false -> ()
+      waitDead supersedeAttempts
+      (try Process.GetProcessById(pid).Kill() with _ -> ())
+      MyTurn (waitForLock ())
+    | ReleaseRules.WaitForUnnamedHolder ->
+      say "the gate lock is held and no live gate is named for it; waiting for it to free"
       MyTurn (waitForLock ())
 
 // ── the build lease ──────────────────────────────────────────────────────────
@@ -413,7 +423,7 @@ let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.Pa
   p.WaitForExit()
   p.ExitCode
 
-let gate (sha: string) (force: bool) (mode: ReleaseRules.FailureMode) : int =
+let gate (sha: string) (force: bool) (mode: ReleaseRules.FailureMode) (policy: ReleaseRules.SupersedePolicy) : int =
   let short = ReleaseRules.shortSha sha
   let skip = not force && File.Exists(Path.Combine(passedDir sha, "ok"))
   match skip with
@@ -421,7 +431,7 @@ let gate (sha: string) (force: bool) (mode: ReleaseRules.FailureMode) : int =
     say (sprintf "%s already passed (%s)" short ((File.ReadAllText(Path.Combine(passedDir sha, "ok"))).Trim()))
     0
   | false ->
-    match takeTurn sha force with
+    match takeTurn sha force policy with
     | PassedWhileWaiting held ->
       held.Dispose()
       0
@@ -522,10 +532,11 @@ let code =
     use _hup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, onSignal 129)
     Directory.CreateDirectory passedRoot |> ignore
     Directory.CreateDirectory logsRoot |> ignore
-    match ReleaseRules.parseGateArgs argv with
+    let policy, withoutSupersede = ReleaseRules.splitSupersede argv
+    match ReleaseRules.parseGateArgs withoutSupersede with
     | ReleaseRules.Usage m -> fail (Usage m)
     | ReleaseRules.Promote (commit, into) -> promote commit into
-    | ReleaseRules.Gate (commit, force, mode) -> gate (mustGit repo [ "-C"; repo; "rev-parse"; commit + "^{commit}" ]) force mode
+    | ReleaseRules.Gate (commit, force, mode) -> gate (mustGit repo [ "-C"; repo; "rev-parse"; commit + "^{commit}" ]) force mode policy
   with
   | Stop (PipelineFailed failed) -> failed
   | Stop f ->

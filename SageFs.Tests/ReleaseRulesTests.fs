@@ -319,6 +319,41 @@ let gateTests =
       | Usage _ -> ()
       | other -> failtestf "expected Usage, got %A" other
 
+    testCase "WHY — --supersede is read from anywhere and leaves the other arguments as they were, so ship can hand it to the gate" <| fun _ ->
+      splitSupersede [] |> Expect.equal "absent means refuse" (RefuseOtherCommit, [])
+      splitSupersede [ "abc123" ] |> Expect.equal "a commit alone" (RefuseOtherCommit, [ "abc123" ])
+      splitSupersede [ "--supersede"; "abc123" ] |> Expect.equal "before a commit" (StopOtherCommit, [ "abc123" ])
+      splitSupersede [ "--force"; "abc123"; "--supersede" ] |> Expect.equal "after the others" (StopOtherCommit, [ "--force"; "abc123" ])
+
+    testCase "WHY — a gate for another commit stops a running gate only when --supersede was passed, and never one it cannot name" <| fun _ ->
+      let mine = sha1
+      let other = sha2
+      let running (sha: string) (alive: bool) : RunningGate option = Some { Pid = 4242; Sha = sha; Alive = alive }
+      let alive (sha: string) = { Pid = 4242; Sha = sha; Alive = true }
+      for policy in [ RefuseOtherCommit; StopOtherCommit ] do
+        decideTurn mine policy (running mine true) |> Expect.equal (sprintf "the same commit waits under %A" policy) (WaitForSameCommit (alive mine))
+        decideTurn mine policy (running other false) |> Expect.equal (sprintf "a dead pid is not killed under %A" policy) WaitForUnnamedHolder
+        decideTurn mine policy (running mine false) |> Expect.equal (sprintf "a dead pid for this commit is not waited on under %A" policy) WaitForUnnamedHolder
+        decideTurn mine policy None |> Expect.equal (sprintf "no current file waits under %A" policy) WaitForUnnamedHolder
+      decideTurn mine RefuseOtherCommit (running other true) |> Expect.equal "another agent's gate is refused" (RefuseBusy (alive other))
+      decideTurn mine StopOtherCommit (running other true) |> Expect.equal "and stopped only on request" (StopRunningGate (alive other))
+
+    testCase "WHY — the refusal names the running gate's commit and pid, this gate's commit, and both ways forward" <| fun _ ->
+      let message = busyMessages sha1 { Pid = 31337; Sha = sha2; Alive = true } |> String.concat "\n"
+      message |> Expect.stringContains "the running gate's commit" (shortSha sha2)
+      message |> Expect.stringContains "the running gate's pid" "31337"
+      message |> Expect.stringContains "this gate's commit" (shortSha sha1)
+      message |> Expect.stringContains "how to stop it by pid" "kill 31337"
+      message |> Expect.stringContains "how to stop it from the gate" "--supersede"
+      message |> Expect.stringContains "how to see it" "gate-tail.fsx"
+
+    testCase "WHY — the gate script asks the pure decision before it stops anything" <| fun _ ->
+      let gate = read "scripts/local-gate.fsx"
+      gate |> Expect.stringContains "the decision is the pure one" "ReleaseRules.decideTurn"
+      gate |> Expect.stringContains "the refusal is the pure message" "ReleaseRules.busyMessages"
+      (gate.IndexOf "ReleaseRules.StopRunningGate", gate.IndexOf "killTree pid") |> Expect.isLessThan "a gate is killed only inside the stop branch"
+      (gate.IndexOf "ReleaseRules.StopRunningGate", -1) |> Expect.isGreaterThan "and the stop branch exists"
+
     testCase "WHY — elapsed time reads as minutes and seconds with no padding, the way the gate always printed it" <| fun _ ->
       formatElapsed (TimeSpan(0, 3, 7)) |> Expect.equal "minutes and seconds" "3m7s"
       formatElapsed TimeSpan.Zero |> Expect.equal "under a second" "0m0s"
