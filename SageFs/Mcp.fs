@@ -14,6 +14,7 @@ open SageFs.WarmUp
 open SageFs.Features.CellDependenciesReport
 open SageFs.Utils
 open SageFs.McpSessionRouting
+open SageFs.McpEcho
 open SageFs.McpSessionState
 open SageFs.McpRouteError
 open SageFs.McpAnalysisViews
@@ -452,9 +453,9 @@ module McpTools =
   let withSession (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) (f: string -> Task<string>) : Task<string> =
     task {
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
-      match resolution with
-      | Routable sid -> return! f sid
-      | other -> return sprintf "Error: %s" (formatSessionResolution other)
+      match routed resolution with
+      | Ok sid -> return! f sid
+      | Error refusal -> return sprintf "Error: %s" (SageFsError.describeForAgent refusal)
     }
 
   /// Result-returning sibling of withSession — see withSessionWdResult's doc.
@@ -482,10 +483,12 @@ module McpTools =
     task {
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
       match resolution with
-      | Routable sid -> return! f sid
       | FaultedSession (sid, _) -> return! f sid
       | Unroutable (sid, _) -> return! f sid
-      | other -> return sprintf "Error: %s" (formatSessionResolution other)
+      | other ->
+        match routed other with
+        | Ok sid -> return! f sid
+        | Error refusal -> return sprintf "Error: %s" (SageFsError.describeForAgent refusal)
     }
 
   /// Result-returning sibling of withSessionAllowFaulted — see
@@ -498,6 +501,16 @@ module McpTools =
       | FaultedSession (sid, _) -> return! f sid
       | Unroutable (sid, _) -> return! f sid
       | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
+    }
+
+  /// `withSessionWd` for a body that answers with an `EchoResult`: a session that did not resolve is the typed refusal
+  /// (`routed`), so the client gets its case and its next step.
+  let withSessionWdEcho (ctx: McpContext) (agent: string) (target: RouteTarget) (f: string -> Task<EchoResult>) : Task<EchoResult> =
+    task {
+      let! resolution = resolveSessionId ctx agent None (RouteTarget.toOption target)
+      match routed resolution with
+      | Ok sid -> return! f sid
+      | Error refusal -> return EchoResult.Failed refusal
     }
 
   /// Overload without sessionId parameter (uses None).
@@ -1067,7 +1080,11 @@ module McpTools =
           // route it through the algebra instead of flattening it to a bool.
           notifyElm ctx (TuiEvent.EvalFailed (sid, SageFsError.describe err))
           (formatted, InfraFailure err, [], Some err, EvalCost.unmeasured)
-        | _ -> (formatted, Evaluated false, [], None, EvalCost.unmeasured)
+        // Every case an eval can get is matched above; anything else is a protocol mix-up, never a clean eval.
+        | other ->
+          let err = McpToolRefusals.unexpectedEvalAnswer sid other
+          notifyElm ctx (TuiEvent.EvalFailed (sid, SageFsError.describe err))
+          (sprintf "Error: %s" (SageFsError.describeForAgent err), InfraFailure err, [], Some err, EvalCost.unmeasured)
       | Error msg ->
         let err = routeErrorToSageFsError sid msg
         notifyElm ctx (TuiEvent.EvalFailed (sid, routeErrorMessage msg))
@@ -2152,26 +2169,23 @@ module McpTools =
     @ WorkflowTypes.PaketReferences.readForProject path
     @ WorkflowTypes.ProjectFileMarkers.read path
 
-  let createSession (ctx: McpContext) (agent: string) (targets: SessionProjectTarget list) (workingDir: string) (workflowRaw: string) : Task<string> =
+  let createSession (ctx: McpContext) (agent: string) (targets: SessionProjectTarget list) (workingDir: string) (workflowRaw: string) : Task<EchoResult> =
     task {
       match SessionProjectTarget.validate targets |> Result.map (fun () -> SessionProjectTarget.resolveAgainst workingDir targets) with
-      | Error reason -> return sprintf "Error: %s" reason
+      | Error reason -> return EchoResult.Failed (McpToolRefusals.targetsInvalid reason)
       | Ok targets ->
       match SessionPathValidation.validateSessionCreateRequest workingDir (SessionProjectTarget.paths targets) with
-      | Error err -> return SageFsError.describeForAgent err
+      | Error err -> return EchoResult.Failed err
       | Ok () ->
       match CreateSessionUx.parseCreateSessionWorkflow workflowRaw with
-      | Error msg -> return msg
+      | Error _ -> return EchoResult.Failed (McpToolRefusals.unknownWorkflow workflowRaw)
       | Ok workflow ->
       let! existing = ctx.SessionOps.GetAllSessions()
       let duplicates =
         existing
         |> List.filter (fun s -> CreateSessionUx.isExactDuplicateSession (SessionProjectTarget.paths targets) workingDir s.Projects s.WorkingDirectory)
       match duplicates with
-      | dup :: _ ->
-        let sid = WorkerProtocol.SessionId.value dup.Id
-        let status = WorkerProtocol.SessionLifecycleStatus.label dup.Status
-        return sprintf "A session with this exact target and working directory already exists (session '%s', status: %s). Use switch_session to target it instead." sid status
+      | dup :: _ -> return EchoResult.Failed (SageFsError.DuplicateSession(WorkerProtocol.SessionId.value dup.Id, workingDir))
       | [] ->
       let! result = ctx.SessionOps.CreateSession targets workingDir workflow
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
@@ -2192,8 +2206,8 @@ module McpTools =
           Option.toList (formatDetectionHint packageRefs workflow)
           @ ProjectCompatibility.formatToolchainAdvisories perProject @ CreateSessionUx.hostHintsOfTargets workingDir targets
         let hint = match lines with [] -> None | ls -> Some(String.concat "\n\n" ls)
-        return CreateSessionUx.formatCreateSessionReply sid targets hint
-      | Result.Error err -> return SageFsError.describeForAgent err
+        return EchoResult.Answered (CreateSessionUx.formatCreateSessionReply sid targets hint)
+      | Result.Error err -> return EchoResult.Failed err
     }
 
   /// List all active sessions with occupancy information.
@@ -2250,10 +2264,10 @@ module McpTools =
     }
 
   /// Switch the active session for a specific agent. Validates the target exists.
-  let switchSession (ctx: McpContext) (agent: string) (sessionId: string) : Task<string> =
+  let switchSession (ctx: McpContext) (agent: string) (sessionId: string) : Task<EchoResult> =
     task {
       match WorkerProtocol.SessionId.validate sessionId with
-      | Error e -> return sprintf "Error: invalid session ID: %s" e
+      | Error e -> return EchoResult.Failed (McpToolRefusals.invalidSessionId e)
       | Ok validId ->
         let! info = ctx.SessionOps.GetSessionInfo validId
         match info with
@@ -2279,9 +2293,8 @@ module McpTools =
             | WorkerProtocol.SessionLifecycleStatus.Restarting _ ->
               sprintf " — still warming up (%s). The switch holds: poll get_session_status until it reports Ready before send_fsharp_code." (WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status)
             | _ -> ""
-          return sprintf "Switched to session '%s'%s" sessionId warmupNote
-        | None ->
-          return sprintf "Error: Session '%s' not found" sessionId
+          return EchoResult.Answered (sprintf "Switched to session '%s'%s" sessionId warmupNote)
+        | None -> return EchoResult.Failed (SageFsError.SessionNotFound sessionId)
     }
 
   // ── Workflow Switching ──────────────────────────────────────────
@@ -2294,26 +2307,24 @@ module McpTools =
     (workingDirectory: string option)
     (targetStr: string)
     (dryRun: bool)
-    : Task<string> =
+    : Task<EchoResult> =
     task {
       // 1. Parse target workflow — one alias table (WorkflowTypes.tryOfString),
       // shared with ofString, so create and switch never disagree on spellings.
       let targetOpt = WorkflowTypes.SessionWorkflow.tryOfString targetStr
       match targetOpt with
-      | None ->
-        return CreateSessionUx.formatUnknownWorkflowError targetStr
+      | None -> return EchoResult.Failed (McpToolRefusals.unknownWorkflow targetStr)
       | Some target ->
       // 2. Resolve session from working directory
       let! resolution = resolveSessionId ctx agent None workingDirectory
-      match resolution with
-      | WarmingUp _ | Unroutable _ | FaultedSession _ | Gone _ as other ->
-        return sprintf "Error: %s" (formatSessionResolution other)
-      | Routable sid ->
+      match routed resolution with
+      | Error refusal -> return EchoResult.Failed refusal
+      | Ok sid ->
       // 3. Get session info for current workflow
       let validId = toSessionId sid
       let! info = ctx.SessionOps.GetSessionInfo validId
       match info with
-      | None -> return sprintf "Error: session '%s' not found" sid
+      | None -> return EchoResult.Failed (SageFsError.SessionNotFound sid)
       | Some sessionInfo ->
       let current = sessionInfo.Workflow
       let cost = WorkflowTypes.TransitionCost.compute 0 0
@@ -2349,21 +2360,21 @@ module McpTools =
       match WorkflowTypes.SessionWorkflow.label current = WorkflowTypes.SessionWorkflow.label target with
       | true ->
         let outcome = WorkflowTypes.WorkflowSwitchOutcome.alreadyInWorkflow current cost
-        return serializeOutcome outcome
+        return EchoResult.Answered (serializeOutcome outcome)
       | false ->
       // 5. If dry run, return preview only
       match dryRun with
       | true ->
         let outcome = WorkflowTypes.WorkflowSwitchOutcome.preview current target cost
-        return serializeOutcome outcome
+        return EchoResult.Answered (serializeOutcome outcome)
       | false ->
       // 6. Execute through the daemon's own switch: it restarts THIS session id spawn-first into
       // the target workflow. Creating a second session here hit the duplicate-session guard.
       let! switchResult = ctx.SessionOps.SwitchWorkflow sid target
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match switchResult with
-      | Result.Error err -> return sprintf "Error switching workflow: %s" (SageFsError.describeForAgent err)
-      | Result.Ok _ -> return serializeOutcome (WorkflowTypes.WorkflowSwitchOutcome.switched current target cost sid)
+      | Result.Error err -> return EchoResult.Failed err
+      | Result.Ok _ -> return EchoResult.Answered (serializeOutcome (WorkflowTypes.WorkflowSwitchOutcome.switched current target cost sid))
     }
 
   // ── Elm State Query ──────────────────────────────────────────────
@@ -2842,27 +2853,6 @@ module McpTools =
         TestSummary = None
         EvalDurationMs = Some (float e.DurationMs) })
 
-  let decomposePipeline (code: string) : Task<string> =
-    task {
-      let stages = Features.EvalLens.decomposePipeline code
-      match stages with
-      | [] -> return "No pipeline stages found in the provided code."
-      | stages ->
-        let classifications =
-          stages |> List.map (fun s -> s, Features.EvalLens.classifyStage s.Code)
-        return
-          classifications
-          |> List.map (fun (stage, classification) ->
-            let icon =
-              match classification with
-              | Features.Pure -> "●"
-              | Features.Effectful -> "⚡"
-              | Features.Unknown -> "?"
-            sprintf "  %d. %s %s" stage.StageIndex icon (stage.Code.Trim()))
-          |> fun lines ->
-            sprintf "Pipeline decomposition (%d stages):\n%s" stages.Length (String.concat "\n" lines)
-    }
-
   let getSessionFilmstrip (ctx: McpContext) (filter: string option) : Task<string> =
     task {
       match featureStateForCaller ctx with
@@ -2925,55 +2915,6 @@ module McpTools =
           let entries = Features.SessionScribe.SessionScribe.fromGraph graph
           let name = projectName |> Option.defaultValue "SageFs Session"
           return Features.SessionScribe.SessionScribe.exportFsx name entries
-    }
-
-  /// MCP Tool: Get message journal (synthesized from eval history)
-  let getMessageJournal (ctx: McpContext) (minLevel: string option) (source: string option) : Task<string> =
-    task {
-      match featureStateForCaller ctx with
-      | None -> return "Feature state not available — no active session."
-      | Some state ->
-        match state.EvalHistory with
-        | [] -> return "No eval history — journal is empty."
-        | history ->
-          let journal =
-            Features.MessageJournal.Journal.create (max 256 history.Length)
-            |> Features.MessageJournal.Journal.recordAll
-                 Features.MessageJournal.JournalLevel.Info "eval" (history |> List.rev |> List.map (fun e -> e.Code))
-          let filtered =
-            match minLevel with
-            | Some lvl ->
-              let level =
-                match lvl.ToLowerInvariant() with
-                | "debug" -> Features.MessageJournal.JournalLevel.Debug
-                | "warn" | "warning" -> Features.MessageJournal.JournalLevel.Warn
-                | "error" -> Features.MessageJournal.JournalLevel.Failure
-                | _ -> Features.MessageJournal.JournalLevel.Info
-              Features.MessageJournal.Journal.filterByMinLevel level journal
-            | None -> Features.MessageJournal.Journal.entries journal
-          let filtered =
-            match source with
-            | Some src when src <> "" ->
-              filtered |> List.filter (fun e -> e.Source.Contains(src, System.StringComparison.OrdinalIgnoreCase))
-            | _ -> filtered
-          let stats = Features.MessageJournal.Journal.stats journal
-          return
-            [ sprintf "Journal: %d entries (%d info, %d warn, %d error)"
-                stats.Total stats.InfoCount stats.WarnCount stats.ErrorCount
-              ""
-              yield!
-                filtered
-                |> List.map (fun e ->
-                  sprintf "[%s] %s | %s: %s"
-                    (e.Timestamp.ToString("HH:mm:ss"))
-                    (match e.Level with
-                     | Features.MessageJournal.JournalLevel.Debug -> "DBG"
-                     | Features.MessageJournal.JournalLevel.Info -> "INF"
-                     | Features.MessageJournal.JournalLevel.Warn -> "WRN"
-                     | Features.MessageJournal.JournalLevel.Failure -> "ERR")
-                    e.Source
-                    (e.Message |> fun m -> match m.Length > 80 with | true -> m.[..77] + "..." | false -> m)) ]
-            |> String.concat "\n"
     }
 
   /// MCP Tool: Get eval timeline with sparkline and percentiles
@@ -3098,11 +3039,11 @@ module McpTools =
         | Error e -> SageFsError.describeForAgent e
     })
 
-  let listRunnableProjects (ctx: McpContext) : Task<string> =
-    withSessionWd ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
+  let listRunnableProjects (ctx: McpContext) : Task<EchoResult> =
+    withSessionWdEcho ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
       let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       match infoOpt with
-      | None -> return sprintf "Session %s not found." sid
+      | None -> return EchoResult.Failed (SageFsError.SessionNotFound sid)
       | Some info ->
         let projects =
           info.ProjectRoles
@@ -3116,7 +3057,7 @@ module McpTools =
              ActiveProject = info.ActiveProject |> Option.defaultValue ""
              App = AppRun.describeState info.App
              Projects = projects |}
-        return Json.serialize Json.standard jsonData
+        return EchoResult.Answered (Json.serialize Json.standard jsonData)
     })
 
   // ── Cohort tools (cohort-integration-plan.md Slice 2, item 9) ────────────

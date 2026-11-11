@@ -185,7 +185,7 @@ module McpSessionIsolation =
       let! result = switchSession ctx "test" "ffff0001"
 
       result
-      |> Expect.stringContains "should contain error message" "not found"
+      |> Expect.equal "a session nobody has is the typed not-found refusal" (SageFs.McpEcho.EchoResult.Failed (SageFsError.SessionNotFound "ffff0001"))
     }
 
   ]

@@ -330,6 +330,14 @@ give is reported as `ToolFailed`
 that is restarting on purpose answers `SessionRestarting`, whose next step is to wait with `get_session_status`
 and never to hard reset.
 
+The session tools name their own case: `create_project_session`, `create_solution_session` and `create_bare_session`
+answer `DuplicateSession`, `UnsafeSessionPath` or the session manager's own refusal, `switch_session`,
+`switch_workflow` and `list_runnable_projects` answer `SessionNotFound` or the routing refusal for the session they
+could not reach, and `get_message_journal` answers `NoActiveSessions` for a caller with no session. A cohort command
+the cohort core refuses answers `CohortRefused`, and `fields.kind` says which refusal (`ClaimConflict`,
+`NotConductor`, `OwnerUnresponsive` and the rest of `CohortFailureKind`). A server that has no cohort wired answers
+`CohortOwnerNotWired`.
+
 Positions in a reply (`line`, `column`, `endLine`, `endColumn`) are the parser's own: lines count from 1,
 columns from 0 (counted in characters, not bytes), and `endColumn` is one past the last character.
 

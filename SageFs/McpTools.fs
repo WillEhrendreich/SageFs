@@ -682,6 +682,7 @@ let withSessionReply (ctx: McpContext) (workingDirectory: string option) (f: str
 /// hot-reload compile.
 let private keptStateClient =
   new System.Net.Http.HttpClient(
+    SageFs.WorkerAuth.newHandler (),
     Timeout = System.TimeSpan.FromMilliseconds(float SageFs.DevReload.DevReloadConfig.defaults.CompileBudgetMs))
 
 /// Why a tool's manual was not given.
@@ -833,7 +834,8 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         let em = match System.String.IsNullOrWhiteSpace eval_mode with | true -> None | false -> Some eval_mode
         let bsl = match block_start_line with | 0 -> None | n -> Some n
         let intentOpt = match System.String.IsNullOrWhiteSpace intent with | true -> None | false -> Some intent
-        logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
+        // The source itself never reaches the log: people paste connection strings and keys into a REPL.
+        logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, SageFs.Features.FrictionSanitize.codeSummary code)
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
         // Structured result (roast-7 §2/§16 item 2): the tool used to return
         // a flattened `sprintf "Result: %s"` / `"Error: %s"` string even
@@ -1608,11 +1610,11 @@ SAFETY:
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: create_project_session called: project={Project}, dir={Dir}, workflow={Workflow}", project, working_directory, workflow)
         task {
-          let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Project project ] working_directory workflow
-          let withLine = SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory) reply
+          let! echo = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Project project ] working_directory workflow
+          let withLine = echo |> EchoResult.mapAnswered (SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory))
           SageFs.McpHygiene.refreshSoon ctx working_directory
           return withLine
-        } |> withEcho ctx "create_project_session"
+        } |> withEchoResult ctx "create_project_session"
 
     [<McpServerTool>]
     [<Description("Create a new isolated FSI session for one explicit .sln or .slnx solution. The solution path is a primitive string; empty arrays and auto-discovery are not accepted. Use get_available_projects first, then get_session_status until the session is Ready or Faulted.")>]
@@ -1625,11 +1627,11 @@ SAFETY:
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: create_solution_session called: solution={Solution}, dir={Dir}, workflow={Workflow}", solution, working_directory, workflow)
         task {
-          let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Solution solution ] working_directory workflow
-          let withLine = SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory) reply
+          let! echo = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Solution solution ] working_directory workflow
+          let withLine = echo |> EchoResult.mapAnswered (SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory))
           SageFs.McpHygiene.refreshSoon ctx working_directory
           return withLine
-        } |> withEcho ctx "create_solution_session"
+        } |> withEchoResult ctx "create_solution_session"
 
     [<McpServerTool>]
     [<Description("Create a new isolated FSI session with no project or solution loaded. Bare is explicit and never triggers project discovery. Use get_session_status until the session is Ready or Faulted.")>]
@@ -1641,11 +1643,11 @@ SAFETY:
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: create_bare_session called: dir={Dir}, workflow={Workflow}", working_directory, workflow)
         task {
-          let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Bare ] working_directory workflow
-          let withLine = SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory) reply
+          let! echo = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Bare ] working_directory workflow
+          let withLine = echo |> EchoResult.mapAnswered (SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory))
           SageFs.McpHygiene.refreshSoon ctx working_directory
           return withLine
-        } |> withEcho ctx "create_bare_session"
+        } |> withEchoResult ctx "create_bare_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.
@@ -1696,7 +1698,7 @@ ROUTING BEHAVIOR:
         [<Description(SageFs.SharedParameters.SessionId.Target)>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: switch_session called: id={Id}", session_id)
-        switchSession ctx "mcp" session_id |> withEcho ctx "switch_session"
+        switchSession ctx "mcp" session_id |> withEchoResult ctx "switch_session"
 
     [<McpServerTool>]
     [<Description("""Switch the workflow mode for a session.
@@ -1723,7 +1725,7 @@ definitions and cell state are lost.""")>]
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let dry = dryRun
         logger.LogDebug("MCP-TOOL: switch_workflow called: target={Target}, dir={Dir}, dryRun={DryRun}", target, working_directory, dry)
-        switchWorkflow ctx "mcp" wd target dry |> withEcho ctx "switch_workflow"
+        switchWorkflow ctx "mcp" wd target dry |> withEchoResult ctx "switch_workflow"
 
     // ── Elm State Tools ──────────────────────────────────────────
 
@@ -2028,7 +2030,7 @@ Use this to understand complex pipelines before modifying them, or to identify e
         code: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: decompose_pipeline called, code length={Len}", code.Length)
-        decomposePipeline code |> withEcho ctx "decompose_pipeline"
+        SageFs.McpJournalViews.decomposePipeline code |> withEchoResult ctx "decompose_pipeline"
 
     [<McpServerTool>]
     [<Description("""Run a diagnostic analysis of ONE session: what it evaluated and what its tests did.
@@ -2307,7 +2309,7 @@ WORKFLOW: Use this for observability — review what happened, filter to errors 
         logger.LogDebug("MCP-TOOL: get_message_journal called, level={Level}, source={Source}", min_level, source)
         let levelOpt = match System.String.IsNullOrWhiteSpace min_level with | true -> None | false -> Some min_level
         let sourceOpt = match System.String.IsNullOrWhiteSpace source with | true -> None | false -> Some source
-        getMessageJournal ctx levelOpt sourceOpt |> withEcho ctx "get_message_journal"
+        SageFs.McpJournalViews.getMessageJournal ctx levelOpt sourceOpt |> withEchoResult ctx "get_message_journal"
 
     [<McpServerTool>]
     [<Description("""Get eval timeline with performance sparkline and percentile statistics.
@@ -2645,7 +2647,7 @@ OUTPUT: JSON with TotalProjects, ExecutableCount, ActiveProject, App (the curren
 WORKFLOW: Call before run_app to see what can run.""")>]
     member _.list_runnable_projects() : Task<string> =
         logger.LogDebug("MCP-TOOL: list_runnable_projects called")
-        listRunnableProjects ctx |> withEcho ctx "list_runnable_projects"
+        listRunnableProjects ctx |> withEchoResult ctx "list_runnable_projects"
 
     // ── Cohort tools v1 (cohort-integration-plan.md Slice 2, item 9) ──────
     //
@@ -2659,7 +2661,7 @@ WORKFLOW: Call before run_app to see what can run.""")>]
 
 COHORTS ARE PER REPOSITORY. Pass working_directory (the repository you are working in) on this call and on every later cohort tool: acquire_claim, release_claim, request_landing, leave_cohort and get_cohort_status. A call that names no directory acts in the cohort of the repository the DAEMON was started in, which is usually not yours, and there you are a stranger. If a cohort tool answers "you have not joined it", you joined a different repository's cohort: call join_cohort again with the same working_directory you pass to that tool.
 
-ROLES. 'Implementer' evaluates, builds, runs, claims files and requests landings (every tool except the conductor-only ones). 'Verifier' reads and runs tests, and cannot evaluate code or claim files. 'Observer' only reads. The first agent to join a repository's cohort becomes its conductor, the only member who can reassign a claim, set the integration ref or mint member tokens; there is no tool to hand that seat to someone else yet.
+ROLES. 'Implementer' evaluates, builds, runs, claims files and requests landings (every tool except the conductor-only ones). 'Verifier' reads and runs tests, and cannot evaluate code or claim files. 'Observer' only reads. The first agent to join a repository's cohort becomes its conductor, the only member who can reassign a claim, set the integration ref or mint member tokens; delegate_conductor hands the seat on.
 
 WHEN TO USE: Once per agent per repository, before acquiring claims or requesting a landing, when more than one agent or sub-agent may be touching that repository.
 
@@ -2685,9 +2687,9 @@ OUTPUT: Confirmation text, naming the cohort you joined, whether you became its 
         |> withEchoOutcome ctx "join_cohort"
 
     [<McpServerTool>]
-    [<Description("""Leave this daemon's cohort. Every claim you still hold is orphaned (not released to anyone — the conductor must reassign it or it stays orphaned).
+    [<Description("""Leave this repository's cohort. Your claims are orphaned and a seat you hold goes vacant.
 
-WHEN TO USE: When you are done working in this daemon for this session.
+WHEN TO USE: your work here is done. A sub-agent on its parent's connection IS the parent: leaving departs it.
 
 OUTPUT: Confirmation text.""")>]
     member _.leave_cohort(
@@ -3013,7 +3015,7 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
         |> withEchoOutcome ctx "request_landing"
 
     [<McpServerTool>]
-    [<Description("""Read this daemon's cohort: members and roles/presence, claims and their holders/fences, and the ledger head/conductor. Wait-free — reads a published snapshot, never waits on other cohort activity.
+    [<Description("""Read this repository's cohort: members and roles/presence, claims and their holders/fences, and the ledger head/conductor. Wait-free — reads a published snapshot, never waits on other cohort activity.
 
 WHEN TO USE: Before acquiring a claim (check for conflicts), to see who else is in the cohort, or to find a claim/landing id to act on.
 

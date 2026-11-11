@@ -15,9 +15,11 @@ type EchoResult =
 type EchoFailureText =
   /// "Error: <reason>": the label is not part of the reason.
   | ErrorLabel
-  /// "Error switching workflow: <reason>" (Mcp.switchWorkflow): the prefix starts the sentence.
+  /// "Error switching workflow: <reason>": the prefix starts the sentence. `Mcp.switchWorkflow` wrote it before it
+  /// returned its typed error; a body that still writes it is read as a failure.
   | ErrorSentence
-  /// "<what> → Next: <next>" with no prefix: `SageFsError.describeForAgent`, returned bare (Mcp.createSession).
+  /// "<what> → Next: <next>" with no prefix: `SageFsError.describeForAgent`, returned bare (`Mcp.createSession` did, before
+  /// it returned its typed error; `withSession` still ends its refusal this way).
   | AgentDescription
 
 module EchoFailureText =
@@ -63,3 +65,16 @@ let classifyEcho (text: string) : EchoResult =
     | -1 -> EchoResult.Failed (SageFs.SageFsError.ToolFailed(body, EchoFailureText.noNextStep))
     | at ->
       EchoResult.Failed (SageFs.SageFsError.ToolFailed(body.Substring(0, at), body.Substring(at + EchoFailureText.nextMarker.Length)))
+
+module EchoResult =
+  /// A reply's text changed after the fact (a line appended to a session reply), a failure left as it was.
+  let mapAnswered (change: string -> string) (echo: EchoResult) : EchoResult =
+    match echo with
+    | EchoResult.Answered text -> EchoResult.Answered (change text)
+    | EchoResult.Failed err -> EchoResult.Failed err
+
+  /// A body that already says how it went with a `Result`.
+  let ofResult (outcome: Result<string, SageFs.SageFsError>) : EchoResult =
+    match outcome with
+    | Ok text -> EchoResult.Answered text
+    | Error err -> EchoResult.Failed err

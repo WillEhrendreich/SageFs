@@ -275,3 +275,18 @@ module McpSessionRouting =
     | FaultedSession (sid, cause) ->
       sprintf "Session '%s' is faulted. Why: %s\nRun reset_fsi_session or hard_reset_fsi_session to recover." sid (FaultCause.describe cause)
     | Gone msg -> msg
+
+  /// The session a tool call may use, or the typed refusal it answers with. The reason says what the session
+  /// is doing; the next step comes from `SageFsError.suggestedAction`, so it is said once. A warming session is `SessionRestarting` (its next step is to wait), a faulted one is a
+  /// worker the agent has to reset, and a session that is gone keeps the routing text, which already
+  /// names the tools that create one.
+  let routed (resolution: SessionResolution) : Result<string, SageFsError> =
+    match resolution with
+    | Routable sid -> Result.Ok sid
+    | WarmingUp (sid, status) ->
+      Result.Error (SageFsError.SessionRestarting(sid, sprintf "Session '%s' is still warming up (%s)." sid (WorkerProtocol.SessionLifecycleStatus.label status)))
+    | Unroutable (sid, status) ->
+      Result.Error (SageFsError.SessionNotRoutable (sprintf "session '%s' exists (status: %s) but its worker is not routable yet, which usually means it is mid-restart." sid (WorkerProtocol.SessionLifecycleStatus.label status)))
+    | FaultedSession (sid, cause) ->
+      Result.Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "the session is faulted. Why: %s" (FaultCause.describe cause)))
+    | Gone msg -> Result.Error (SageFsError.SessionNotRoutable msg)

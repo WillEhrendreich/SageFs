@@ -890,6 +890,7 @@
         <Compile Include="McpFanoutTests.fs" />
         <Compile Include="McpWarmupMessageTests.fs" />
         <Compile Include="McpEchoOutcomeTests.fs" />
+        <Compile Include="McpTypedFailureTests.fs" />
         <Compile Include="FootprintPressureTests.fs" />
         <Compile Include="McpConnectionSimTests.fs" />
         <Compile Include="SseReplaySimTests.fs" />

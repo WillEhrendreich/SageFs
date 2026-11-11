@@ -169,6 +169,7 @@
         <Compile Include="McpSessionState.fs" />
         <Compile Include="McpRouteError.fs" />
         <Compile Include="McpEcho.fs" />
+        <Compile Include="McpToolRefusals.fs" />
         <Compile Include="CreateSessionUx.fs" />
         <Compile Include="SessionStatusPayload.fs" />
         <Compile Include="CohortErrorMapping.fs" />
@@ -237,6 +238,8 @@
         <Compile Include="McpSeating.fs" />
         <!-- The scratch-pad tool's body, out of Mcp.fs (the accretion hub whose line budget only goes down). -->
         <Compile Include="McpScratchPadViews.fs" />
+        <!-- The decompose and journal tool bodies, out of Mcp.fs, so each answers with a typed refusal. -->
+        <Compile Include="McpJournalViews.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
         <Compile Include="AgentGuidance.fs" />

@@ -15,10 +15,17 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.McpTools
+open SageFs.McpEcho
 open SageFs.WorkerProtocol
 
 let private sid = "a1b2c3d4"
 let private workingDirectory = "/switch-workflow"
+/// The text of a tool body that answered; a failure here is a test failure.
+let private answeredText (echo: EchoResult) : string =
+  match echo with
+  | EchoResult.Answered text -> text
+  | EchoResult.Failed err -> failwithf "the switch failed: %A" err
+
 let private proxy : SessionProxy = fun _ -> async { return failwith "switch_workflow never calls the worker proxy" }
 
 type private Calls =
@@ -77,7 +84,8 @@ let tests =
 
     testTask "WHY — the switch restarts the SAME session into the target workflow and never creates a second session in its directory" {
       let ctx, calls = ctxWith (Ok "Hard reset accepted — replacement worker spawning.")
-      let! (text: string) = switchWorkflow ctx "agent" (Some workingDirectory) "livetesting" false
+      let! echo = switchWorkflow ctx "agent" (Some workingDirectory) "livetesting" false
+      let text = answeredText echo
       calls.Switched |> Seq.toList |> List.map fst |> Expect.equal "asked the daemon to switch that session" [ sid ]
       calls.Created.Count |> Expect.equal "no second session was created" 0
       calls.Stopped.Count |> Expect.equal "the session was not stopped: it is the one being restarted" 0
@@ -89,9 +97,10 @@ let tests =
 
     testTask "WHY — a refused switch says so with the daemon's own reason, and still creates nothing" {
       let ctx, calls = ctxWith (Error (SageFsError.HardResetFailed "A rebuild is in progress for this session."))
-      let! (text: string) = switchWorkflow ctx "agent" (Some workingDirectory) "livetesting" false
-      text |> Expect.stringContains "says the switch failed" "Error switching workflow"
-      text |> Expect.stringContains "carries the daemon's reason" "rebuild is in progress"
+      let! echo = switchWorkflow ctx "agent" (Some workingDirectory) "livetesting" false
+      echo
+      |> Expect.equal "the daemon's own refusal, typed, with its reason"
+           (EchoResult.Failed (SageFsError.HardResetFailed "A rebuild is in progress for this session."))
       calls.Created.Count |> Expect.equal "no second session" 0
     }
 

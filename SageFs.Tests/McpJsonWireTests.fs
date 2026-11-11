@@ -17,10 +17,17 @@ open SageFs.McpSessionRouting
 open Expecto.Flip
 open SageFs
 open SageFs.McpTools
+open SageFs.McpEcho
 open SageFs.WorkerProtocol
 
 
 let private lf (text: string) : string = text.Replace("\r\n", "\n")
+
+/// The text of a tool body that answered; a failure here is a test failure.
+let private answeredText (echo: EchoResult) : string =
+  match echo with
+  | EchoResult.Answered text -> text
+  | EchoResult.Failed err -> failwithf "the tool failed: %A" err
 
 /// The default JSON encoder writes an apostrophe and any non-ASCII character as \uXXXX.
 /// The expected text below spells that as \\uXXXX so this file holds no unicode escapes of
@@ -201,8 +208,8 @@ let tests =
     testTask "WHY — a dry-run workflow switch writes the indented outcome with a null NewSessionId" {
       let info = infoWith "11223344" (SessionLifecycleStatus.Ready readyHandle) WorkflowTypes.SessionWorkflow.Interactive
       let ctx = ctxFor [ info ] (Some (proxyReturning (WorkerResponse.CheckResult ("r", [])))) (Ok "restarting")
-      let! text = switchWorkflow ctx "agent" (Some info.WorkingDirectory) "livetesting" true
-      lf text
+      let! echo = switchWorkflow ctx "agent" (Some info.WorkingDirectory) "livetesting" true
+      lf (answeredText echo)
       |> Expect.equal "dry run"
            ("{\n"
             + "  \"Cost\": {\n"
@@ -222,8 +229,8 @@ let tests =
     testTask "WHY — an executed workflow switch writes the new session id" {
       let info = infoWith "55667788" (SessionLifecycleStatus.Ready readyHandle) WorkflowTypes.SessionWorkflow.Interactive
       let ctx = ctxFor [ info ] (Some (proxyReturning (WorkerResponse.CheckResult ("r", [])))) (Ok "restarting")
-      let! text = switchWorkflow ctx "agent" (Some info.WorkingDirectory) "livetesting" false
-      lf text
+      let! echo = switchWorkflow ctx "agent" (Some info.WorkingDirectory) "livetesting" false
+      lf (answeredText echo)
       |> Expect.equal "executed"
            ("{\n"
             + "  \"Cost\": {\n"
