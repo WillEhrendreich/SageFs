@@ -2,13 +2,108 @@
 
 Roadmap item: `profile-tool` (Later, Repl). Plan written 2026-11-07 against master 4827ab9a.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898 (version 0.6.945). The tool shipped in 0.6.944 (`18e39403`). This section says what
+shipped, what the gate has since proven, and what is left. The body under "Resume here" is the build record.
+
+### 1. Outcome
+
+Shipped: an agent calls `profile` with `code` and `mode` (`cpu` or `alloc`); the code runs in its session like
+`send_fsharp_code` while the daemon records the FSI host from outside with an installed `dotnet-trace`; the reply is the eval's
+text and a bounded table (15 rows, 6,000 characters). Refusals are named (`ToolMissing` with the install command,
+`NotRecordable`, `CouldNotAttach`, `SocketPathTooLong`, `HostGone`, `TraceUnreadable`, `NoSamples`).
+
+Outcome gate: `SageFs.Tests/ProfileIntegrationTests.fs:85`, `Integration.hostList "profile tool over a real daemon, host and
+recorder"`, five cases (`:87` hot function named first, `:103` long TMPDIR still attaches, `:123` alloc names the type and the
+function, `:137` unknown mode refused with the code not run, `:148` host ends gives `HostGone`). The plan's "Next action" says
+these had not run on the shipping machine. That is stale: the release gate for 0.6.945 ran them in `--integration-host[3/5]`
+and the tier was `Trusted` (69 of 69 passed; `~/.local/share/sagefs-gate/checkout-8431b56a.tiers/integration-host-3of5.log:2351-2355`
+and `:2413`). Linux is proven. macOS is claimed and unproven. Windows is refused by design (`ProfileRecorder.fs:283`).
+
+### 2. Where the code is today
+
+- `SageFs.Core/Features/ProfileReport.fs` (303 lines): `ProfileFailure:15` with `ToolMissing:21`, `SocketPathTooLong:26`,
+  `HostGone:28`, `TraceUnreadable:32`, `describe:64`; `isGcWait:100` matches only `PollGC` (the one shape a real trace showed).
+- `SageFs.Core/Features/ProfileTrace.fs` (146): `SpeedscopeTrace.parse`, `cpuReport`. Pure.
+- `SageFs.Core/Features/ProfileNetTrace.fs` (268): `NetTrace.parse`, `allocReport`, our own nettrace reader, no package. Pure.
+- `SageFs.Core/Features/ProfileRecorder.fs` (292): `DotnetTrace.installCommand:54`, providers `:59` (cpu) and `:65` (alloc),
+  `ToolSearch:92`, `DotnetTraceCollector.locate:139`, `beginRecording:280` (Windows refused `:283`, tool missing `:284`,
+  `DiagnosticsSocket.refusalFor` before starting the tool), SIGTERM stop (doc `:134-136`). `Timeouts.profileRecorderWait` at
+  `Timeouts.fs:209` (60 s).
+- `SageFs.Core/Features/DiagnosticsSocket.fs` (126): `maxPathLength = 107:23`, `longestName:27`, `fits:33`, `TempPlan:36`
+  (`KeepTemp | UseShortLink`). Its header says the check is Linux-only and macOS's limit is 103.
+- `SageFs/McpProfile.fs` (118): `ProfileCall:16`, `hostPidOf:29` (worker's `GetHostProcess` answer, `Isolated | InWorker |
+  NotRunning`), `projectModulesOf:42`, `answerOf:46`, `traceAfterEval:66`, `profileIn:93`, `profile:117`. `top` is not a parameter.
+- Classing: `SageFs.Core/Capability.fs:196` (`ToolClass.Eval`), `Affordances.fs:76`, `:263` (`StateGated`), `:758`
+  (`ToolName.Profile`). Manual: `docs/mcp-tools.md:350`.
+- Tests: `McpProfileTests.fs:26`, `ProfileReportTests.fs`, `ProfileTraceTests.fs`, `ProfileNetTraceTests.fs`,
+  `ProfileRecorderSimTests.fs`, `ProfileCollectorProcessTests.fs:55` (stand-in tool), `ProfileIntegrationTests.fs`.
+  `ToolListProfileTests.fs` and `HardResetStartupProfileIntegrationTests.fs` are about tool-list profiles and startup, not this tool.
+- `scripts/roadmap/RoadmapItems.fs:306` still says `NoLandmarkYet` and the text still says the integration cases "have not yet
+  run on the machine that ships". Both are stale.
+- `[not verified]`: a run on macOS; a recording of a `run_app` host (which has `DOTNET_MODIFIABLE_ASSEMBLIES=debug`); the
+  attach cost on a quiet machine; the GC label against a trace with a gen2 collection.
+
+### 3. Steps (what remains)
+
+1. Close the item through the roadmap process: landmark `SageFs/McpProfile.fs` (`profile`), status Done, and drop the
+   "have not yet run" sentence from the item text. `DECISION:` Will owns `RoadmapItems.fs`; recommend close now, with 2 to 5
+   as follow-ups under `eval-cost-line` or a new S item.
+2. Measure the attach cost on a quiet machine: `dotnet fsi scripts/machine-bench.fsx` style runs of the same eval with and
+   without `profile`, medians of five, written into "Measure first" below. Edge, no code. If the overhead on a one-second
+   eval is under 10 percent, nothing follows; otherwise a `Timeouts` note and a line in the manual.
+3. RED, domain: `ProfileReportTests.fs`, "a gen2 collection's wait frames count as GC wait": record one real trace of an eval
+   that forces `GC.Collect(2)` under pressure, read the frame names on the waiting threads, and extend `isGcWait:100` to the
+   set seen. Keep the set closed (a list of names, not a substring).
+4. RED, domain: concurrent-eval attribution. `McpProfile.answerOf` says nothing when another agent's eval ran in the same
+   session during the recording. Add a line to the reply when the session's eval count moved by more than one during the
+   recording (the daemon knows its own evals). Test in `McpProfileTests.fs`.
+5. macOS: `DiagnosticsSocket.maxPathLength` is 107 on Linux and 103 on macOS. Make the limit a function of
+   `OperatingSystem.IsMacOS()` with a test per platform value. Unprovable here; mark the test by platform.
+6. `DECISION:` Windows. Stopping `dotnet-trace` needs a signal; a console-control-event stop (`GenerateConsoleCtrlEvent`)
+   would lift the refusal. Recommend leave refused until a Windows user asks; the refusal names the reason.
+7. `DECISION:` keep our nettrace reader or depend on `Microsoft.Diagnostics.Tracing.TraceEvent`. Recommend keep ours: zero
+   packages, `TraceUnreadable` refuses by name when the format moves, and the integration tier notices.
+
+### 4. How to check it
+
+- Inner loop: a SageFs session on `SageFs.Tests`, `send_fsharp_code` against `ProfileReport.cpu`, `NetTrace.parse` with the
+  builders in `ProfileNetTraceTests.fs`; `run_tests` filtered to `profile`.
+- Lane: `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Integration inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary --filter-test-list "profile tool over a real daemon"`
+  (needs `dotnet tool install -g dotnet-trace`).
+- Acceptance: unfiltered `--integration-host --summary`, `TRUST ... verdict=Trusted`.
+
+### 5. Traps in this repo
+
+- Tool-list weight: `profile` is already counted in `RatchetBudgets.toolList` (`SageFs.Tests/RatchetBudgets.fs:462`); a longer
+  description or a new parameter (`top`) moves the budget, and budgets only go down.
+- A new reply line (step 4) is tool output, not a wire shape change: `Plugin: n/a`.
+- No new NuGet package without discussion (step 7 is that discussion).
+- The TMPDIR trap: the gate's tier directories are 85 characters; the short-link plan in `DiagnosticsSocket.fs` is what makes
+  `:103` pass. Do not shorten the gate's paths to make a test pass.
+- Linux-only machine: steps 5 and 6 cannot be run here.
+
+### 6. Size and order
+
+Step 1 is an hour. Steps 2 to 4 are S, a day or two together, in any order. Steps 5 to 7 wait on a decision. First commit:
+step 1 (roadmap close), then step 3's red test.
+
+### 7. Not now
+
+- A dashboard panel for profiles (the plan said out of scope; still is).
+- `top` as a parameter (adds tool-list weight for a bound nobody asked to move).
+- Profiling the worker process for in-process sessions (refused with the reason today).
+- Beating FsiMcp's numbers on the same code: unmeasured; needs a quiet machine and FsiMcp installed, and nothing depends on it.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (both modes built and proven against a real host; the outcome gate in the integration tier and Windows are not yet run on anything but this machine) |
+| Status | Shipped in 0.6.944 (`18e39403`). The outcome gate ran green in the 0.6.945 release gate (`--integration-host[3/5]`, Trusted, 2026-11-11). What is left is in "Work order" above: close the roadmap item, measure attach cost, widen the GC-wait label, say when another eval shared the recording, macOS limit, Windows stop. |
 | Size | M for the CPU report, S for the allocation report once a trace reader exists (both done) |
 | Branch and worktree | none: work is on master |
 | Last green commit | the commit that carries this block (2026-11-10, on top of master 75f8a696) |
