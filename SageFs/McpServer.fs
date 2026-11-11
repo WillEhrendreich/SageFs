@@ -1727,7 +1727,7 @@ let wireSessionEventSubscription
       // MCP clients get cohort changes from wireCohortEventSubscription.
       | SseEvent.CohortChanged _ -> ()
       // A session starting, stopping or becoming the active one. DaemonMode derives these from the
-      // session registry (`SessionLifecycle.observe`) and sends them here, and they go out as
+      // session registry (`SessionListEvents.observe`) and sends them here, and they go out as
       // `session` frames, so they are numbered in the replay log: a client that was away is told, in
       // order, what happened to the session list while it was gone.
       | SseEvent.SessionActivated _
@@ -3206,10 +3206,9 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
       // suggestedAction shape `structuredErrorBody` produces at every other
       // error boundary, for agents and logs that want the structured case.
       let sessionError =
-        sessionStates
-        |> Array.tryPick (fun s ->
-          let isFaultedOrStopped = s.status = "Faulted" || s.status = "Stopped"
-          match isFaultedOrStopped, s.faultReason with
+        sessionPairs
+        |> Array.tryPick (fun (summary, s) ->
+          match SageFs.Features.DaemonHealth.isFaultedOrStopped summary.Status, s.faultReason with
           | true, Some reason when reason <> "" ->
             let err = SageFsError.WorkerCommunicationFailed (s.id, reason)
             Some (box {| message = SageFsError.describe err

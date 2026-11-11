@@ -3847,9 +3847,9 @@ let renderSessionContextPanel (ctx: SessionContext) =
                       for d in f.Diagnostics do
                         let sevClass =
                           match d.Severity with
-                          | "error" -> "diag-error"
-                          | "warning" -> "diag-warning"
-                          | _ -> "diag"
+                          | WarmUp.WarmupSeverity.Error -> "diag-error"
+                          | WarmUp.WarmupSeverity.Warning -> "diag-warning"
+                          | WarmUp.WarmupSeverity.Info -> "diag"
                         Elem.li [ Attr.class' sevClass; Attr.style "margin: 0.15em 0;" ] [
                           Elem.code [ Attr.class' "diag-code" ] [
                             textEnc (sprintf "FS%04d" d.ErrorNumber)

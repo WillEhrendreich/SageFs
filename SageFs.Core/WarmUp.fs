@@ -2,10 +2,25 @@ module SageFs.WarmUp
 
 open System
 
+/// How serious a warmup diagnostic is. A closed set; `WarmupSeverity.label` is the one place it becomes text.
+[<RequireQualifiedAccess>]
+type WarmupSeverity =
+  | Error
+  | Warning
+  | Info
+
+module WarmupSeverity =
+  /// The word the wire and the log lines use.
+  let label (severity: WarmupSeverity) : string =
+    match severity with
+    | WarmupSeverity.Error -> "error"
+    | WarmupSeverity.Warning -> "warning"
+    | WarmupSeverity.Info -> "info"
+
 /// Individual FCS diagnostic captured during a warmup open failure.
 type WarmupFcsDiagnostic = {
   Message: string
-  Severity: string
+  Severity: WarmupSeverity
   ErrorNumber: int
   FileName: string option
   StartLine: int
@@ -33,7 +48,7 @@ module WarmupFcsDiagnostic =
   /// error-severity diagnostics FCS reported alongside it. Every message that
   /// explains a failed eval reads them through here.
   let errors (diagnostics: WarmupFcsDiagnostic list) : WarmupFcsDiagnostic list =
-    diagnostics |> List.filter (fun d -> d.Severity = "error")
+    diagnostics |> List.filter (fun d -> d.Severity = WarmupSeverity.Error)
 
   /// Why a warm-up open failed, in one diagnostic's words: the first error's
   /// own message, falling back to the exception message only when FSI

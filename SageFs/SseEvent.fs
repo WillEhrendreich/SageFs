@@ -117,7 +117,7 @@ module SseEvent =
 
   let private diagnosticJson (d: WarmUp.WarmupFcsDiagnostic) =
     {| message = d.Message
-       severity = d.Severity
+       severity = WarmUp.WarmupSeverity.label d.Severity
        errorNumber = d.ErrorNumber
        fileName = d.FileName
        startLine = d.StartLine

@@ -200,6 +200,15 @@ module DaemonHealth =
     |> List.concat
     |> String.concat "\n"
 
+  /// A session whose worker faulted or that has stopped: the two states that carry a reason the user can act on.
+  let isFaultedOrStopped (status: SessionHealthStatus) : bool =
+    match status with
+    | SessionHealthStatus.Faulted
+    | SessionHealthStatus.Stopped -> true
+    | SessionHealthStatus.Ready
+    | SessionHealthStatus.Evaluating
+    | SessionHealthStatus.WarmingUp -> false
+
   /// Explain the daemon's current session mix in one line for diagnostics surfaces.
   let diagnosticSummary (snap: HealthSnapshot) : string =
     let breakdown =
@@ -231,11 +240,8 @@ module DaemonHealth =
   /// Code extension) branch on `status.error` and render { message,
   /// suggestedAction } with an action button when a session is Faulted or
   /// Stopped. Returns None when there is no fault to surface (null on the wire).
-  let structuredErrorForFault (statusLabel: string) (faultReason: string option) : obj option =
-    let isFaultedOrStopped =
-      statusLabel = "Faulted" || statusLabel = "Stopped"
-
-    if not isFaultedOrStopped then
+  let structuredErrorForFault (status: SessionHealthStatus) (faultReason: string option) : obj option =
+    if not (isFaultedOrStopped status) then
       None
     else
       match faultReason with
