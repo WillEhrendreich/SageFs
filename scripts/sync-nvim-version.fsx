@@ -12,10 +12,15 @@
 //                    `Plugin: n/a <why>` trailer; exit 1 listing the ones that do not. Commits at or before
 //                    the sha in scripts/plugin-impact-baseline are exempt (a one-time audit covered them).
 //
+// This script is the ONLY writer of the plugin's lua/sagefs/version.lua (the file's shape is
+// ReleaseRules.pluginVersionFile). The publish workflow runs `--check` against a fresh clone and warns; it writes nothing.
+//
 // The plugin repo is found at $SAGEFS_NVIM_DIR (default ~/Work/sagefs.nvim). It is its own repo so Neovim
 // distribution works, and it moves with SageFs. Sync never blocks a release: a plugin repo that is missing,
 // dirty, off master, diverged, or red in its own tests is reported and left alone (exit 0). Exit 1 is only for
 // --check, --compat and --impact findings, and exit 64 for bad arguments.
+#load "ReleaseRules.fs"
+
 open System
 open System.Diagnostics
 open System.IO
@@ -157,7 +162,7 @@ let impact (sha: string) =
 
 // ── --check and sync ─────────────────────────────────────────────────────────
 
-let currentPluginVersion () = readFile versionFile |> Option.bind (firstGroup "\"([0-9][^\"]*)\"")
+let currentPluginVersion () = readFile versionFile |> Option.bind ReleaseRules.pluginVersionIn
 let isGitCheckout dir = Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"))
 
 let check (version: string) =
@@ -228,7 +233,7 @@ let sync (version: string) =
         warn (sprintf "the plugin's %s has diverged from %s. Not syncing; resolve it, then %s" primaryBranch remoteRef hint)
         0
       else
-        File.WriteAllText(versionFile, sprintf "return \"%s\"\n" version)
+        File.WriteAllText(versionFile, ReleaseRules.pluginVersionFile version)
         say (sprintf "sagefs.nvim version file now says %s" version)
         match runSuite () with
         | RunnerMissing ->

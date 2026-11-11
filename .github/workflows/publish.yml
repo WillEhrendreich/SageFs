@@ -175,27 +175,25 @@ jobs:
         body_path: ${{ steps.release_notes.outputs.notes_path }}
         make_latest: true
 
-    - name: Sync sagefs.nvim version tag
+    # The plugin's version file has ONE writer: scripts/sync-nvim-version.fsx, which scripts/ship.fsx runs after the
+    # push (it tests the plugin, commits to its master and pushes). This step used to write the same file too, on a
+    # branch the plugin does not have (`main`; it is `master`), with a different quote style and a different commit
+    # message, behind a secret that is not set, so it never ran and would have failed quietly if it had. It only
+    # CHECKS now: a public clone, then the owner's own `--check`. A mismatch is a warning and never fails the
+    # release, because the ship's sync runs after the push and can still be on its way when this step reads.
+    - name: Check the sagefs.nvim version matches this release
       env:
-        NVIM_PAT: ${{ secrets.SAGEFS_NVIM_PAT }}
         VERSION: ${{ steps.manifest.outputs.version }}
-      if: env.NVIM_PAT != ''
       continue-on-error: true
       shell: bash
       run: |
         set -euo pipefail
         tmp=$(mktemp -d)
-        git clone --depth 1 "https://x-access-token:${NVIM_PAT}@github.com/WillEhrendreich/sagefs.nvim.git" "$tmp"
-        cd "$tmp"
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        printf "return '%s'\n" "$VERSION" > lua/sagefs/version.lua
-        git add lua/sagefs/version.lua
-        git diff --cached --quiet || git commit -m "chore: sync version to v${VERSION}"
-        git push origin main
-        git tag -f "v${VERSION}" -m "Release v${VERSION} (synced from SageFs)"
-        git push origin "v${VERSION}" --force
-        cd /
+        git clone --depth 1 "https://github.com/WillEhrendreich/sagefs.nvim.git" "$tmp"
+        export SAGEFS_NVIM_DIR="$tmp"
+        if ! dotnet fsi scripts/sync-nvim-version.fsx -- --check "$VERSION"; then
+          echo "::warning::the sagefs.nvim version file does not say ${VERSION}. scripts/ship.fsx syncs it after the push; if that was skipped (plugin repo dirty, off master, or red), run: dotnet fsi scripts/sync-nvim-version.fsx -- ${VERSION}"
+        fi
         rm -rf "$tmp"
 
     - name: Fail the run when the VS Code Marketplace refused the extension

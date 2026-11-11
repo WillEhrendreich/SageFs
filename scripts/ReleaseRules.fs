@@ -84,6 +84,18 @@ let private packageVersion = Regex("\"version\": \"[^\"]*\"", RegexOptions.Compi
 let withPackageVersion (next: string) (packageJson: string) : string =
   packageVersion.Replace(packageJson, sprintf "\"version\": \"%s\"" next, 1)
 
+/// The text of sagefs.nvim's `lua/sagefs/version.lua` for a release. `sync-nvim-version.fsx` is the only writer; the
+/// publish workflow only checks (`sync-nvim-version.fsx -- --check`).
+let pluginVersionFile (version: string) : string = sprintf "return \"%s\"\n" version
+
+let private pluginVersionLine = Regex("^\\s*return\\s+[\"']([0-9][^\"']*)[\"']", RegexOptions.Multiline ||| RegexOptions.Compiled)
+
+/// The version a plugin version file names, written with either quote style. None when it names none.
+let pluginVersionIn (text: string) : string option =
+  match pluginVersionLine.Match text with
+  | m when m.Success -> Some m.Groups[1].Value
+  | _ -> None
+
 // ── the pre-push hook ────────────────────────────────────────────────────────
 
 /// The all-zero sha git uses for "no such ref" in a push line.

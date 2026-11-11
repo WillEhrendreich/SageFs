@@ -347,6 +347,23 @@ let gateTests =
       message |> Expect.stringContains "how to stop it from the gate" "--supersede"
       message |> Expect.stringContains "how to see it" "gate-tail.fsx"
 
+    testCase "WHY — the plugin's version file has one shape, and the reader accepts both quote styles so a file written either way reads back" <| fun _ ->
+      pluginVersionFile "0.6.945" |> Expect.equal "double quotes and a newline" "return \"0.6.945\"\n"
+      pluginVersionIn (pluginVersionFile "0.6.945") |> Expect.equal "round trip" (Some "0.6.945")
+      pluginVersionIn "return '0.6.945'\n" |> Expect.equal "the single-quoted file publish.yml used to write" (Some "0.6.945")
+      pluginVersionIn "-- a comment\nreturn \"1.2.3\"\n" |> Expect.equal "a comment line before it" (Some "1.2.3")
+      pluginVersionIn "" |> Expect.equal "empty" None
+      pluginVersionIn "return nil\n" |> Expect.equal "not a version" None
+
+    testCase "WHY — one writer owns the plugin's version file: sync-nvim-version.fsx writes it, and publish.yml only checks it" <| fun _ ->
+      let publish = read ".github/workflows/publish.yml"
+      publish.Contains "version.lua" |> Expect.isFalse "publish.yml does not name the file it must not write"
+      publish.Contains "git push origin main" |> Expect.isFalse "publish.yml pushes nothing to the plugin repo"
+      publish |> Expect.stringContains "publish.yml asks the owner's own check" "sync-nvim-version.fsx -- --check"
+      let sync = read "scripts/sync-nvim-version.fsx"
+      sync |> Expect.stringContains "the owner writes the shared shape" "ReleaseRules.pluginVersionFile"
+      sync |> Expect.stringContains "the owner reads the shared shape" "ReleaseRules.pluginVersionIn"
+
     testCase "WHY — the gate script asks the pure decision before it stops anything" <| fun _ ->
       let gate = read "scripts/local-gate.fsx"
       gate |> Expect.stringContains "the decision is the pure one" "ReleaseRules.decideTurn"
