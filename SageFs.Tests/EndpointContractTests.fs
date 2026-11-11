@@ -22,21 +22,18 @@ module RouteScan =
   /// Falco's own `yield get "/x"` and `yield post "/x"`.
   let yieldedRoute = Regex(@"\byield\s+(?<verb>get|post)\s+""(?<path>[^""]+)""", RegexOptions.Compiled)
 
-  /// `proxyGetRoute "/x"`, which maps the session-scoped route under a prefix the helper's definition carries.
-  let proxiedRoute = Regex(@"\bproxy(?<verb>Get|Post)Route\s+""(?<path>[^""]+)""", RegexOptions.Compiled)
-
-  /// The helper's definition, which is where the prefix lives: `let proxyGetRoute path = ... sprintf "/api/sessions/{sid}%s" path`.
-  let proxyDefinition =
-    Regex(@"let\s+proxy(?<verb>Get|Post)Route\s+path\s*=.*sprintf\s+""(?<prefix>[^""]*)%s""", RegexOptions.Compiled)
+  /// A registration whose path is `workerProxyRoute`, built from the daemon's typed proxy table
+  /// (`DaemonMode.hotReloadProxyRoutes`, each a `WorkerRoute`). The text names no path, so `typedProxied` reads the table as data.
+  let typedTableRegistration = Regex(@"\bmap(?:Get|Post)Raw\s+workerProxyRoute\b", RegexOptions.Compiled)
 
   /// Any text that registers a route. A line with one of these and no literal route is a registration the scan cannot read.
   let registration =
     Regex(
-      @"\.Map(?:Get|Post|Put|Delete|Patch|Methods)\(|\bmap(?:Get|Post)Raw\b|\bproxy(?:Get|Post)Route\b|\byield\s+(?:get|post|put|delete|patch|any)\b",
+      @"\.Map(?:Get|Post|Put|Delete|Patch|Methods)\(|\bmap(?:Get|Post)Raw\b|\byield\s+(?:get|post|put|delete|patch|any)\b",
       RegexOptions.Compiled)
 
   /// A definition of a registration helper (not a use of one).
-  let helperDefinition = Regex(@"^\s*let\s+(?:inline\s+)?(?:proxy(?:Get|Post)Route|map(?:Get|Post)Raw)\b", RegexOptions.Compiled)
+  let helperDefinition = Regex(@"^\s*let\s+(?:inline\s+)?map(?:Get|Post)Raw\b", RegexOptions.Compiled)
 
   /// The browser UI's own routes: the page, its fragments and its actions. They are not the daemon's API.
   let uiPrefixes = [ "/dashboard"; "/favicon.ico" ]
@@ -57,27 +54,12 @@ module RouteScan =
 
   let verbOf (m: Match) : string = m.Groups["verb"].Captures[0].Value
 
-  /// The route prefix of each proxy helper, by verb.
-  let proxyPrefixes (lines: string list) : Map<HttpMethod, string> =
-    lines
-    |> List.choose (fun line ->
-      match proxyDefinition.Match line with
-      | m when m.Success -> Some (methodOf (verbOf m), m.Groups["prefix"].Value)
-      | _ -> None)
-    |> Map.ofList
-
-  /// Every literal route registered in `text`, in order, with the proxy helpers expanded.
+  /// Every literal route registered in `text`, in order.
   let routesIn (text: string) : MappedRoute list =
-    let lines = codeLines text
-    let prefixes = proxyPrefixes lines
-    lines
+    codeLines text
     |> List.collect (fun line ->
       [ for m in literalRoute.Matches line -> { Method = methodOf (verbOf m); Path = m.Groups["path"].Value }
-        for m in yieldedRoute.Matches line -> { Method = methodOf (verbOf m); Path = m.Groups["path"].Value }
-        for m in proxiedRoute.Matches line do
-          let meth = methodOf (verbOf m)
-          let prefix = Map.tryFind meth prefixes |> Option.defaultValue ""
-          yield { Method = meth; Path = prefix + m.Groups["path"].Value } ])
+        for m in yieldedRoute.Matches line -> { Method = methodOf (verbOf m); Path = m.Groups["path"].Value } ])
 
   /// Lines that register a route but name no literal path: the scan would silently miss these.
   let unreadableIn (text: string) : string list =
@@ -87,8 +69,16 @@ module RouteScan =
       && not (helperDefinition.IsMatch line)
       && not (literalRoute.IsMatch line)
       && not (yieldedRoute.IsMatch line)
-      && not (proxiedRoute.IsMatch line))
+      && not (typedTableRegistration.IsMatch line))
     |> List.map (fun line -> line.Trim())
+
+  /// The routes the daemon forwards to a worker, read from the typed table the registration is built from: each is
+  /// `SageFs.Server.DaemonMode.workerProxyPrefix` and the worker route's own path, on the method the worker serves it on.
+  let typedProxied () : MappedRoute list =
+    SageFs.Server.DaemonMode.hotReloadProxyRoutes
+    |> List.map (fun route ->
+      { Method = methodOf (SageFs.WorkerRoute.httpMethod route)
+        Path = SageFs.Server.DaemonMode.workerProxyPrefix + SageFs.WorkerRoute.path route })
 
   let daemonSources () : string list =
     Directory.GetFiles(RepoPaths.repoPath [| "SageFs" |], "*.fs", SearchOption.AllDirectories)
@@ -101,6 +91,7 @@ module RouteScan =
   let mapped () : Set<HttpMethod * string> =
     daemonSources ()
     |> List.collect (File.ReadAllText >> routesIn)
+    |> fun literal -> literal @ typedProxied ()
     |> List.filter (fun route -> not (isUiRoute route.Path))
     |> List.map (fun route -> route.Method, normalizePath route.Path)
     |> Set.ofList
@@ -127,17 +118,19 @@ let routeScanTests =
           { Method = GET; Path = "/api/state" } ]
     }
 
-    test "a proxied route is expanded with the prefix its helper carries, per verb" {
-      let text =
-        String.concat "\n"
-          [ """  let proxyGetRoute path = Dashboard.mapGetRaw (sprintf "/api/sessions/{sid}%s" path) extractSid handler"""
-            """  let proxyPostRoute path = Dashboard.mapPostRaw (sprintf "/api/sessions/{sid}%s" path) extractSid handler"""
-            """    proxyGetRoute "/hotreload" """
-            """    proxyPostRoute "/hotreload/toggle" """ ]
-      RouteScan.routesIn text
-      |> Expect.equal "both expanded"
-        [ { Method = GET; Path = "/api/sessions/{sid}/hotreload" }
-          { Method = POST; Path = "/api/sessions/{sid}/hotreload/toggle" } ]
+    test "the routes the daemon forwards to a worker are read from its typed table, per verb" {
+      let proxied = RouteScan.typedProxied ()
+      proxied |> Expect.contains "the hot reload read" { Method = GET; Path = "/api/sessions/{sid}/hotreload" }
+      proxied |> Expect.contains "a toggle is a post" { Method = POST; Path = "/api/sessions/{sid}/hotreload/toggle" }
+      RouteScan.mapped ()
+      |> Expect.contains "and the daemon's mapped set holds them" (GET, normalizePath "/api/sessions/{sid}/hotreload")
+    }
+
+    test "a registration built from the typed table is not an unreadable one, and any other computed path is" {
+      RouteScan.unreadableIn """    | Some _ -> Dashboard.mapGetRaw workerProxyRoute extractSid handler"""
+      |> Expect.isEmpty "the typed table's registration is read as data"
+      RouteScan.unreadableIn """    | Some _ -> Dashboard.mapGetRaw somePath extractSid handler"""
+      |> Expect.hasLength "a path named anywhere else is still reported" 1
     }
 
     test "a registration whose path is not a literal is reported, a helper definition is not" {

@@ -1033,6 +1033,23 @@ let getEvalStatsFromWorker
   return EvalStatsReading.toEvalStats reading
 }
 
+/// What the daemon's proxy routes carry before a worker route's own path.
+let workerProxyPrefix = "/api/sessions/{sid}"
+
+/// The worker routes the daemon forwards for the hot-reload controls and the warmup read; paths and methods are `WorkerRoute`'s.
+let hotReloadProxyRoutes : WorkerRoute list =
+  [ WorkerRoute.HotReload
+    WorkerRoute.HotReloadToggle
+    WorkerRoute.HotReloadResetState
+    WorkerRoute.HotReloadReflectionMode
+    WorkerRoute.HotReloadWatchAll
+    WorkerRoute.HotReloadUnwatchAll
+    WorkerRoute.HotReloadWatchProject
+    WorkerRoute.HotReloadUnwatchProject
+    WorkerRoute.HotReloadWatchDirectory
+    WorkerRoute.HotReloadUnwatchDirectory
+    WorkerRoute.SessionWarmupContext ]
+
 /// Create hot-reload proxy HTTP endpoints that forward to worker servers.
 let createHotReloadProxyEndpoints
   (getWorkerBaseUrl: WorkerProtocol.SessionId -> string option)
@@ -1096,21 +1113,13 @@ let createHotReloadProxyEndpoints
       return (respBody, int resp.StatusCode, resp.IsSuccessStatusCode)
     }) ctx
   let extractSid = Dashboard.routeValue "sid"
-  let proxyGetRoute path = Dashboard.mapGetRaw (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyGet sid path ctx)
-  let proxyPostRoute path = Dashboard.mapPostRaw (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyPost sid path ctx)
-  [
-    proxyGetRoute "/hotreload"
-    proxyPostRoute "/hotreload/toggle"
-    proxyPostRoute "/hotreload/reset-state"
-    proxyPostRoute "/hotreload/reflection-mode"
-    proxyPostRoute "/hotreload/watch-all"
-    proxyPostRoute "/hotreload/unwatch-all"
-    proxyPostRoute "/hotreload/watch-project"
-    proxyPostRoute "/hotreload/unwatch-project"
-    proxyPostRoute "/hotreload/watch-directory"
-    proxyPostRoute "/hotreload/unwatch-directory"
-    proxyGetRoute "/warmup-context"
-  ]
+  let endpointFor (route: WorkerRoute) : HttpEndpoint =
+    let path = WorkerRoute.path route
+    let workerProxyRoute = workerProxyPrefix + path
+    match WorkerRoute.getAccess route with
+    | Some _ -> Dashboard.mapGetRaw workerProxyRoute extractSid (fun sid -> fun ctx -> proxyGet sid path ctx)
+    | None -> Dashboard.mapPostRaw workerProxyRoute extractSid (fun sid -> fun ctx -> proxyPost sid path ctx)
+  hotReloadProxyRoutes |> List.map endpointFor
 
 /// Graceful shutdown: save caches, persist manifest, stop all workers.
 let performGracefulShutdown
