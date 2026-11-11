@@ -112,6 +112,31 @@ module ValidateSessionCreateRequestTests =
         | other -> failwithf "expected UnsafeSessionPath, got %A" other
       }
 
+      // `/` passed "exists and not UNC", so a session could watch every file on the machine, and every later containment
+      // check (load-script, eval-file) was relative to a root that contains everything.
+      test "WHY - refuses the filesystem root, with the reason and where to start instead" {
+        let root = Path.GetPathRoot(Path.GetTempPath())
+        match validateSessionCreateRequest root [] with
+        | Error (SageFsError.UnsafeSessionPath(path, reason)) ->
+          path |> Expect.equal "names the root" root
+          reason |> Expect.stringContains "says why" "filesystem root"
+          reason |> Expect.stringContains "says what to do" "project's own directory"
+        | other -> failwithf "expected UnsafeSessionPath, got %A" other
+      }
+
+      test "WHY - the home directory itself gets a warning, because its watchers cover every file the person has" {
+        withTempDir (fun home ->
+          SageFs.SessionPathValidation.noticeFor home home
+          |> Expect.equal "home itself" (SageFs.SessionPathValidation.SessionRootNotice.HomeDirectory home)
+          let project = Path.Combine(home, "proj")
+          Directory.CreateDirectory project |> ignore
+          SageFs.SessionPathValidation.noticeFor home project
+          |> Expect.equal "a project under home is ordinary" SageFs.SessionPathValidation.SessionRootNotice.NoNotice
+          SageFs.SessionPathValidation.SessionRootNotice.describe (SageFs.SessionPathValidation.SessionRootNotice.HomeDirectory home)
+          |> Option.defaultValue ""
+          |> Expect.stringContains "names the cost" "watch")
+      }
+
       test "rejects a UNC-style working directory with UnsafeSessionPath" {
         match validateSessionCreateRequest @"\\attacker-host\share" [] with
         | Error (SageFsError.UnsafeSessionPath(_, reason)) ->

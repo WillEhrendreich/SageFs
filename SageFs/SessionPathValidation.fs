@@ -37,6 +37,28 @@ module SessionPathValidation =
       | null -> full
       | resolved -> resolved.FullName
 
+  /// A path that is its own root (`/`, `C:\`), after links are followed.
+  let isFilesystemRoot (canonical: string) : bool =
+    let trimmed (p: string) = p.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar)
+    match System.IO.Path.GetPathRoot canonical with
+    | null | "" -> false
+    | root -> System.String.Equals(trimmed root, trimmed canonical, System.StringComparison.OrdinalIgnoreCase)
+
+  /// What a session's reply should warn about its working directory, when anything.
+  [<RequireQualifiedAccess>]
+  type SessionRootNotice =
+    | NoNotice
+    /// The person's home directory itself: the hot-reload and live-test watchers then cover every file they have, and
+    /// a symlink cycle under it once grew the daemon to 55 GB.
+    | HomeDirectory of path: string
+
+  module SessionRootNotice =
+    let describe (notice: SessionRootNotice) : string option =
+      match notice with
+      | SessionRootNotice.NoNotice -> None
+      | SessionRootNotice.HomeDirectory path ->
+        Some (sprintf "Warning: this session works in your home directory (%s), so it watches every file under it: many watchers, slow scans, and a symlink cycle anywhere below is walked too. Start the session in the project's own directory instead." path)
+
   let private isUncPath (p: string) =
     not (System.String.IsNullOrWhiteSpace p)
     && (p.StartsWith(@"\\") || p.StartsWith("//"))
@@ -60,6 +82,20 @@ module SessionPathValidation =
   /// unsafe path — a request that named an unsafe path should get a clear
   /// refusal, never a session quietly created somewhere else. Pure — no IO
   /// beyond path/filesystem probes — so it is unit-tested directly.
+  /// Pure apart from following links: whether `workingDir` is `home` itself. `home` is a parameter so a test names it.
+  let noticeFor (home: string) (workingDir: string) : SessionRootNotice =
+    match System.String.IsNullOrWhiteSpace home || System.String.IsNullOrWhiteSpace workingDir with
+    | true -> SessionRootNotice.NoNotice
+    | false ->
+      let trimmed (p: string) = p.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar)
+      match System.String.Equals(trimmed (resolveRealSessionPath home), trimmed (resolveRealSessionPath workingDir), System.StringComparison.Ordinal) with
+      | true -> SessionRootNotice.HomeDirectory workingDir
+      | false -> SessionRootNotice.NoNotice
+
+  /// `noticeFor` against this user's home directory.
+  let noticeForUser (workingDir: string) : SessionRootNotice =
+    noticeFor (System.Environment.GetFolderPath System.Environment.SpecialFolder.UserProfile) workingDir
+
   let validateSessionCreateRequest (workingDir: string) (projects: string list) : Result<unit, SageFsError> =
     match System.String.IsNullOrWhiteSpace workingDir with
     | true -> Error (SageFsError.UnsafeSessionPath(workingDir, "workingDirectory is required"))
@@ -71,6 +107,10 @@ module SessionPathValidation =
     | false -> Error (SageFsError.UnsafeSessionPath(workingDir, "directory does not exist"))
     | true ->
     let canonicalDir = resolveRealSessionPath workingDir
+    match isFilesystemRoot canonicalDir with
+    | true ->
+      Error (SageFsError.UnsafeSessionPath(workingDir, "a filesystem root holds every file on the machine, so the session would watch all of them and contain nothing; start it in the project's own directory, the one that holds its .fsproj or .sln"))
+    | false ->
     let isContained (p: string) =
       not (isUncPath p)
       && (let full =
