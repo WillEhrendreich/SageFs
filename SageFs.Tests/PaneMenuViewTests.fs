@@ -140,6 +140,15 @@ let paneMenuViewTests =
       html |> Expect.stringContains "hot reload shows its line" "shows the line &quot;Hot reload: off&quot; for now"
       html |> Expect.stringContains "friction has nothing to show" "nothing to show: friction reports are off until a tab asks for them"
 
+    testCase "WHY — with no session open the menu's reason line is the sidebar's: 'no session selected', not 'off'" <| fun _ ->
+      let noSession = { replFacts with Viewed = ViewedSession.NoSession }
+      PaneLayoutView.relevanceOf noSession PanelId.HotReload
+      |> Expect.equal "hot reload has no session to be off for" (PaneRelevance.ReasonLine "Hot reload: no session selected")
+      PaneLayoutView.relevanceOf noSession PanelId.LiveTesting
+      |> Expect.equal "live testing likewise" (PaneRelevance.ReasonLine "Live testing: no session selected")
+      htmlOf (PaneLayoutView.ofRead repl { Book = LayoutBook.empty; Reading = FileReading.Readable } noSession)
+      |> Expect.stringContains "the menu shows the line it will draw" "shows the line &quot;Hot reload: no session selected&quot; for now"
+
     testCase "a saved layout that could not be used says why, on the menu, and the default is drawn" <| fun _ ->
       let read : PaneLayoutRead =
         { Book = LayoutBook.read (Map.ofList [ LayoutWorkflow.key repl, "garbage" ]); Reading = FileReading.Readable }

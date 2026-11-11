@@ -1778,19 +1778,6 @@ module PanelVisibility =
     | ContextPanel.FailureNarratives -> DomIds.HiddenReasonFailureNarratives
     | ContextPanel.Alarms -> DomIds.HiddenReasonAlarms
 
-  /// A panel's line when no decision is at hand, keyed by the panel alone. It is only right for a panel that is on the page for
-  /// a session; the line a hidden panel really shows is `HiddenBecause.headline`, which follows the decision. The Panels menu
-  /// still asks this one (`PaneMenuView.relevanceOf` drops the reason it matched), so it says "off" there with no session.
-  let reasonName (panel: ContextPanel) : string =
-    match panel with
-    | ContextPanel.HotReload -> "Hot reload: off"
-    | ContextPanel.LiveTesting -> "Live testing: off"
-    | ContextPanel.Cohort -> "Agent team: none running"
-    | ContextPanel.Friction -> "Friction reports: off"
-    | ContextPanel.Diagnostics -> "Diagnostics: not checked yet"
-    | ContextPanel.FailureNarratives -> "Failing tests: hidden"
-    | ContextPanel.Alarms -> "Alarms: hidden"
-
   /// A next step that is a button posts with the signal that shows it is in flight, the way the live testing panel's own
   /// toggle does. It sits on the line that is always visible (the summary), so the step is there without opening anything.
   let nextStepButton (next: NextStep) : Falco.Markup.XmlNode =

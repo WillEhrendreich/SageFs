@@ -79,7 +79,7 @@ module PaneLayoutView =
     | Some panel ->
       match PanelContext.decide facts panel with
       | PanelPresence.Shown -> PaneRelevance.OnPage
-      | PanelPresence.Hidden _ -> PaneRelevance.ReasonLine(PanelVisibility.reasonName panel)
+      | PanelPresence.Hidden(because, _) -> PaneRelevance.ReasonLine(HiddenBecause.headline because)
       | PanelPresence.Quiet because -> PaneRelevance.NothingToShow(QuietBecause.text because)
 
   let healthOf (workflow: LayoutWorkflow) (read: PaneLayoutRead) : LayoutHealth =
