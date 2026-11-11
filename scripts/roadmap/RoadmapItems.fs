@@ -397,6 +397,11 @@ let items : Item list =
       [ "docs/mcp-tools.md"; "docs/plans/a-token-for-every-daemon-call.md" ]
       "The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity."
 
+    item "dashboard-csp" "A Content-Security-Policy on the dashboard" Platform Later
+      NoLandmarkYet
+      [ "docs/decisions.md"; "docs/plans/dashboard-csp.md" ]
+      "Every computed value now reaches the dashboard's attributes and Datastar expressions through one set of encoding sinks, and a test keeps it that way. A policy would be a second wall behind that, stopping an injected script element or inline handler. The page still carries four inline scripts, so I'd move them into a served file first and then send the header."
+
     item "admit-heavy-work-by-measured-cost" "Admit heavy work by measured cost" Platform Later
       NoLandmarkYet
       [ "docs/plans/admit-heavy-work-by-measured-cost.md" ]
