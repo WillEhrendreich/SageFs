@@ -82,6 +82,27 @@ type FileDecls = {
   QualifiedAccessModules: string list list
 }
 
+/// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
+/// code changes land, state stays.
+[<RequireQualifiedAccess>]
+type LiveState =
+  /// An unedited non-public `let mutable` the patch reads or writes. FSI can't
+  /// name a private member of the app's assembly, so the patch gets a
+  /// same-named stand-in that reads and writes the app's OWN storage. It is
+  /// never re-declared, because a re-declaration is a fresh field holding the
+  /// initializer and the live value would be gone.
+  | Carried of decl: SourceDecl
+  /// An edited `let mutable` whose type didn't change (rule 3). The app keeps
+  /// its live value and the new initializer waits for an explicit reset. The
+  /// save says so, because keeping state quietly is the one thing people
+  /// complain about in Flutter.
+  | Kept of decl: SourceDecl
+  /// An edited public immutable value (rule 2). It's patched, getter and all,
+  /// only if the running app says nothing kept a copy of the old one; the
+  /// worker asks before patching (ValueReads). Otherwise it's a restart that
+  /// names who kept it.
+  | Redefined of decl: SourceDecl
+
 [<RequireQualifiedAccess>]
 type ReloadChange =
   | TypeChanged of name: string
@@ -121,12 +142,11 @@ type ReloadChange =
   /// reasons, because by the time this is known the process is already
   /// silently wrong.
   | MutableBindingTorn of binding: string
-  /// A function changed in an app SageFs started with run_app. That app runs on a
-  /// thread in the WORKER, and the reload agent that applies a patch lives in the
-  /// FSI host, so a patch would re-point the host's copy of the function and the
-  /// running app would never call it. Known from where the app runs
-  /// (`AppPlacement`), never from the source diff.
+  /// A function changed in an app SageFs started with run_app, and the save would be patched through F# Interactive,
+  /// whose patch lands in the FSI host and never reaches the app in the WORKER (`AppPlacement`).
   | RunsOutsideAgent of name: string
+  /// The same app on the metadata delta route, with an edit that keeps live module state, which that route does not carry yet.
+  | LiveStateOffDeltaRoute of state: LiveState
   /// The lambdas of a declaration changed in a way the closures the running app
   /// already built cannot take: a lambda started capturing something it did not,
   /// or gained or lost a lambda inside it. Found at patch time by comparing the
@@ -145,27 +165,6 @@ type ReloadChange =
   | DeltaUnavailable of why: string
   /// A step of the metadata-delta save threw (see `RestartReason.MetadataDeltaFaulted`).
   | DeltaFaulted of exceptionType: string * message: string
-
-/// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
-/// code changes land, state stays.
-[<RequireQualifiedAccess>]
-type LiveState =
-  /// An unedited non-public `let mutable` the patch reads or writes. FSI can't
-  /// name a private member of the app's assembly, so the patch gets a
-  /// same-named stand-in that reads and writes the app's OWN storage. It is
-  /// never re-declared, because a re-declaration is a fresh field holding the
-  /// initializer and the live value would be gone.
-  | Carried of decl: SourceDecl
-  /// An edited `let mutable` whose type didn't change (rule 3). The app keeps
-  /// its live value and the new initializer waits for an explicit reset. The
-  /// save says so, because keeping state quietly is the one thing people
-  /// complain about in Flutter.
-  | Kept of decl: SourceDecl
-  /// An edited public immutable value (rule 2). It's patched, getter and all,
-  /// only if the running app says nothing kept a copy of the old one; the
-  /// worker asks before patching (ValueReads). Otherwise it's a restart that
-  /// names who kept it.
-  | Redefined of decl: SourceDecl
 
 [<RequireQualifiedAccess>]
 type ReloadPlan =
@@ -209,8 +208,9 @@ module ReloadChange =
     | ReloadChange.GenericInstantiationsUnknown (name, detail) -> sprintf "%s is generic, and %s" name detail
     | ReloadChange.RefusedByDelta cause -> SageFs.Features.MetadataDelta.RudeCause.describe cause
     | ReloadChange.DeltaUnavailable why -> sprintf "this app cannot take an in-place patch: %s" why
-    | ReloadChange.DeltaFaulted (exceptionType, message) ->
-      sprintf "the metadata-delta save failed with %s (%s)" exceptionType message
+    | ReloadChange.DeltaFaulted (exceptionType, message) -> sprintf "the metadata-delta save failed with %s (%s)" exceptionType message
+    | ReloadChange.LiveStateOffDeltaRoute (LiveState.Carried d | LiveState.Kept d | LiveState.Redefined d) ->
+      sprintf "the edit keeps the live module state of %s, and the metadata delta route does not carry live module state yet" d.Name
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
 
@@ -262,11 +262,10 @@ module ReloadChange =
     // be patched at all. The remedy is identical: restart to re-run the
     // initialiser, because SageFs will not guess which field is the real one.
     | ReloadChange.MutableBindingTorn binding -> RestartReason.MutableModuleState binding
-    // Unimplemented rather than impossible: patching an app run by run_app needs
-    // the new body compiled in the WORKER, where the app is, and today it is
-    // compiled in the FSI host. Until then SageFs restarts the app it started.
     | ReloadChange.RunsOutsideAgent name ->
-      RestartReason.NotYetSupported (sprintf "an in-place patch of '%s', because this app was started with run_app and runs outside the process SageFs patches" name)
+      RestartReason.NotYetSupported (sprintf "'%s' by F# Interactive in an app started with run_app (the patch would land in the FSI host, and the app runs in the worker)" name)
+    | ReloadChange.LiveStateOffDeltaRoute (LiveState.Carried d | LiveState.Kept d | LiveState.Redefined d) ->
+      RestartReason.NotYetSupported (sprintf "'%s' by metadata delta while keeping its live module state" d.Name)
     | ReloadChange.ClosureShapeChanged (name, detail) -> RestartReason.ClosureShapeChanged (name, detail)
     | ReloadChange.InstanceLayoutChanged (typeName, detail) -> RestartReason.InstanceLayoutChanged (typeName, detail)
     | ReloadChange.GenericInstantiationsUnknown (name, detail) -> RestartReason.GenericInstantiationsUnknown (name, detail)
@@ -1597,20 +1596,14 @@ let confirmWholeFileReeval
 let restartOutcome (first: ReloadChange) (rest: ReloadChange list) : ReloadOutcome =
   SageFs.Features.ReloadOutcome.ReloadOutcome.RestartRequired (ReloadChange.restartReasons first rest)
 
-/// Where the running app lives, relative to the agent that applies patches.
-///
-/// Every session's reload agent lives in the FSI host (HostAgent.fs: it runs "in
-/// the process that loaded those assemblies", and for an isolated session that is
-/// the FSI host). An app SageFs started with `run_app` runs on a thread in the
-/// WORKER. Measured on 0.6.843, a save to such an app was patched in the host's
-/// copy, reported as "Hot reloaded 1 of 1", and changed nothing the app did.
+/// Where the running app lives, relative to the agent that applies patches. The agent lives in the FSI host (HostAgent.fs);
+/// an app SageFs started with `run_app` runs in the WORKER, where a detour patches a copy the app never calls (measured on
+/// 0.6.843: "Hot reloaded 1 of 1" and nothing changed) and only a metadata delta reaches it (`PatchRoute`).
 [<RequireQualifiedAccess>]
 type AppPlacement =
-  /// Whatever runs (an app started from FSI or an init script, or nothing at
-  /// all) is in the agent's own process, so a patch reaches it.
+  /// Whatever runs (an app started from FSI or an init script, or nothing) is in the agent's process, so a patch reaches it.
   | InAgentProcess
-  /// SageFs started the app with run_app: it runs in the worker, out of the
-  /// agent's reach.
+  /// SageFs started the app with run_app: it runs in the worker, out of the agent's reach.
   | InWorkerProcess
 
 module AppPlacement =

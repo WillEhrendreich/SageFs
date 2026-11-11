@@ -81,9 +81,19 @@ let deltaRouteTests =
         match PatchRoute.choose AppPlacement.InWorkerProcess mode restart with
         | SaveRoute.PerPlan (ReloadPlan.RestartRequired (ReloadChange.TypeChanged "Shape", [])) -> ()
         | other -> failtestf "a type change keeps its reason: %A" other
-        match PatchRoute.choose AppPlacement.InWorkerProcess mode keeping with
-        | SaveRoute.PerPlan (ReloadPlan.RestartRequired _) -> ()
-        | other -> failtestf "live state in a run_app app restarts, a delta does not keep it: %A" other
+        // The routing is the same with the route on and off: live state in a run_app app restarts. The reason differs, and
+        // each has to be true. With the route on, the delta patches the worker, so "runs outside the process SageFs
+        // patches" would be false; the restart is about the live state the delta does not carry yet.
+        match mode, PatchRoute.choose AppPlacement.InWorkerProcess mode keeping with
+        | MetadataDeltaMode.On, SaveRoute.PerPlan (ReloadPlan.RestartRequired (ReloadChange.LiveStateOffDeltaRoute (LiveState.Kept d), [])) ->
+          d.Name |> Expect.equal "the binding whose live value is kept is named" "x"
+          let text = ReloadChange.describe (ReloadChange.LiveStateOffDeltaRoute (LiveState.Kept d))
+          text |> Expect.stringContains "says the delta route is the one that does not carry it" "metadata delta route"
+          let reason = ReloadChange.restartReason (ReloadChange.LiveStateOffDeltaRoute (LiveState.Kept d))
+          ReloadOutcome.RestartReason.describe reason |> Expect.stringContains "and the card names the binding" "'x'"
+          (ReloadOutcome.RestartReason.describe reason).Contains "outside the process" |> Expect.isFalse "and never claims the app is out of reach"
+        | MetadataDeltaMode.Off, SaveRoute.PerPlan (ReloadPlan.RestartRequired (ReloadChange.RunsOutsideAgent "f", [])) -> ()
+        | _, other -> failtestf "live state in a run_app app restarts with the reason that is true for route %A: %A" mode other
 
     testCase "WHY - a save that changed nothing is not a delta, so it stays the non-event it is" <| fun _ ->
       match PatchRoute.choose AppPlacement.InWorkerProcess MetadataDeltaMode.On (ReloadPlan.PatchFunctions []) with

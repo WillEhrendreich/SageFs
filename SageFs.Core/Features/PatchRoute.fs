@@ -29,4 +29,9 @@ module PatchRoute =
     match placement, mode, plan with
     | AppPlacement.InWorkerProcess, MetadataDeltaMode.On, ReloadPlan.PatchFunctions (_ :: _ as functions) ->
       SaveRoute.ByMetadataDelta functions
+    // The route is on, so a restart here is about the live state the edit keeps, which the delta does not carry yet
+    // (docs/plans/delta-route-carries-more-edits.md). Saying the app "runs outside the process SageFs patches" would be
+    // false: the delta patches the worker.
+    | AppPlacement.InWorkerProcess, MetadataDeltaMode.On, ReloadPlan.PatchKeepingState (_, first, rest) ->
+      SaveRoute.PerPlan(ReloadPlan.RestartRequired(ReloadChange.LiveStateOffDeltaRoute first, rest |> List.map ReloadChange.LiveStateOffDeltaRoute))
     | _ -> SaveRoute.PerPlan(AppPlacement.adjust placement plan)
