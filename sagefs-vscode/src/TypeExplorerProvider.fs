@@ -52,12 +52,24 @@ let private isDrillable (kind: string) : bool =
 let leafItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.None
   item.description <- desc
+  setAccessibleName item
   item.iconPath <- Vscode.newThemeIcon icon
+  item
+
+/// A failure leaf: its words, its icon, a tooltip that says what happened, and a click that does something.
+let private apiLeafItem (leaf: TreeRowsPure.ApiBrowserLeaf) =
+  let view = TreeRowsPure.leafView leaf
+  let item = leafItem view.Label view.Description view.Icon
+  item.tooltip <- view.Tooltip
+  view.Command
+  |> Option.iter (fun command ->
+    item.command <- createObj [ "command" ==> command; "title" ==> view.Label ])
   item
 
 let expandableItem (label: string) (desc: string) (icon: string) (contextValue: string) =
   let item = newTreeItem label TreeItemCollapsibleState.Collapsed
   item.description <- desc
+  setAccessibleName item
   item.iconPath <- Vscode.newThemeIcon icon
   item.contextValue <- contextValue
   item
@@ -75,8 +87,8 @@ let private parseCompletionsJson (parentContext: string) (json: string) : obj ar
     // The daemon could not look (session not active, host gone, compiler error). Say so and why, never "No members".
     | Some _, _ ->
       let reason = fieldString "reason" parsed |> Option.defaultValue "the daemon could not list this name"
-      Some [| leafItem "Could not list members" reason "warning" :> obj |]
-    | None, 0 -> Some [| leafItem "No members" "" "info" :> obj |]
+      Some [| apiLeafItem (TreeRowsPure.ApiBrowserLeaf.CouldNotList reason) :> obj |]
+    | None, 0 -> Some [| apiLeafItem TreeRowsPure.ApiBrowserLeaf.NoMembers :> obj |]
     | None, _ ->
       let size = TypeExplorerPure.parseSetSize (fieldInt "total" parsed) (fieldString "totalKind" parsed |> Option.defaultValue "")
       let rows =
@@ -114,9 +126,9 @@ let private exploreAndParse (query: string) (c: Client.Client) =
     | Some json ->
       match parseCompletionsJson query json with
       | Some items -> return items
-      | None -> return [| leafItem "Error parsing response" "" "warning" :> obj |]
+      | None -> return [| apiLeafItem TreeRowsPure.ApiBrowserLeaf.ParseFailed :> obj |]
     | None ->
-      return [| leafItem "Not connected" "" "warning" :> obj |]
+      return [| apiLeafItem TreeRowsPure.ApiBrowserLeaf.NotConnected :> obj |]
   }
 
 // ── Common roots ────────────────────────────────────────────────
@@ -163,7 +175,7 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
       | _ ->
         return [||]
     | _, None ->
-      return [| leafItem "Not connected" "" "warning" :> obj |]
+      return [| apiLeafItem TreeRowsPure.ApiBrowserLeaf.NotConnected :> obj |]
   }
 
 let getTreeItem (element: obj) : obj = element

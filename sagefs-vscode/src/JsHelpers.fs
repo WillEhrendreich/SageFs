@@ -105,3 +105,8 @@ let jsClearTimeout (id: obj) : unit = jsNative
 /// host is shared, so anything else (another extension's failure) is left alone. See rejection-helpers.js.
 [<Import("installRejectionHandler", "./rejection-helpers.js")>]
 let installRejectionHandler (ownRoot: string) (log: string -> unit) : unit = jsNative
+
+/// Give a tree row an accessible name from its label and description. VS Code joins the two with no
+/// separator for a screen reader, so every row that sets a description sets this too.
+let setAccessibleName (item: TreeItem) : unit =
+  item?accessibilityInformation <- createObj [ "label" ==> TreeRowsPure.accessibleName item.label item.description ]

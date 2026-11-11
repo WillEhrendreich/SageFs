@@ -56,6 +56,7 @@ let createDirItem (dirPath: string) (childCount: int) (watchedCount: int) =
   let item = newTreeItem label TreeItemCollapsibleState.Expanded
   item.contextValue <- "directory"
   item.description <- sprintf "%d/%d watched" watchedCount childCount
+  setAccessibleName item
   item.iconPath <- Vscode.newThemeIcon "folder"
   // No `command`: in VS Code a tree-row click means select/expand, not mutate.
   // Toggling the whole directory is an explicit inline action
@@ -71,6 +72,7 @@ let createFileItem (file: Client.HotReloadFile) =
     | false -> "unwatchedFile", "○ not watching", "testing.iconSkipped"
   item.contextValue <- ctxVal
   item.description <- desc
+  setAccessibleName item
   item.tooltip <- file.path
   // WHY the checkbox, and why the click no longer toggles: a single click on a
   // row used to flip the watch flag, so there was no way to LOOK at a file row

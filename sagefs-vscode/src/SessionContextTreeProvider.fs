@@ -22,6 +22,7 @@ let mutable isLoading: bool = false
 let sectionItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.Expanded
   item.description <- desc
+  setAccessibleName item
   item.iconPath <- Vscode.newThemeIcon icon
   item.contextValue <- "section"
   item
@@ -29,6 +30,7 @@ let sectionItem (label: string) (desc: string) (icon: string) =
 let leafItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.None
   item.description <- desc
+  setAccessibleName item
   item.iconPath <- Vscode.newThemeIcon icon
   item
 
@@ -45,6 +47,7 @@ let summaryItem (ctx: Client.WarmupContextInfo) =
   match failCount with
   | 0 -> ()
   | _ -> item.description <- sprintf "%s | %d failed" desc failCount
+  setAccessibleName item
   item
 
 // ── TreeDataProvider ─────────────────────────────────────────────
