@@ -118,6 +118,60 @@ let integrationTests = testList "HarmonyCanary integration" [
 ]
 
 // ============================================================================
+// What the runtime has to be for the Harmony fork and the delta route to work.
+//
+// SageFs.Harmony is built on a MonoMod patch (~/Work/monomod-net11) that adds .NET 11 support keyed on the JIT-EE
+// interface GUID of the JIT it was derived against, with a hard-coded ICorJitInfo vtable layout. The GUID changes
+// whenever that interface changes, and then the vtable the patch writes through is wrong. Checked by hand on
+// 2026-11-11: the GUID is in libclrjit of 11.0.0-rc.1, rc.2 and 11.0.0 GA, and not in 10.0.13 (MonoMod's own
+// .NET 10 support covers that one).
+// ============================================================================
+
+/// The JIT-EE interface GUID the MonoMod patch was derived against, per runtime major it claims to support.
+let private jitEeGuidFor (major: int) : Guid option =
+  match major with
+  | 11 -> Some(Guid "0d18a7df-af1f-4481-a72f-aa6cf8aa0a65")
+  | _ -> None
+
+let private clrJitPath () : string =
+  let runtimeDir = IO.Path.GetDirectoryName(typeof<obj>.Assembly.Location) |> string
+  let name =
+    match RuntimeInformation.IsOSPlatform OSPlatform.Windows, RuntimeInformation.IsOSPlatform OSPlatform.OSX with
+    | true, _ -> "clrjit.dll"
+    | false, true -> "libclrjit.dylib"
+    | false, false -> "libclrjit.so"
+  IO.Path.Combine(runtimeDir, name)
+
+let private rederive =
+  "The Harmony fork has to be re-derived for this runtime: follow ~/Work/monomod-net11/README.md (CoreCLR.V110.cs: the JIT-EE GUID, AllocMemIndex, TotalVtableCount), rebuild MonoMod and Harmony, and repack harmony-nupkg/."
+
+let runtimeFactsTests = testList "runtime facts the Harmony fork and the delta route rest on" [
+
+  testCase "WHY - the running JIT has the JIT-EE interface GUID the MonoMod patch was derived against, or the fork writes through the wrong vtable" <| fun () ->
+    let major = Environment.Version.Major
+    let jit = clrJitPath ()
+    IO.File.Exists jit |> Expect.isTrue (sprintf "the JIT is next to CoreLib at %s" jit)
+    match major, jitEeGuidFor major with
+    | 10, _ -> () // MonoMod's own .NET 10 support, not the patch, carries this runtime.
+    | _, None -> failtestf "%s: the MonoMod patch names no JIT-EE GUID for .NET %d. %s" RuntimeInformation.FrameworkDescription major rederive
+    | _, Some guid ->
+      let bytes = IO.File.ReadAllBytes jit
+      MemoryExtensions.IndexOf(ReadOnlySpan<byte>(bytes), ReadOnlySpan<byte>(guid.ToByteArray())) >= 0
+      |> Expect.isTrue (sprintf "%s: %s does not hold the JIT-EE GUID %O. %s" RuntimeInformation.FrameworkDescription jit guid rederive)
+
+  testCase "WHY - the delta route reads the runtime's capabilities through an internal method, and the running runtime still answers it with Baseline in the list" <| fun () ->
+    match SageFs.Features.MetadataDelta.DeltaApply.featureProbe SageFs.Features.MetadataDelta.DeltaApply.capabilitiesMethodName with
+    | Result.Ok features ->
+      features |> Expect.contains (sprintf "%s reports the capability every delta needs" RuntimeInformation.FrameworkDescription) "Baseline"
+    | Result.Error why -> failtestf "every save to a run_app app would restart: %s" why
+
+  testCase "WHY - a capability probe that cannot read the list says why and names the runtime, so the restart it causes is explained" <| fun () ->
+    match SageFs.Features.MetadataDelta.DeltaApply.featureProbe "NoSuchCapabilityMethod" with
+    | Result.Error why -> why |> Expect.stringContains "names the runtime" RuntimeInformation.FrameworkDescription
+    | Result.Ok features -> failtestf "a method the runtime does not have answered %A" features
+]
+
+// ============================================================================
 // User code that ends in a call to a function value (`sprintf`, `failwithf`, any
 // `f x` where f is a closure). F# marks that call `tail.`, and Harmony cannot put a
 // PREFIX in front of a body that has one: the patch throws InvalidProgramException at
@@ -269,5 +323,6 @@ let allTests =
   testSequenced (testList "HarmonyCanary" [
     validateCanaryUnitTests
     integrationTests
+    runtimeFactsTests
     tailCallTests
   ])

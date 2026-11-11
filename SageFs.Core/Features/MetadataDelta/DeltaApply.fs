@@ -97,17 +97,35 @@ module DeltaApply =
 
   let private modifiableVariable = "DOTNET_MODIFIABLE_ASSEMBLIES"
 
-  /// The runtime's own list. It is an internal method, so a runtime that renamed it answers with nothing and
-  /// every delta then fails its feature check, which is the safe direction.
-  let private runtimeFeatures () : string list =
+  /// The internal static on `MetadataUpdater` that answers the runtime's capability list. It is not public API, so a
+  /// runtime can rename it; `HarmonyCanaryTests` pins that the running runtime still has it.
+  let capabilitiesMethodName = "GetCapabilities"
+
+  /// The runtime's own list, read through the internal method named `methodName`. `Error` says why it could not be
+  /// read and names the runtime, because every save is a restart while it cannot be.
+  let featureProbe (methodName: string) : Result<string list, string> =
+    let runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
     try
-      match typeof<MetadataUpdater>.GetMethod("GetCapabilities", BindingFlags.NonPublic ||| BindingFlags.Static, null, Type.EmptyTypes, null) with
-      | null -> []
+      match typeof<MetadataUpdater>.GetMethod(methodName, BindingFlags.NonPublic ||| BindingFlags.Static, null, Type.EmptyTypes, null) with
+      | null -> Result.Error(sprintf "%s has no internal MetadataUpdater.%s()" runtime methodName)
       | method ->
         match method.Invoke(null, [||]) with
-        | :? string as text -> text.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> Array.toList
-        | _ -> []
-    with _ -> []
+        | :? string as text -> Result.Ok(text.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> Array.toList)
+        | other -> Result.Error(sprintf "MetadataUpdater.%s() on %s answered %s, not the text of a list" methodName runtime (match other with null -> "null" | o -> o.GetType().Name))
+    with e -> Result.Error(sprintf "MetadataUpdater.%s() on %s threw %s: %s" methodName runtime (e.GetType().Name) e.Message)
+
+  /// The runtime's list, or nothing when it cannot be read: every delta then fails its feature check and every save
+  /// restarts, which is the safe direction. That turns the whole route into restarts, so it is said as a warning, once
+  /// per process (the list is the runtime's and does not change while it runs), and not only in each save's reason.
+  let private probedFeatures : Lazy<string list> =
+    lazy
+      (match featureProbe capabilitiesMethodName with
+       | Result.Ok features -> features
+       | Result.Error why ->
+         SageFs.Utils.Log.warn "Hot reload: the runtime's metadata-update capabilities cannot be read (%s), so every save to an app started with run_app restarts it instead of patching it" why
+         [])
+
+  let private runtimeFeatures () : string list = probedFeatures.Value
 
   /// Read what this process can do.
   let capability () : RuntimeCapability =
