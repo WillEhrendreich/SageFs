@@ -2,6 +2,61 @@
 
 Roadmap item: `hot-reload-without-tiering-off` (Exploring, hot reload). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read at that commit; the older sections keep their own numbers, some of which have moved.
+
+### 1. Outcome
+
+A hot reload session starts its FSI host with the runtime's tiered compilation left on, and the reflection watch behind rule 2 still cannot lapse without the save failing closed. Or the item closes because a fresh measurement shows tiering-off costs too little to chase. Either is done. The gate for the build case is a copy of the keep-tiering row at `SageFs.Tests/HotReloadStateOutcomeTests.fs:353` for the new choice, hammering the entry points well past `hammerCalls = 80` (line 342) on net10 and net11, asserting the watch never reports `Lapsed`. The file registers through `Integration.hostListConcurrent` (line 471), so the acceptance run is `--integration-host`. Linux only on this machine; Windows and macOS are the `hot-reload-on-windows-and-macos` item.
+
+### 2. Where the code is today
+
+- `TieringChoice` is `SageFs.Core/Middleware/ValueReads.fs:576-625`: cases at 580 and 584, `all` 587, `standard` 595, `name` 598, `parse` 609, `cost` 616, `consequence` 622. It sits in `ReflectionSettings` at 934 with `standard` at 937.
+- The setting is `tieredCompilationSetting` at `SageFs.Core/SessionAgent.fs:44`, read by `reflectionSettingsAt` at 85-92 (a bad value falls back to `standard`). The dashboard lists it at `SageFs/Dashboard.fs:2517`.
+- `processEnvironment` is `SageFs.Core/Middleware/ValueReadTracking.fs:1644-1650` (the comment above it, 1625-1643, is the reasoning). Its one call site is `SageFs.Core/IsolatedFsiSession.fs:800`, the FSI host's environment. That comment names `read-tracking-costs.md`, which is not in the tree.
+- The watch: `EntryPoint` cases `ValueReadTracking.fs:746-752`, `ReflectionCanary` 776, `canaryHits` 793, `lapsedPoints` 903, `patchPoint` 911, `checkEntryWatch` 923, `entryWatch` (a `Lazy`) 950, `Tracker.Checkpoint` 1610.
+- PGO is off in `SageFs.Host/SageFs.Host.fsproj:26` and `SageFs.FsiHost/FsiHost.fsproj:23`. The R2R list is `SageFs.Host/ReadyToRun.targets:39`; `HostManifestTests.fs:100` (`HostReadyToRun`) pins it.
+- `DOTNET_TC_CallCountingDelayMs=0` is already set for one test child at `SageFs.Tests/SandboxChild.fs:580`, with a comment that says why. M3 can copy that.
+- The published numbers are `docs/hot-reload.md:474-478`. `docs/decisions.md:649-650` records that a generic detour is lost after tier-up and relies on tiering being off.
+- Tests: `ReflectionReadSurfaceTests.fs:92-105` (`processEnvironment` per choice), `ReflectionReadTrackingTests.fs:135` and `322`, `HotReloadStateOutcomeTests.fs:342-378`, `SageFs.Simulation/ReflectionReadSim.fs:74` (`Tiering` input), `313` (`LoseEntryWatch`), `429-433` (lapse only under `KeepTiering`), `476` (`neverPatchedWhileLapsed`). `TieredCompilationCostBenchmark.fs` is in the fsproj (line 1011) and is not a registered test; its header says how to run it from a REPL session.
+- Nothing in the repo uses `System.Diagnostics.Tracing.EventListener` or `System.Runtime.JitInfo` (grep over `*.fs` and `*.fsx`). M4 starts from zero.
+
+### 3. Steps
+
+0. Measurement M1, no code. In a SageFs session on `SageFs.Tests`: `SageFs.Tests.TieredCompilationCostBenchmark.run HostRuntime.Net11;;` (await the Task as the file header says), then the same on `HostRuntime.Net10`. Add the save-to-served p50 from `SageFs.Tests/HotReloadLatency.fs` under each choice (the setting is the repo key `tieredCompilationSetting.Key`; `TieredCompilationCostBenchmark.configure` shows how to set it). Write the numbers into `docs/hot-reload.md` beside the 2026 table, dated. If the start cost is under about 0.5 s and the save cost under 10 percent, go to step 7 and close. Commit: `docs(hot-reload): re-measure tiering-off with PGO off and R2R images`.
+1. Spike M4, scratch only. An `.fsx` in the scratchpad that starts a `System.Diagnostics.Tracing.EventListener` for the `Microsoft-Windows-DotNETRuntime` provider with the JIT keyword, calls `MethodBase.Invoke` 500 times, and prints every event name and payload it sees. The event and field names are not verified here; printing them is the spike's job. If no event names a method and a tier, candidate C1 is dead: skip to C3 or close.
+2. Pure core, RED first. `SageFs.Tests/EntryTieringTests.fs` with the two cases in "Tests" 1 and 2, listed in `SageFs.Tests/SageFs.Tests.fsproj` right after `ReflectionReadSurfaceTests.fs` (line 639). Then `SageFs.Core/Middleware/EntryTiering.fs`, listed in `SageFs.Core/SageFs.Core.fsproj` right after `ValueReads.fs`. BCL only, the state machine from "Design". Domain.
+3. The choice. Add `TierEntryPointsFirst` to `ValueReads.fs:576`; the compiler lists every match to fix (`name`, `parse`, `cost`, `consequence`, `all`, `processEnvironment`). RED: extend `ReflectionReadSurfaceTests.fs:98` with the new choice and the value M3 picked. `SessionAgent.fs:44` reads `TieringChoice.all`, so the setting text follows. Domain plus one edge line.
+4. Wire the phase into `entryWatch` (`ValueReadTracking.fs:950`): run the `EntryTiering` machine with the listener from step 1 before `patchPoint`, dispose the listener when all six are `Patched`. Edge. Same file as step 3's `processEnvironment`, so after it.
+5. Sim: `ReflectionReadSim.fs:429` picks from `TieringChoice.all`, so the new case is generated at once. Add the `RuntimeSaysRejitted` step and the two invariants from "Tests"; add the twin. `SageFs.Tests/ReflectionReadSimTests.fs` (fsproj line 371) runs it. Domain.
+6. Host row: copy `HotReloadStateOutcomeTests.fs:353-378` for the new choice with a much higher call ceiling, both runtimes, asserting never `Lapsed`. Edge, `--integration-host`.
+7. Default and docs: `TieringChoice.standard` (`ValueReads.fs:595`), `docs/hot-reload.md`, `docs/how-hot-reload-works.md`. DECISION: see 1 to 3 under "Decisions for Will"; my recommendations stand.
+
+### 4. How to check it
+
+- Inner loop: a SageFs session on `SageFs.Tests`, `send_fsharp_code` of the new tests, then `hard_reset_fsi_session rebuild=true` after persisting.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Filtered inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary --filter-test-list "EntryTiering"` (list name, so `--filter-test-list`).
+- Acceptance: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary` unfiltered (sim and pure), then `--integration-host --summary` for step 6. Run the host tier alone; it spawns real apps.
+
+### 5. Traps in this repo
+
+- Budgets only go down: a new `DOTNET_TC_CallCountingDelayMs` literal is a duration; if it is committed it lives in `Timeouts` with a name, or `TimeoutLiteralsTests` fails.
+- No timing-sensitive tests: step 6 waits on the report changing, the way line 373 does, never on a sleep.
+- The new choice is a new value of an existing setting: trailer `Plugin: n/a, a new value of an existing setting`. No tool-list change.
+- No new NuGet package: `EventListener` is BCL.
+- `redefine-a-value-a-handler-renders` edits the same files; do not run both in the same week.
+
+### 6. Size and order
+
+S (a day) if step 0 closes it. M (three to five days) for steps 1 to 7. Step 0 and step 1 are independent and can run on the same day; step 2 can start before either finishes. First commit: the step 0 numbers in `docs/hot-reload.md`.
+
+### 7. Not now
+
+- Pre-tiering generic detours (M5). It only matters if the new choice becomes the default; measure after step 6.
+- A runtime tier-up listener kept alive for the whole session (candidate C2). Only if H1 fails.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -23,10 +78,10 @@ A hot reload session starts the FSI host with the runtime's tiered compilation l
 ## What exists today
 
 - The choice is a closed type, `TieringChoice = TieringOffWhileWatching | KeepTiering` in `SageFs.Core/Middleware/ValueReads.fs` (around line 576), with `name`, `parse`, `cost`, `consequence` and `standard = TieringOffWhileWatching`. The setting is `hotreload.tieredCompilation`, `RestartRequired`, in `SageFs.Core/SessionAgent.fs` (`tieredCompilationSetting`, read by `reflectionSettingsAt`).
-- The only call site that turns it into a process setting is `Middleware.ValueReadTracking.processEnvironment`, used once, in `SageFs.Core/IsolatedFsiSession.fs` line 774, in the environment of the FSI host. So the cost lands on the process that also runs the F# compiler for every eval, not only on the user's app. For `IgnoreValueReads` sessions it is empty.
+- The only call site that turns it into a process setting is `Middleware.ValueReadTracking.processEnvironment`, used once, in `SageFs.Core/IsolatedFsiSession.fs` (line 800 at 8975e898), in the environment of the FSI host. So the cost lands on the process that also runs the F# compiler for every eval, not only on the user's app. For `IgnoreValueReads` sessions it is empty.
 - The watch is six Harmony prefixes on runtime methods: `EntryPoint = Invoke | FieldGetValue | CreateDelegate | CreateDelegateFor | DelegateCreateDelegate | DelegateCreateDelegateFor` (`ValueReadTracking.fs` around line 746), patched through `patchPoint` in `entryWatch`. A canary per point (`ReflectionCanary`, `canaryHits`, `exercise`) is read at every checkpoint by `lapsedPoints`. `checkEntryWatch` re-patches a lapsed point and records a lapse; the comment there says a patch on the recompiled code stays. `Tracker.Checkpoint` takes the getters' own watch back and, via `ReflectionWatchStatus.Lapsed`, every tracked value restarts on its next edit until the app restarts. A lapse fails closed.
 - The numbers in `docs/hot-reload.md`: tiering off costs about 0.7 s of app start (8.5 s against 7.8 s, five runs, median) and warm requests were faster off (340 against 563 microseconds). They were measured by `SageFs.Tests/TieredCompilationCostBenchmark.fs` on the hot reload test app on net11. That benchmark is not a gate and is run from a SageFs session.
-- Those numbers predate two other settings that change the picture, both verified in this tree: the host's `runtimeconfig` turns tiered PGO off (`<TieredPGO>false</TieredPGO>` in `SageFs.Host/SageFs.Host.fsproj` line 26 and `SageFs.FsiHost/FsiHost.fsproj` line 21; `HostManifestTests.fs` pins it), and the daemon's host directory carries ReadyToRun images of FCS, FSharp.Core, SageFs.Core and the other big assemblies (`SageFs.Host/ReadyToRun.targets`, `SageFsReadyToRunAssemblies`). With PGO off, a hot method promotes once (to tier 1) instead of twice. With R2R, most FCS code is precompiled and, with tiering off, it is used as is and never rejitted. I could not find a measurement of the tiering-off cost taken after those two changes.
+- Those numbers predate two other settings that change the picture, both verified in this tree: the host's `runtimeconfig` turns tiered PGO off (`<TieredPGO>false</TieredPGO>` in `SageFs.Host/SageFs.Host.fsproj` line 26 and `SageFs.FsiHost/FsiHost.fsproj` line 23; `HostManifestTests.fs` pins it), and the daemon's host directory carries ReadyToRun images of FCS, FSharp.Core, SageFs.Core and the other big assemblies (`SageFs.Host/ReadyToRun.targets`, `SageFsReadyToRunAssemblies`). With PGO off, a hot method promotes once (to tier 1) instead of twice. With R2R, most FCS code is precompiled and, with tiering off, it is used as is and never rejitted. I could not find a measurement of the tiering-off cost taken after those two changes.
 - `decisions.md` ("A generic function is re-pointed...") records another consequence of the same fact: a detour of a body is lost after tier-up when tiering is on, and "the host runs with tiering off". So tiering-off protects the generic-function detours too, not only the reflection watch. Any cheaper way must keep that, or `GenericReload` bodies need the same treatment.
 - Tests that pin the area: `ReflectionReadSurfaceTests.fs` (lines 95 to 104: `processEnvironment` per choice), `ReflectionReadTrackingTests.fs` (the checkpoint row at line 312), `HotReloadStateOutcomeTests.fs` (line 353: the keep-tiering row that hammers `reflectDrop` up to `hammerCalls = 80` times and expects either `Watching` or `Lapsed` and a fail-closed save), `SageFs.Simulation/ReflectionReadSim.fs` (`Intent.Lapse`, only generated under `KeepTiering`; `Step.LoseEntryWatch`).
 
