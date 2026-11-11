@@ -333,7 +333,25 @@ let fileSize : (string * int) list =
     "SageFs/McpMembersRoute.fs", 24
     // Added with the same change: the completions routes and their JSON, out of Mcp.fs (3273 -> 3204) and
     // McpAdapter.fs (676 -> 656). Set at the true size.
-    "SageFs/McpCompletions.fs", 143 ]
+    "SageFs/McpCompletions.fs", 143
+    // Every product file over `fileSizeThreshold` lines is listed, at its size on 2026-11-10 when the rule became true
+    // (until then a file not listed here was unbounded, which made "a file not in a budget table has a budget of zero"
+    // false for this table). A budget above a file's real count fails, so `--ratchets --tighten` lowers these as the
+    // files shrink; a file that grows fails. Never raise one.
+    "SageFs/DaemonMode.fs", 5529
+    "SageFs/McpServer.fs", 5056
+    "SageFs/DashboardFragments.fs", 4459
+    "SageFs/Dashboard.fs", 4259
+    "sagefs-vscode/src/Extension.fs", 3756
+    "SageFs/McpTools.fs", 3173
+    "SageFs.Host/WorkerMain.fs", 2503
+    "SageFs.Core/Cohort.fs", 2475
+    "SageFs/DashboardTypes.fs", 2169
+    "SageFs.Core/Middleware/HotReloadCore.fs", 1963
+    "SageFs.Core/Features/ReloadPlanning.fs", 1690
+    "SageFs.Core/Middleware/ValueReadTracking.fs", 1650
+    "SageFs.Core/ProjectLoading.fs", 1558
+    "SageFs.Core/Features/LiveTestingExecutors.fs", 1509 ]
 
 /// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
 /// a `Task.Run` (or `Task.Factory.StartNew`) whose body reads a Process stream line by line or to the end. The
@@ -448,6 +466,79 @@ let toolList : (string * int) list =
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length
 
+/// A product source file longer than this must have an entry in `fileSize`. A file not in the table has a budget of
+/// zero, and a file this long cannot have that, so it is listed at its current size and only ever goes down.
+let fileSizeThreshold = 1500
+
+/// The directories whose `.fs` files are the shipped product (the daemon, the engine, the host, the simulation
+/// harness, the FSI host and the VS Code extension's Fable source). Tests, samples, demos and scripts are not.
+let productRoots : string list =
+  [ "SageFs"; "SageFs.Core"; "SageFs.Host"; "SageFs.Simulation"; "SageFs.FsiHost"; "sagefs-vscode/src" ]
+
+let private isBuildOutput (rel: string) =
+  let n = "/" + rel
+  n.Contains "/bin/" || n.Contains "/obj/" || n.Contains "/node_modules/" || n.Contains "/out/"
+
+/// Every product `.fs` file, repo-relative with `/` separators.
+let productSourceFiles (repoRoot: string) : string list =
+  [ for root in productRoots do
+      let dir = Path.Combine(repoRoot, root)
+      if Directory.Exists dir then
+        for file in Directory.GetFiles(dir, "*.fs", SearchOption.AllDirectories) do
+          let rel = Path.GetRelativePath(repoRoot, file).Replace('\\', '/')
+          if not (isBuildOutput rel) then
+            yield rel ]
+
+/// One thing wrong with the file-size table. A closed set, so a test asks for the case and never matches on prose.
+type FileSizeFinding =
+  /// A listed file grew past its budget.
+  | OverBudget of File: string * Lines: int * Budget: int
+  /// A listed file is shorter than its budget: the budget is slack, so the next growth would pass unseen.
+  | SlackBudget of File: string * Lines: int * Budget: int
+  /// An unlisted file is longer than the threshold.
+  | Unlisted of File: string * Lines: int * Threshold: int
+
+module FileSizeFinding =
+  /// The file a finding names.
+  let file (finding: FileSizeFinding) : string =
+    match finding with
+    | OverBudget (file, _, _) -> file
+    | SlackBudget (file, _, _) -> file
+    | Unlisted (file, _, _) -> file
+
+  /// The finding in the words the ratchet prints, with the fix.
+  let describe (finding: FileSizeFinding) : string =
+    match finding with
+    | OverBudget (file, lines, budget) ->
+      sprintf "%s is %d lines, over its %d budget — split it (and ratchet the budget DOWN), never raise the budget" file lines budget
+    | SlackBudget (file, lines, budget) ->
+      sprintf "%s is %d lines, under its %d budget — a budget above the real count is slack, lower it with `SageFs.Tests.dll --ratchets --tighten`" file lines budget
+    | Unlisted (file, lines, threshold) ->
+      sprintf "%s is %d lines and has no entry in RatchetBudgets.fileSize — every product file over %d lines needs a budget at its current size (a file not in the table has a budget of zero)" file lines threshold
+
+/// What is wrong with the file-size table, given each file's actual line count: a listed file over its budget, a
+/// listed file under its budget, and an unlisted file over `threshold`. Pure.
+let judgeFileSizes (threshold: int) (budgets: (string * int) list) (actual: (string * int) list) : FileSizeFinding list =
+  let budgetOf = Map.ofList budgets
+  [ for (rel, lines) in actual do
+      match Map.tryFind rel budgetOf with
+      | Some budget when lines > budget -> yield OverBudget (rel, lines, budget)
+      | Some budget when lines < budget -> yield SlackBudget (rel, lines, budget)
+      | Some _ -> ()
+      | None when lines > threshold -> yield Unlisted (rel, lines, threshold)
+      | None -> () ]
+
+/// The line count of every product file plus every file the table lists, so a listed file outside the product
+/// roots is still checked.
+let fileSizeActual (repoRoot: string) : (string * int) list =
+  (productSourceFiles repoRoot @ (fileSize |> List.map fst))
+  |> List.distinct
+  |> List.map (fun rel -> rel, lineCount repoRoot rel)
+
+/// Everything wrong with the file-size table against the working tree. Empty when it holds.
+let fileSizeFindings (repoRoot: string) : FileSizeFinding list =
+  judgeFileSizes fileSizeThreshold fileSize (fileSizeActual repoRoot)
+
 /// Blocking calls in test bodies starve the thread pool and make the suite time out. These freeze the current debt
 /// at its present level: a new one fails, and converting a test to testTask/testAsync lowers a number.
 ///
@@ -479,10 +570,7 @@ let countPattern (repoRoot: string) (pattern: string) : int =
 
 /// What is over budget, in the words the ratchet prints. Empty when every budget holds.
 let violations (repoRoot: string) : string list =
-  [ for (rel, budget) in fileSize do
-      let lines = lineCount repoRoot rel
-      if lines > budget then
-        yield sprintf "%s is %d lines, over its %d budget — split it (and ratchet the budget DOWN), never raise the budget" rel lines budget
+  [ yield! fileSizeFindings repoRoot |> List.map FileSizeFinding.describe
     for (pattern, budget) in blockingCalls do
       let actual = countPattern repoRoot pattern
       if actual > budget then

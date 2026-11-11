@@ -1033,6 +1033,29 @@ let fileSizeBudgets =
         (lines <= budget)
         |> Expect.isTrue
           (sprintf "%s is %d lines, over its %d budget — split it (and ratchet the budget DOWN), never raise the budget" rel lines budget)
+
+    testCase (sprintf "WHY — every product .fs file over %d lines has a budget at its current size, so a file not in the table is not unbounded" RatchetBudgets.fileSizeThreshold) <| fun _ ->
+      RatchetBudgets.fileSizeFindings repoRoot
+      |> List.choose (fun finding -> match finding with RatchetBudgets.Unlisted _ -> Some (RatchetBudgets.FileSizeFinding.describe finding) | _ -> None)
+      |> Expect.isEmpty "every big product file is listed in RatchetBudgets.fileSize"
+
+    testCase "WHY — no file-size budget sits above the file's real line count, so growth cannot hide inside slack" <| fun _ ->
+      RatchetBudgets.fileSizeFindings repoRoot
+      |> List.choose (fun finding -> match finding with RatchetBudgets.SlackBudget _ -> Some (RatchetBudgets.FileSizeFinding.describe finding) | _ -> None)
+      |> Expect.isEmpty "every budget equals its file's line count (run `SageFs.Tests.dll --ratchets --tighten`)"
+
+    testCase "WHY — the rule has teeth: an unlisted big file, a budget above the count and a file over budget are each reported" <| fun _ ->
+      let findings =
+        RatchetBudgets.judgeFileSizes
+          100
+          [ "listed-exact.fs", 50; "listed-slack.fs", 80; "listed-over.fs", 10 ]
+          [ "listed-exact.fs", 50; "listed-slack.fs", 70; "listed-over.fs", 11; "unlisted-big.fs", 101; "unlisted-edge.fs", 100; "unlisted-small.fs", 3 ]
+      findings
+      |> Expect.equal
+        "exactly the three bad files are reported, each as its own case"
+        [ RatchetBudgets.SlackBudget ("listed-slack.fs", 70, 80)
+          RatchetBudgets.OverBudget ("listed-over.fs", 11, 10)
+          RatchetBudgets.Unlisted ("unlisted-big.fs", 101, 100) ]
   ]
   // Lines are a stand-in for design quality, not a bug class: its own class so it can leave the lane or the gate on its own.
   |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.SizeProxy
