@@ -57,15 +57,11 @@ outside web dev too.
 4. Clients send code, read diagnostics, and run tests, all through the daemon
 5. Multiple clients can connect to the same session simultaneously
 
-## FSI Quirks & Rewrites
+## FSI Quirks
 
-SageFs automatically rewrites `use` to `let` inside nested scopes (functions, computation expressions) because
-FSI doesn't support `use` there. That means disposables aren't automatically disposed in the REPL. Fine for
-quick experiments; worth remembering if you're leaning on a `use` binding to clean something up in a long
-session.
+SageFs hands your code to FSI as you wrote it. It used to rewrite `use` to `let` inside nested scopes, on the belief
+that FSI cannot take `use` there; that was wrong, it dropped disposal from user code, and the rewrite is gone
+([`docs/progress.md`](progress.md), "Your `use` bindings are no longer silently turned into `let`").
 
-Other FSI behaviors worth knowing: redefining a binding shadows it instead of erroring, each `;;` boundary is
+FSI behaviors worth knowing: redefining a binding shadows it instead of erroring, each `;;` boundary is
 its own transaction, there's no `[<EntryPoint>]`, and assembly loading is scoped to the session.
-
-Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](../SageFs.Core/FsiRewrite.fs) (26 lines, and it is small).
-PRs welcome.
