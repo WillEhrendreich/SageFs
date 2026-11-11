@@ -1,6 +1,65 @@
 # The getter sandbox beyond Linux x86-64
 
-Roadmap item: `getter-sandbox-beyond-linux` (Later, Platform). Plan written 2026-10-26 against master 59a8692c.
+Roadmap item: `getter-sandbox-beyond-linux` (Later, Platform). Plan written 2026-10-26 against master 59a8692c. Work order added 2026-11-11 against master 8975e898; line numbers below are from that tree.
+
+## Work order
+
+### 1. Outcome
+
+Before any click, the live-bindings pane says what a click can do on this machine, per facet (network, file writes, new processes), and after a click the row says what was enforced. On Linux arm64 the getter runs under the same seccomp filter as x86-64, and that claim is backed by the real-filter cases running green on an arm64 runner. On macOS and Windows the pane says the getter runs under its deadline alone, and why. Gate: (a) the pure program tests for aarch64 (interpreter plus a hand-written model) in the default suite on every OS; (b) the real-filter cases (`ThreadSandboxTests.fs:685-895`, run through `SandboxChild.fs`) green on the `linux-arm64` leg, which does not exist yet (`main.yml` has no arm job); (c) a host-tier case per platform that clicks three getters (loopback connect, file create, `Process.Start`) and compares the pane line and the result to the platform's row. Today only Linux x86-64 is proven. macOS, Windows and arm64 are unproven, and this machine is Linux x64.
+
+### 2. Where the code is today
+
+- `SageFs.Core/ThreadSandbox.fs` (647 lines, dependency free, compiled into Core at `SageFs.Core.fsproj:133`, embedded for the host at `:170`, compiled by `SageFs.FsiHost/FsiHost.fsproj:66`, listed in `FsiHostBuild.hostSourceNames` at `FsiHostBuild.fs:37`). `SandboxArchitecture = X86_64 | Aarch64` (`:14`), `SandboxPolicy` (`:26`), `SandboxUnavailable` (`:35`, now with `PoolNotReady`), `SandboxOutcome` (`:45`), `SandboxUnavailable.describe` (`:56`). `Seccomp.denyProgramFor threads arch policy` (`:269`; `Aarch64 -> assemble []`, `:272`), `denyProgram` (`:275`), `support` (`:279`, `Aarch64 -> Error (UnverifiedArchitecture "Aarch64")`), `architectureOf` (`:286`, `Arm64 -> Ok Aarch64`), `SandboxNative.LibcName = "libc.so.6"` (`:296`). `ThreadSandbox.availability` (`:589`), `runWithInstaller` (`:598`, the seam a test fakes), `installerFor` (`:621`), `run` (`:634`, now also `SandboxPool.prepare` and `heldDuringCalls`). The only product caller of `ThreadSandbox.run` is `SageFs.Core/Features/MemberEvaluation.fs:73`.
+- The host picks containment once: `SageFs.FsiHost/Program.fs:229-236` (`ContainedBy NoNetworkNoWritesNoSpawn` with `MemberEvaluation.filtered`, else `NotContained why` with `unfiltered`). `Containment` is `SageFs.FsiHost/FsiProtocol.fs:106-110`, travels in `MemberShown` (`:129`); `FsiProtocol.fs` is compiled into Core too (`SageFs.Core.fsproj:628`), so Core already sees the type. `Response.Ready of runtime * fsharpCore` is `:192`; it carries no containment.
+- The pane: `SageFs.Core/Features/LiveBindingsPane.fs` `ClickReport` (`:43`), `ContainmentLine = NothingClickedYet | LineSays` (`:48`), `containmentLine` (`:59-70`, the two sentences, plus the guard text from `withGuards`, `:53`), `notEvaluatedCount` (`:73`). The daemon turns it to text in `SageFs/McpServer.fs:4295-4298` (`liveBindingsLineText`, empty before a click) for `GET /api/sessions/{sid}/live-values/mode` and the evaluate reply (routes `:4404-4406`; contracts `EndpointContracts.fs:62-64`).
+- Tests: `SageFs.Tests/ThreadSandboxTests.fs` (897 lines, `fsproj:667`): `auditArchAarch64 = 0xC00000B7u` (`:36`, already in the arch generator at `:227`); pure list `"Seccomp.denyProgram (pure, every OS)"` (`:359`); `isLinuxX64` (`:251`); `expectNoContainmentHere` (`:300`); `realFilterCase` (`:312`, runs the body on Linux x64 and the fail-closed shape elsewhere); the support case `"WHY — an Aarch64 process is reported unavailable..."` (`:588-592`, flips); the real list `"ThreadSandbox.run (real seccomp filter, Linux x86-64)"` (`:685`). `SageFs.Tests/SandboxChild.fs` (`fsproj:666`) runs each real scenario in a child process started with `--sandbox-child`, so GC safe points of other cases do not time it. `SageFs.Tests/LiveBindingsPanelTests.fs:219-224` asserts the containment line is absent before any click (the assertion step 3 reverses; the plan's "line 179" is stale).
+- Docs: `docs/decisions.md:312-315` ("Linux x86-64 is the only verified platform. Aarch64 is in the type and reported unverified").
+- `sagefs.nvim` shows whatever string arrives: `lua/sagefs/live_bindings.lua:263`, `:276` read `data.containment`; `lua/sagefs/bindings_view.lua:116`, `:162` keep it. `sagefs-vscode/src` has no live-values client.
+- Syscall numbers for aarch64 can be transcribed here: `/usr/include/asm-generic/unistd.h` is on this machine (729 `__NR_` lines). The verification still needs an arm64 machine.
+- `[not verified]`: Windows `WRITE_RESTRICTED` impersonation behaviour; any newer macOS per-thread API; musl's libc name; the memory note that `fork` hangs on CoreCLR (not reopened).
+
+### 3. Steps
+
+1. Pure domain. RED in `ThreadSandboxTests.fs` pure list: `"WHY — an aarch64 NoNetwork program refuses socket and connect and allows read, as the model says"`. Write the aarch64 model by hand from `asm-generic/unistd.h` (`__NR_socket 198`, `__NR_connect 203`, `__NR_read 63`; transcribe, do not trust these three from memory) in the test file, next to the x86-64 model. Fails today because `denyProgramFor Aarch64` is one ALLOW. Then an `aarch64Body` in `Seccomp` beside `x86_64Body`, built from a table of `*at` forms only (no `open`, `creat`, `mkdir`, `unlink`, `rename`, `fork`, `vfork`), `openat`/`openat2` decided on the flags argument, `clone` flags at argument 0, `clone3` answering ENOSYS. Property cases mirroring the two x86 ones ("decides every syscall the way the model says") over both policies, plus "never KILL or TRAP", "ends in ALLOW or ERRNO", "an unknown arch is ALLOWed" for both architectures. Do not touch `support`. One commit red, one green.
+2. Pure domain. New module at the END of `ThreadSandbox.fs` (so the host compiles it too): `Mechanism`, `Facet`, `Containment = { Network; FileWrites; NewProcesses }`, `SandboxHost = LinuxOn of Architecture | MacOS of Architecture | WindowsOn of Architecture | OtherOs of string`, `Containment.forPlatform`, `Containment.describe` (the table under "The pane"). RED in a new `SageFs.Tests/ContainmentTests.fs` (register in `SageFs.Tests.fsproj` directly after line 667): one case per `SandboxHost` row, and "describe names every facet". The existing `FsiProtocol.Containment` (`:106`) becomes the new record or wraps it; `containmentLine` reads facets. Sequential after 1 (same file).
+3. Edge. `Ready` (`FsiProtocol.fs:192`) gains the host's `Containment`; `Program.fs:229-236` computes it from `ThreadSandbox.availability ()` and the OS; read it where the daemon handles `Ready` (`SageFs.Core/FsiHostClient.fs` or `RemoteFsiSession.fs`, find the `Ready` match first) into the pane notes. `containmentLine` gains `Standing of text` shown when `notEvaluatedCount snapshot > 0`. RED: a `LiveBindingsPaneTests.fs` case "the standing line appears when a row is clickable and is absent when none is"; rewrite `LiveBindingsPanelTests.fs:219-224` and say so in the commit. `McpServer.fs` text changes, so the commit carries `Plugin: done (standing line confirmed in the Neovim pane)` after checking it in real Neovim, or the real finding.
+4. The arm64 leg (needs `hot-reload-on-windows-and-macos` step 5): run the real-filter list there. Change `isLinuxX64` (`:251`) to "Linux on X64 or Arm64", written out, not read from `Seccomp.support`. Only when green: flip `support Aarch64` to `Ok ()` and the case at `:588`, and edit `docs/decisions.md:312-315`, in one commit.
+5. Windows spike on the Windows leg: `WindowsIdentity.RunImpersonated` with a `WRITE_RESTRICTED` token; the four questions under "Measure first". Pass: add `Mechanism.RestrictedThreadToken` and its row. Fail: record it in `docs/decisions.md` and keep the macOS sentence for Windows.
+6. One docs line per platform generated from `describe`, with a test tying the docs sentence to the function.
+
+DECISION: show the standing line before any click. Recommendation: yes.
+DECISION: build the managed Harmony fence for macOS and Windows. Recommendation: no (Design says why).
+DECISION: name Safe mode beside the platform statement. Recommendation: yes.
+
+### 4. How to check it
+
+- REPL first (`Skill(skill: "sagefs")`): `Seccomp.denyProgramFor` and the BPF interpreter in the tests are pure; prove the aarch64 body and the model agree in a session before writing the file. Do not `#load` `ThreadSandbox.fs` into a session that has Core loaded.
+- `dotnet build SageFs.Tests -c Release`
+- Inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --filter-test-list "Seccomp.denyProgram" --summary`; for step 2, `--filter-test-list "Containment"`; for step 3, `--filter-test-list "LiveBindingsPane"`.
+- `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`
+- Acceptance: the unfiltered default suite on Linux x64 for steps 1-3 (the real-filter list still runs here, unchanged); the `linux-arm64` leg for step 4; the Windows and macOS legs for the host-tier outcome case, none of which exist yet.
+
+### 5. Traps in this repo
+
+- A file the host needs must be in three places (`FsiHostBuild.fs:20-69`, `SageFs.Core.fsproj` compile and embed, `FsiHost.fsproj`); adding the types to the end of `ThreadSandbox.fs` avoids a fourth file.
+- `ThreadSandbox.fs` is dependency free on purpose; `forPlatform` takes a `SandboxHost`, never reads `RuntimeInformation` itself.
+- SAGE-005: `forPlatform : SandboxHost -> Containment`, one closed argument. No two `string` parameters.
+- Real-filter cases run in a child process (`SandboxChild.fs`); a new scenario is a new `Scenario` case there, not a new in-process `testTask`.
+- No timing: the sandbox calls end on the outcome with `TestTimeouts.patienceInProcess` as a ceiling (`ThreadSandboxTests.fs:296`).
+- Wire: `McpServer.fs` is on the wire-surface list, so step 3 needs a `Plugin:` trailer; the plugin renders the string as is, so it is `done` once checked in Neovim.
+- Budgets only go down: `RatchetBudgets.fs:342` has `McpServer.fs` at 5056 lines and it is at 5056. Step 3 adds no line there (the text comes from `containmentLine`).
+- Linux x64 machine: arm64, Windows and macOS rows stay unverified until the legs exist.
+
+### 6. Size and order
+
+M. Step 1 is two days (the table and the model are the work); 2 is a day; 3 is a day plus the Neovim check; 4 waits on the arm64 leg; 5 is days and may end in "no"; 6 an hour. 1 then 2 then 3, one owner. First commit: the RED aarch64 model case in `ThreadSandboxTests.fs`, red because `denyProgramFor Aarch64 NoNetwork` allows `socket`.
+
+### 7. Not now
+
+- The managed fence (Harmony prefixes on `File`, `Socket`, `Process.Start`): a separate L item, detours CoreLib on a platform where detours are under suspicion (#149).
+- A `PlatformSupport` row for the sandbox: belongs to `hot-reload-on-windows-and-macos`; this item works from `SandboxUnavailable` as today.
+- musl support: measure on Alpine first (Measure first); a second libc name is a one-line change once known.
 
 ## Resume here
 
@@ -24,7 +83,7 @@ The outcome gate is a host-tier case per platform leg that clicks a getter which
 
 ## What exists today
 
-- `SageFs.Core/ThreadSandbox.fs` (371 lines), dependency free on purpose because it is also compiled into the isolated FSI host (`FsiHostBuild.fs` line 31 lists it; `SageFs.Core.fsproj` and `FsiHost.fsproj` carry the entries). It holds:
+- `SageFs.Core/ThreadSandbox.fs` (371 lines when written; 647 on 2026-11-11, the growth is `SandboxPool` and the thread-creation refusal, see the Work order for current lines), dependency free on purpose because it is also compiled into the isolated FSI host (`FsiHostBuild.fs` line 31 lists it; `SageFs.Core.fsproj` and `FsiHost.fsproj` carry the entries). It holds:
   - `SandboxArchitecture = X86_64 | Aarch64` (line 14), `SandboxPolicy = NoNetwork | NoNetworkNoWritesNoSpawn`, `SandboxUnavailable = NotLinux | UnverifiedArchitecture of string | InstallFailed of step * errno | LibraryNotFound of string`, `SandboxOutcome<'T> = Completed | Threw | Unavailable`, and `SandboxUnavailable.describe`, the one-line reason the pane shows.
   - `Seccomp.denyProgram arch policy` builds the classic-BPF bytes. For `X86_64` it assembles a deny list (network syscalls, file mutations, spawn calls, `open`/`openat`/`clone` decided on the flags argument, the x32 range, `clone3` answering ENOSYS). For `Aarch64` it returns `assemble []`, one ALLOW, with a comment: "no unchecked list of numbers exists to be installed by mistake".
   - `Seccomp.support` (line 239) answers `Error (UnverifiedArchitecture "Aarch64")`, and `Seccomp.architectureOf` maps `Architecture.Arm64` to `Aarch64`.
@@ -32,7 +91,7 @@ The outcome gate is a host-tier case per platform leg that clicks a getter which
 - `SageFs.FsiHost/Program.fs` line 224 picks, once at host start, `ContainedBy NoNetworkNoWritesNoSpawn` with a filtered evaluator, or `NotContained why` with `MemberEvaluation.unfiltered` (the getter runs on its own thread under the deadline and guards only). `Containment` is the two-case DU at `SageFs.FsiHost/FsiProtocol.fs` line 106 and travels in `MemberShown`.
 - `SageFs.Core/Features/LiveBindingsPane.fs` `containmentLine` (line 60) turns a click's outcome into one sentence: "ran under a syscall filter (no network, no file writes, no new processes)" or "no I/O containment here: <reason>". Before any click the line is `NothingClickedYet`; `LiveBindingsPanelTests.fs` line 179 asserts nothing about the filter shows before a click. The same sentence goes out through `GET /api/sessions/{sid}/live-values/mode` as `containment` (`McpServer.fs` near line 3863).
 - Safe mode, the default, runs a getter only when its compiled body provably does nothing; the click is the only path that runs a getter that might do I/O (`docs/decisions.md`, "The live bindings pane starts in Safe mode").
-- `SageFs.Tests/ThreadSandboxTests.fs` (636 lines). The pure program tests run on every OS against a classic-BPF interpreter and a separately written model of x86-64 (`networkNrs`, `deniedOutrightNrs`, the flag masks, `auditArchAarch64` is already declared there). The real-filter cases are gated by `isLinuxX64` (line 245) and, elsewhere, assert `Unavailable` and that the work never ran (`expectNoContainmentHere`). Line 404 asserts `Seccomp.support Aarch64` is an error; that case flips.
+- `SageFs.Tests/ThreadSandboxTests.fs` (636 lines when written; 897 on 2026-11-11). The pure program tests run on every OS against a classic-BPF interpreter and a separately written model of x86-64 (`networkNrs`, `deniedOutrightNrs`, the flag masks, `auditArchAarch64` is already declared there). The real-filter cases are gated by `isLinuxX64` (line 251 now) and, elsewhere, assert `Unavailable` and that the work never ran (`expectNoContainmentHere`). Line 588 (404 when written) asserts `Seccomp.support Aarch64` is an error; that case flips. Since the plan was written the real scenarios run in a child process (`SageFs.Tests/SandboxChild.fs`).
 - `docs/decisions.md` (about line 313): "Linux x86-64 is the only verified platform... Reopen it if: arm64 gets a machine to verify on." The `ubuntu-24.04-arm` hosted runner from `hot-reload-on-windows-and-macos` is that machine.
 - `main.yml` has no arm64 job today.
 - The host is compiled at run time from embedded copies of its sources. `ThreadSandbox.fs` is listed in `SageFs.Core/FsiHostBuild.fs` (line 31), embedded by `SageFs.Core.fsproj` (line 118) and compiled by `FsiHost.fsproj` (line 52). A new file the host needs would have to be added in all three places.
@@ -118,7 +177,7 @@ RED first:
 2. Property tests mirroring the two x86 ones ("decides every ... syscall the way the model says"): a generator over syscall numbers (including every denied number, numbers just either side of each, the missing legacy numbers) and flag words, for both policies. Plus "never KILL or TRAP", "ends in ALLOW or ERRNO", "an unknown arch is ALLOWed", reused over both architectures.
 3. "WHY - `Seccomp.support Aarch64` is Ok only with a verified leg": the flip. It stays red-by-design until the arm64 leg is green, so it lands last.
 4. `ContainmentTests`: `forPlatform` for each `SandboxHost` returns the table above, and `describe` names every facet. Pure, runs everywhere.
-5. `LiveBindingsPaneTests`: the standing line appears when a row is clickable and is absent when none is. This replaces the assertion at `LiveBindingsPanelTests.fs` line 179 on purpose; say so in the commit.
+5. `LiveBindingsPaneTests`: the standing line appears when a row is clickable and is absent when none is. This replaces the assertion at `LiveBindingsPanelTests.fs` lines 219-224 (179 when written) on purpose; say so in the commit.
 
 Real-filter cases: `realFilterCase` is gated by `isLinuxX64` today. Change the guard to "Linux on X64 or Arm64" written out in the test (not read from `Seccomp.support`, which would let the product vouch for itself). Same cases, same assertions, run on the arm64 leg. Every cell on a platform without a filter asserts the same shape `expectNoContainmentHere` uses now: the getter ran on its own thread under the deadline, the pane line says what is open.
 

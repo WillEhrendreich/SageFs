@@ -1,6 +1,64 @@
 # Start on login for Windows
 
-Roadmap item: `start-on-login-windows` (Later, Platform). Plan written 2026-10-26 against master 59a8692c.
+Roadmap item: `start-on-login-windows` (Later, Platform). Plan written 2026-10-26 against master 59a8692c. Work order added 2026-11-11 against master 8975e898; line numbers below are from that tree.
+
+## Work order
+
+### 1. Outcome
+
+A Windows user pastes one PowerShell block from the Readme, signs out and in, and `sagefs status` finds a daemon that a Task Scheduler logon task started, running from a folder SageFs will watch. The supervisor comes back after a crash; stopping and removing are one documented command each. Gate: on Linux, `FirstRunWindowsTests` parses the shipped task XML and launcher the way `FirstRunMacOSTests` parses the plist (file shape, settings, placeholders, Readme block equality, `--supervised` listed by `--help`). The behavioural half (the task starts the daemon, ends it, leaves nothing running, works for a standard user, hides its window) is unproven until the `windows-x64` leg of `hot-reload-on-windows-and-macos` exists, and two cells (the logon trigger firing, a non-admin account) can only ever be checked by hand on a real Windows machine. Say so in the XML comment and in `docs/progress.md`.
+
+### 2. Where the code is today
+
+- Linux and macOS are built: `contrib/systemd/sagefs.service`, `contrib/launchd/io.github.willehrendreich.sagefs.plist`. Tests: `SageFs.Tests/FirstRunLinuxTests.fs` (`testList "first run on Linux"`, :57) and `SageFs.Tests/FirstRunMacOSTests.fs` (:89-193), registered at `SageFs.Tests/SageFs.Tests.fsproj:540-541`. Both are listed in `SageFs.Tests/RatchetRegistryTests.fs:166-167` under `notRatchets` ("locates the repo from the binary and swaps the global Console.Out"); a third file of the same shape must be listed there too or the registry test fails.
+- Readme: `### Run it as a service (Linux)` is `Readme.md:196`, `(macOS)` is `:215`, Get Started links only the Linux anchor at `:162`. `docs/progress.md:278` says login startup is Linux only. No `contrib/windows/` exists; `rg -i "schtasks|ScheduledTask|shell:startup"` over `*.fs`, `*.fsx`, `*.md`, `*.yml` finds only this plan.
+- Supervisor: `SageFs/Program.fs:307` reads `--supervised`, strips it (:312), and calls `WatchdogRunner.run SageFs.Watchdog.defaultConfig daemonArgs Environment.CurrentDirectory cts.Token` (:328-333), then returns 0 (:335). `SageFs/WatchdogRunner.fs:35-44` builds the `ProcessStartInfo` from a `DaemonLaunch` record with `ArgumentList` (one element per argument), `UseShellExecute = false`, no redirection; `startDaemon` (:65-76) uses `Process.GetCurrentProcess().MainModule.FileName` and sets `SAGEFS_SUPERVISED` and `SAGEFS_RESTART_COUNT` in the child's environment. `SageFs.Core/Watchdog.fs:47-51` `defaultConfig`: `Timeouts.watchdogInterval` (5 s, `Timeouts.fs:772`), `Timeouts.watchdogGracePeriod` (30 s, `:773`), `RestartPolicy.defaultPolicy` (`MaxRestarts = 5`, `RestartPolicy.fs:55-56`). `Action.GiveUp` (`Watchdog.fs:45`) ends `run` and the process exits 0.
+- Watch-root refusal: `FileWatcher.classifyWatchRoot` is `SageFs.Core/FileWatcher.fs:416`; it refuses a filesystem root and anything holding the home directory, nothing else. `Path.GetFullPath` on a `C:\` path on Linux treats it as relative, so the test cannot call it with a Windows path (the macOS test calls it with `/Users/someone`, `FirstRunMacOSTests.fs:128-131`).
+- Data and log folders: `DataDirChoice.dataDirectory` (`SageFs.Core/DataDirChoice.fs:35`) is `~/.SageFs`; the user log folder is `LocalApplicationData\SageFs` (`SageFs.Core/DaemonState.fs:100`).
+- Discovery the Windows CI case would use: `GET /api/daemon-info` (`EndpointContracts.fs:115`), `DaemonState.readOnPort` (`DaemonState.fs:338`) returning `DaemonPresence.Running` (`:35-37`).
+- Supervisor simulations exist: `SageFs.Simulation/SupervisorSim.fs`, `SupervisorWatchdogSim.fs`. Nothing here changes `Watchdog.decide`, so none is added.
+- `[not verified]`: everything about Task Scheduler itself (variable expansion in `Command`/`WorkingDirectory`, `RestartOnFailure` semantics, non-admin `Register-ScheduledTask`, the console window, child survival on `Stop-ScheduledTask`). This machine is Linux.
+
+### 3. Steps
+
+Steps 1-3 are Linux-green. Do not wait for the Windows measurement to start them: write the XML with `@`-placeholders for the home and data folders regardless (the macOS pattern), and let the Windows answer to "does Task Scheduler expand `%LOCALAPPDATA%`" only decide whether the install block can later shrink.
+
+1. RED, pure file test. New `SageFs.Tests/FirstRunWindowsTests.fs`, copied in shape from `FirstRunMacOSTests.fs`: `testList "first run on Windows" [ testSequenced <| testList "contrib/windows/sagefs-task.xml" [...] ]`. First case: `"exists and parses as a Task Scheduler definition in the http://schemas.microsoft.com/windows/2004/02/mit/task namespace"`. Register it in `SageFs.Tests/SageFs.Tests.fsproj` directly after line 541, and add `"FirstRunWindowsTests.fs", "locates the repo from the binary and swaps the global Console.Out"` to `notRatchets` in `RatchetRegistryTests.fs:166`. Commit red. Then the minimal `contrib/windows/sagefs-task.xml` (a `Task` root in that namespace) turns it green. Commit.
+2. Cases "starts at logon and is not killed after 72 hours" (`LogonTrigger`, `ExecutionTimeLimit = PT0S`, `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` false, `RestartOnFailure` present with an interval of at least `PT1M`) and "WorkingDirectory is a folder SageFs will watch, outside its data and log folders" (string checks only: after substituting the placeholder, the path is not `System32`, not the profile root, not under `\SageFs` of the local app data folder, case-insensitive; a Linux runner cannot run `classifyWatchRoot` on it). Then the settings in the XML.
+3. The launcher text (`contrib/windows/launch.cmd` as a shipped template, or inline in the Readme block; DECISION below), the Readme section `### Run it as a service (Windows)` with a ```powershell block, the XML's leading comment holding the same block, and the cases: "every placeholder is one the README install fills in" (regex `@[A-Z_]+@`, each appearing in a `-replace` in the block), "the XML's comment carries the README's install block, line for line" (the macOS regex with ```powershell), and "the launcher runs the installed tool with a flag the CLI help really lists" (last line contains `--supervised`; `Program.main [| "--help" |]` output contains it, as `FirstRunMacOSTests.fs:180-190` does). Edit `Readme.md:162` to link all three anchors and `docs/progress.md:278`. Edge code is nil; this step is files and prose.
+4. Hand verification on Windows: the "Measure first" list below. Record each answer in the XML comment and in "Surprises". If the console window cannot be hidden without a native shim, change the Readme to recommend the Startup-folder shortcut and keep the task as the option (the plan's stated fallback).
+5. Windows CI case, only after `hot-reload-on-windows-and-macos` step 5 exists: a case that exists only on Windows (the `match OperatingSystem.IsWindows() with` shape at `SageFs.Tests/FileWatcherTests.fs:365`, from commit 4609ff06), runs the Readme block extracted from `Readme.md`, waits on `DaemonState.readOnPort` reaching `DaemonPresence.Running` (ceiling from `TestTimeouts`, never a sleep), reads `/api/daemon-info`, `Stop-ScheduledTask`, asserts the daemon pid is gone, `Unregister-ScheduledTask`, fails if any `sagefs` process remains. Add a landmark for the item in `scripts/roadmap/RoadmapItems.fs:375-378` in the commit that ships step 3 (the macOS item's landmark at `:386` is the model).
+
+DECISION: launcher language. `cmd` with `set /p` from `path.txt`/`dotnet-root.txt` (plan) or a `.ps1` run with `-ExecutionPolicy Bypass -WindowStyle Hidden`. Recommendation: PowerShell. It reads the two files without the 8,191-character line limit or `%` expansion, and the hidden-window flag is built in; `cmd` needs a second process to hide it.
+
+DECISION: ship `launch.cmd`/`launch.ps1` as a file under `contrib/windows/` (testable on Linux, like the XML) or write it from the Readme block. Recommendation: a shipped file with placeholders, so the test can read it.
+
+### 4. How to check it
+
+- REPL first (`Skill(skill: "sagefs")`): the tests are pure file reads, so `#load` nothing; run them from the built test dll.
+- `dotnet build SageFs.Tests -c Release`
+- Inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --filter-test-list "first run on Windows" --summary` (the token is in the `testList` name, so `--filter-test-list`, never `--filter-test-case`; read the `TRUST ... ran=N` line).
+- `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (the registry test lives in the lane).
+- Acceptance: the unfiltered default suite, `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary`, with the new list's cases in its output. The Windows leg is the acceptance for step 5 and does not exist yet.
+
+### 5. Traps in this repo
+
+- `RatchetRegistryTests.notRatchets` (`:157-181`): a test file that reads the tree and is not a ratchet must be listed with a reason, or the lane goes red.
+- Commit `SageFs.Tests/SageFs.Tests.fsproj` whole, with a pathspec (`git commit -- <paths>`); other agents stage in the same index.
+- No wire change, no `Plugin:` trailer. No new NuGet package: a Windows service host would need one, which is one reason the task was chosen.
+- Keep the XML comment and the Readme block byte-identical after trimming; the equality test is the one that catches drift.
+- Two spaces of indentation in the F# test file.
+- This machine is Linux: every Windows behaviour claim stays `[not verified]` in the doc until step 4.
+
+### 6. Size and order
+
+S for steps 1-3 (one day). Step 4 is an afternoon with a Windows machine. Step 5 waits on another item. Steps 1-3 are sequential in one file set and one owner. First commit: the RED test file plus its two registrations (fsproj and `notRatchets`), red because `contrib/windows/sagefs-task.xml` does not exist.
+
+### 7. Not now
+
+- A `sagefs service install|status|stop|uninstall` subcommand for all three OSes (Decisions below): a separate item once all three install blocks exist.
+- Teaching `Watchdog.decide` that "a daemon already holds the port" is not a crash (Risks below): it changes a simulated decision function and needs its own `SupervisorWatchdogSim` case and twin.
+- A Windows service (session 0) is ruled out in Design.
 
 ## Resume here
 
@@ -29,7 +87,7 @@ The macOS item is built and is the template. I read:
 - `contrib/launchd/io.github.willehrendreich.sagefs.plist`. A user agent that runs `@HOME@/.dotnet/tools/sagefs --supervised`, with `RunAtLoad`, `KeepAlive { SuccessfulExit = false }`, `ThrottleInterval 5`, `WorkingDirectory` set to `@HOME@/Library/Application Support/sagefs-daemon`, `DOTNET_ROOT` and `PATH` set as placeholders (`@DOTNET_ROOT@`, `@PATH@`), and stdout and stderr sent to `~/Library/Logs/sagefs/`. Its header comment holds the install block, line for line the one in the Readme.
 - `contrib/systemd/sagefs.service`. `Restart=on-failure`, `RestartSec=5`, `StateDirectory=sagefs` with `WorkingDirectory=%S/sagefs`, `DOTNET_ROOT=%h/.dotnet`, and a drop-in `path.conf` the install writes from the install shell's `PATH`.
 - `SageFs.Tests/FirstRunMacOSTests.fs` (and `FirstRunLinuxTests.fs`). They parse the shipped file and assert: it exists and its label matches, it starts at login and restarts after a crash, `DOTNET_ROOT` and `PATH` are set, the working directory passes `FileWatcher.classifyWatchRoot` and sits outside the data folder, every placeholder has a matching `sed` in the Readme, the file's comment repeats the Readme block exactly, and the program arguments name a flag the CLI help lists.
-- `Readme.md` has `### Run it as a service (Linux)` (line 198) and `### Run it as a service (macOS)` (line 217). The Get Started list links only the Linux anchor (line 162). Nothing mentions Windows. `docs/progress.md` line 278 says login startup is Linux only.
+- `Readme.md` has `### Run it as a service (Linux)` (line 196 on 2026-11-11; 198 when this was written) and `### Run it as a service (macOS)` (line 215). The Get Started list links only the Linux anchor (line 162). Nothing mentions Windows. `docs/progress.md` line 278 says login startup is Linux only.
 
 What the pitfalls the Linux and macOS files already learned came from (their comments say so):
 
@@ -41,12 +99,12 @@ What the pitfalls the Linux and macOS files already learned came from (their com
 | Rewriting the definition under a loaded one fails | `daemon-reload`, `restart` | `bootout` first, then rewrite, then `bootstrap` |
 | Output goes somewhere | journal | `~/Library/Logs/sagefs/` |
 
-The supervisor is `SageFs/WatchdogRunner.fs`. `run` loops on `Watchdog.decide` (`SageFs.Core/Watchdog.fs`), starts the daemon as a child with `ProcessStartInfo(exePath, args, WorkingDirectory = workingDirectory, UseShellExecute = false, RedirectStandardOutput = false)` where `exePath` is `Process.GetCurrentProcess().MainModule.FileName`, and gives up (the process then exits 0) after repeated crashes. `Program.fs` line 259 reads `--supervised`; the watchdog is handed `Environment.CurrentDirectory`, so the daemon's cwd is the task's working directory.
+The supervisor is `SageFs/WatchdogRunner.fs`. `run` loops on `Watchdog.decide` (`SageFs.Core/Watchdog.fs`), starts the daemon as a child through `daemonStartInfo` (a `DaemonLaunch` record; the argv goes in `ArgumentList`, `UseShellExecute = false`, nothing redirected; `WatchdogRunner.fs:35-44` on 2026-11-11) where `exePath` is `Process.GetCurrentProcess().MainModule.FileName`, sets `SAGEFS_SUPERVISED=1` and `SAGEFS_RESTART_COUNT` for the child, and gives up (the process then exits 0) after repeated crashes. `Program.fs` line 307 (259 when this was written) reads `--supervised`; the watchdog is handed `Environment.CurrentDirectory`, so the daemon's cwd is the task's working directory.
 
 Windows facts I read in code, relevant here:
 
-- `FileWatcher.classifyWatchRoot` (`SageFs.Core/FileWatcher.fs` line 365) refuses a filesystem root and the home directory or anything above it. It does not refuse `C:\Windows\System32`. A task with a blank "Start in" runs there, so on Windows a wrong working directory is silent, which is worse than Linux where the daemon at least logs a refusal.
-- The data folder is `~/.SageFs` (`DataDirChoice.dataDirectory`) and the daemon log sits in `%LOCALAPPDATA%\SageFs` (`DaemonLog.userLogDirectory`, `SpecialFolder.LocalApplicationData`). A working directory inside either would make the daemon watch its own writes, the reason the macOS agent uses a sibling.
+- `FileWatcher.classifyWatchRoot` (`SageFs.Core/FileWatcher.fs` line 416 on 2026-11-11) refuses a filesystem root and the home directory or anything above it. It does not refuse `C:\Windows\System32`. A task with a blank "Start in" runs there, so on Windows a wrong working directory is silent, which is worse than Linux where the daemon at least logs a refusal.
+- The data folder is `~/.SageFs` (`DataDirChoice.dataDirectory`, `SageFs.Core/DataDirChoice.fs:35`) and the daemon log sits in `%LOCALAPPDATA%\SageFs` (`userLogDirectory`, `SageFs.Core/DaemonState.fs:100`, `SpecialFolder.LocalApplicationData`). A working directory inside either would make the daemon watch its own writes, the reason the macOS agent uses a sibling.
 - `DaemonState.isProcessAlive` uses `Process.GetProcessById`, which is portable. I did not read the whole `sagefs stop` path on Windows.
 - There is no Windows login startup anywhere in the tree: `rg -i "schtasks|ScheduledTask|Startup folder|shell:startup"` over `*.fs`, `*.fsx`, `*.md` and `*.yml` finds nothing outside this plan.
 
