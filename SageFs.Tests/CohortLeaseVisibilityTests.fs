@@ -215,3 +215,53 @@ let cohortLeaseVisibilityTests =
       Timeouts.cohortReaperInterval
       |> Expect.equal "the cadence the status text prints is the one the daemon timer is built from" Timeouts.cohortReaperInterval
   ]
+/// The status text names members through `MemberId.display` and says every landing state in words. A raw transport
+/// handle is a bearer credential (MemberTable.fs), and a legacy ledger row replays one as `Mcp <handle>`; `%A` of a claim
+/// state printed it as it was held. `%A` of a landing state printed `Blocked (StaleClaimFence (ClaimId "c-1"), AwaitConductor)`
+/// and no next step, which no agent can act on.
+let private rawHandle = "0123456789abcdef0123456789abcdef"
+let private legacy = MemberId.Mcp rawHandle
+
+/// The marks `%A` leaves on a union: a quoted payload, or a case name the words should have replaced.
+let private structuralMarks =
+  [ "\""; "ClaimId"; "AwaitConductor"; "RebaseAndResubmit"; "StaleClaimFence"; "HeadMoved"; "RebaseConflict"; "Verifying ("; "Rebasing \"" ]
+
+[<Tests>]
+let cohortStatusWordsTests =
+  testList "Cohort status text says members and landings in words" [
+    testCase "WHY — a claim held by a legacy raw handle prints the fingerprint, never the handle" <| fun _ ->
+      let frame =
+        frameAfter
+          [ CohortCommand.Join(legacy, JoinableRole.Implementer, None, CohortScope.Machine)
+            CohortCommand.AcquireClaim(legacy, ClaimScope.File "src/A.fs", "working on A", CohortScope.Machine) ]
+      let text = Features.CohortStatusText.renderAt t0 Features.CohortStatusText.HolderSilence.NotSilent Map.empty (fun _ -> None) frame
+      text.Contains rawHandle |> Expect.isFalse "the raw handle is nowhere on the page"
+      text |> Expect.stringContains "the claim names its holder by the display id" (MemberId.display legacy)
+
+    testCase "WHY — every landing state the status text can meet is a sentence, with no structural print left in it" <| fun _ ->
+      let states : LandingState<MemberId> list =
+        [ LandingState.Queued
+          LandingState.Rebasing "h1"
+          LandingState.Verifying("h1", "r1", 3, 1)
+          LandingState.Blocked(LandingBlocker.StaleClaimFence(ClaimId "c-1"), NextAction.AwaitConductor)
+          LandingState.Blocked(LandingBlocker.HeadMoved("h1", "h2"), NextAction.RebaseAndResubmit)
+          LandingState.Blocked(LandingBlocker.RebaseConflict [ "src/A.fs" ], NextAction.RebaseAndResubmit)
+          LandingState.Blocked(LandingBlocker.VetoedBy(legacy, "no"), NextAction.AwaitConductor) ]
+      for state in states do
+        let text = Features.CohortStatusText.landingStateText state
+        for mark in structuralMarks |> List.filter (fun m -> m <> "\"" || not (text.Contains "vetoed")) do
+          text.Contains mark |> Expect.isFalse (sprintf "%s: no '%s' in \"%s\"" (sprintf "%A" state) mark text)
+        text.Contains rawHandle |> Expect.isFalse "no raw handle"
+
+    testCase "WHY — a landing blocked on a stale claim tells the requester what to do next" <| fun _ ->
+      let text = Features.CohortStatusText.landingStateText (LandingState.Blocked(LandingBlocker.StaleClaimFence(ClaimId "c-1"), NextAction.AwaitConductor))
+      text |> Expect.stringContains "it names the claim" "c-1"
+      text |> Expect.stringContains "it names the call that takes the landing back" "withdraw_landing"
+      text |> Expect.stringContains "it names the call that gets a fresh claim" "acquire_claim"
+
+    testCase "WHY — the page reads the clock it is given, so two renders at one instant agree" <| fun _ ->
+      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine) ]
+      let render () = Features.CohortStatusText.renderAt t0 Features.CohortStatusText.HolderSilence.NotSilent Map.empty (fun _ -> None) frame
+      render () |> Expect.equal "the same instant renders the same page" (render ())
+      render () |> Expect.stringContains "the seat is stamped with the clock passed in" (t0.ToString "u")
+  ]

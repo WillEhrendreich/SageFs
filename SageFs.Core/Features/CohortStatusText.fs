@@ -178,8 +178,20 @@ module CohortStatusText =
       sprintf "present (as of %s)" nowStamp
     | SageFs.Cohort.SeatState.Departed since -> sprintf "departed at %s" (since.ToString "u")
 
-  /// One landing's state, in words an agent can act on. A veto names WHO vetoed and WHY, and the two ways out;
-  /// `%A` of the blocker printed the member as a union case and the reason in quotes with no next step.
+  /// One claim's state in words, with its member through `MemberId.display`. `%A` printed the member as it is held, and a
+  /// ledger row written before the fingerprint replays as `Mcp <raw handle>`, which is a bearer credential. The first word
+  /// is the case name, which is what sagefs.nvim reads (`cohort.lua`, `parse_claim`).
+  let claimStateText (state: SageFs.Cohort.ClaimState<SageFs.MemberTable.MemberId>) : string =
+    match state with
+    | SageFs.Cohort.ClaimState.Held holder -> sprintf "Held by %s" (SageFs.MemberTable.MemberId.display holder)
+    | SageFs.Cohort.ClaimState.Orphaned(former, since) ->
+      sprintf "Orphaned (%s left it at %s)" (SageFs.MemberTable.MemberId.display former) (since.ToString "u")
+    | SageFs.Cohort.ClaimState.Released(by, at) ->
+      sprintf "Released by %s at %s" (SageFs.MemberTable.MemberId.display by) (at.ToString "u")
+
+  /// One landing's state, in words an agent can act on: what happened and the next call. A veto names WHO vetoed and WHY,
+  /// and the two ways out. `%A` printed the rest as union cases with no next step. The first word is the case name, which
+  /// is what sagefs.nvim reads (`cohort.lua`, `parse_landing`).
   let landingStateText (state: SageFs.Cohort.LandingState<SageFs.MemberTable.MemberId>) : string =
     match state with
     | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.VetoedBy(by, reason), _) ->
@@ -191,9 +203,28 @@ module CohortStatusText =
       sprintf "Blocked(the landing does not compile: %s) fix it in your commit and request the landing again" text
     | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.Inconclusive reason, _) ->
       sprintf "Blocked(verification inconclusive: %s) nothing is known to be wrong with your commit: request the landing again" reason
-    // default policy: every other state keeps its structural rendering; only a veto carries a member and a
-    // free-text reason that the structural form prints badly.
-    | other -> sprintf "%A" other
+    // The requester's own way out: a Blocked landing is withdrawable (`WithdrawLanding` refuses only Landed and
+    // Withdrawn), and a new landing needs a claim the requester holds now, with that claim's fence.
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.StaleClaimFence(SageFs.Cohort.ClaimId cid), _) ->
+      sprintf
+        "Blocked(claim %s was released, cleared or handed on after the landing was requested) withdraw_landing takes this one back; acquire_claim the scope again and request a new landing with the new claim's fence"
+        cid
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.HeadMoved(from, to'), _) ->
+      sprintf "Blocked(the integration head moved from %s to %s while it was verified) request the landing again so it is rebased onto the new head" from to'
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.RebaseConflict files, _) ->
+      sprintf
+        "Blocked(rebasing onto the integration head conflicts in %s) rebase your commits onto the integration head yourself, resolve those files, and request the landing again"
+        (String.concat ", " files)
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.FailingTests tests, _) ->
+      sprintf "Blocked(%d failing test(s)) fix them in your commits and request the landing again; withdraw_landing takes this one back" tests.Length
+    | SageFs.Cohort.LandingState.Queued -> "Queued: waiting for the landings in front of it; nothing to do"
+    | SageFs.Cohort.LandingState.Rebasing onto -> sprintf "Rebasing onto %s: the daemon is replaying the commits; nothing to do" onto
+    | SageFs.Cohort.LandingState.Verifying(baseHead, rebased, affected, running) ->
+      sprintf
+        "Verifying %s (rebased onto %s): %d affected test(s), %d still running; nothing to do, it lands or blocks by itself"
+        rebased baseHead affected running
+    | SageFs.Cohort.LandingState.Landed sha -> sprintf "Landed at %s" sha
+    | SageFs.Cohort.LandingState.Withdrawn -> "Withdrawn"
 
   /// `landingStateText` for a landing whose failing tests the daemon recorded the names of (finding C-names). A landing Blocked
   /// on failing tests says how many, the first ten by name and where the whole list is, instead of printing every test id;
@@ -276,16 +307,17 @@ module CohortStatusText =
   ///
   /// `clearances` is the claims a conductor could clear now (`Cohort.ClaimStanding.clearable`), which a frame cannot say
   /// either: each such claim's line says so, whose it is and which call clears it.
-  let renderWithClearancesAndReports
+  ///
+  /// `now` is the clock every stamp on the page is measured against, read once by the caller so all the rows on one page
+  /// agree with each other and a test can pin the page.
+  let renderAt
+    (now: DateTime)
     (silence: HolderSilence)
     (clearances: Map<SageFs.Cohort.ClaimId, SageFs.Cohort.ClaimStanding<SageFs.MemberTable.MemberId>>)
     (reportFor: string -> FailingTestsText.Report option)
     (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
     : string =
     let sb = System.Text.StringBuilder()
-    // The clock every lease stamp on this page is measured against: read once,
-    // at render, so all the rows on one page agree with each other.
-    let now = DateTime.UtcNow
     let conductorText =
       // `frame.Conductor` (Slice 3, item 11) — read straight off the
       // published frame, correct across daemon restarts (replaced the
@@ -348,7 +380,7 @@ module CohortStatusText =
         match Map.tryFind frame.ClaimIds.[i] clearances |> Option.map claimClearableText with
         | Some text when text <> "" -> sprintf " | clearable: %s" text
         | _ -> ""
-      sb.AppendLine(sprintf "  - %s %A held-by=%s fence=%d state=%A%s" cid frame.ClaimScope.[i] holder (int64 frame.ClaimFence.[i]) frame.ClaimState.[i] clearable) |> ignore
+      sb.AppendLine(sprintf "  - %s %A held-by=%s fence=%d state=%s%s" cid frame.ClaimScope.[i] holder (int64 frame.ClaimFence.[i]) (claimStateText frame.ClaimState.[i]) clearable) |> ignore
     if claimView.HiddenTotal > 0 then
       sb.AppendLine(sprintf "  %s" (CohortBoundedView.claimOverflowLabel claimView)) |> ignore
     sb.AppendLine(sprintf "Integration head: %s" frame.IntegrationHead) |> ignore
@@ -376,6 +408,16 @@ module CohortStatusText =
       if landingView.HiddenTotal > 0 then
         sb.AppendLine(sprintf "  %s" (CohortBoundedView.landingOverflowLabel landingView)) |> ignore
     sb.ToString()
+
+  /// `renderAt` for the shell callers that have not been handed a clock yet (McpCohortIntegration.fs, Mcp.fs). The one
+  /// wall-clock read left in this module; it goes once those callers pass their own `now`.
+  let renderWithClearancesAndReports
+    (silence: HolderSilence)
+    (clearances: Map<SageFs.Cohort.ClaimId, SageFs.Cohort.ClaimStanding<SageFs.MemberTable.MemberId>>)
+    (reportFor: string -> FailingTestsText.Report option)
+    (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
+    : string =
+    renderAt DateTime.UtcNow silence clearances reportFor frame
 
   /// The cohort status text with no claim called clearable.
   let renderWithSilenceAndReports

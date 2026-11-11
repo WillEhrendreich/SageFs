@@ -59,7 +59,7 @@ let renderPlaySummary (entryCount: int) (head: LedgerHead<MemberId>) (frame: Coh
   match frame.Conductor with
   | ConductorBinding.Bound c -> line (sprintf "Conductor: %s" (MemberId.display c))
   | ConductorBinding.Vacant(former, since, why) ->
-    line (sprintf "Conductor: (VACANT since %s — %A held it and left; nobody holds conductor authority)"
+    line (sprintf "Conductor: (VACANT since %s — %s held it and left; nobody holds conductor authority)"
            (since.ToString "o") (MemberId.display former))
   | ConductorBinding.NeverBound -> line "Conductor: (none yet — no member has ever joined this cohort)"
   line ""
@@ -99,7 +99,7 @@ let renderPlaySummary (entryCount: int) (head: LedgerHead<MemberId>) (frame: Coh
         | LandingState.Rebasing onto -> sprintf "Rebasing onto %s" onto
         | LandingState.Verifying(baseHead, rebasedHead, affected, running) ->
           sprintf "Verifying base=%s rebased=%s affected=%d running=%d" baseHead rebasedHead affected running
-        | LandingState.Blocked(blocker, next) -> sprintf "Blocked (%A) next=%A" blocker next
+        | LandingState.Blocked _ -> CohortStatusText.landingStateText req.State
         | LandingState.Landed sha -> sprintf "Landed %s" sha
         | LandingState.Withdrawn -> "Withdrawn"
       line (sprintf "  - %s  requester=%s  %s" lid (MemberId.display req.Requester) stateText)
