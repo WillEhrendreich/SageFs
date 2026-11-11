@@ -34,7 +34,17 @@ let renderPlaySummary (entryCount: int) (head: LedgerHead<MemberId>) (frame: Coh
   line (sprintf "Ledger: %d entries, head seq=%d" entryCount (int64 frame.Version))
   line ""
 
-  line (sprintf "Members (%d):" frame.MemberIds.Length)
+  // MEMBERS PRESENT, not members ever known: `MemberIds` keeps a departed member so a claim it held still resolves, so its
+  // length counts the dead. The rows below still list every id, each marked present or departed, and that is the only other
+  // use of the array here (the zip's bound, which is the same length as `MemberSeat`).
+  let presentCount =
+    frame.MemberSeat
+    |> Array.filter (fun seat ->
+      match seat with
+      | SeatState.Present -> true
+      | SeatState.Departed _ -> false)
+    |> Array.length
+  line (sprintf "Members (%d):" presentCount)
   Array.zip3 frame.MemberIds frame.MemberRole frame.MemberSeat
   |> Array.sortBy (fun (m, _, _) -> MemberId.display m)
   |> Array.iter (fun (m, role, seat) ->
