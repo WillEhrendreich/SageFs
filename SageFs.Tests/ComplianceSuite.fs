@@ -46,7 +46,6 @@ let complianceSuite = testList "[Compliance] Behavioral contracts" [
     AffordancesPropertyTests.allAffordancesPropertyTests
     CellGridMonoidTests.cellOverlayTests
     CellGridMonoidTests.cellGridOverlayTests
-    ResultExTests.resultExTests
   ]
 
   testList "Error handling contracts" [

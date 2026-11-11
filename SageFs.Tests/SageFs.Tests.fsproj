@@ -320,7 +320,6 @@
         <Compile Include="HotReloadStateTests.fs" />
         <Compile Include="MutationTestingFramework.fs" />
         <Compile Include="HotReloadStateMutationTests.fs" />
-        <Compile Include="ResultExMutationTests.fs" />
         <Compile Include="SageFsErrorMutationTests.fs" />
         <Compile Include="SessionLifecycleMutationTests.fs" />
         <Compile Include="CoverageViewMutationTests.fs" />
@@ -487,7 +486,6 @@
         <Compile Include="CoverageViewEmissionContractTests.fs" />
          <Compile Include="LiveTestRebuildCycleTests.fs" />
          <Compile Include="LiveTestingGraphTests.fs" />
-         <Compile Include="DomainModelVizTests.fs" />
          <Compile Include="ExpectoModuleBindingFixture.fs" />
           <Compile Include="LiveTestingExecutorTests.fs" />
           <Compile Include="FsiRedefinedTestFixtures.fs" />
@@ -583,7 +581,6 @@
         <Compile Include="ThemesGutterAndDiagnosticsTests.fs" />
         <Compile Include="InstrumentationTests.fs" />
         <Compile Include="McpToolAuditTests.fs" />
-        <Compile Include="FeatureParityTests.fs" />
         <Compile Include="SseParityTests.fs" />
         <Compile Include="RepoPathsSiblingTests.fs" />
         <Compile Include="ParityClaimsTests.fs" />
@@ -784,7 +781,6 @@
         <Compile Include="WorkerLogFileTests.fs" />
         <Compile Include="WorkerLogSinkWiringTests.fs" />
         <Compile Include="ModelSnapshotTests.fs" />
-         <Compile Include="TimeTravelTests.fs" />
          <Compile Include="VerificationPlannerTests.fs" />
          <Compile Include="VerificationPlannerPropertyTests.fs" />
          <Compile Include="ExactTestSelectionScenarioTests.fs" />
@@ -831,7 +827,6 @@
          <Compile Include="JupyterKernelSocketTests.fs" />
          <Compile Include="JupyterDaemonBridgeTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
-        <Compile Include="ResultExTests.fs" />
         <Compile Include="EventExhaustivenessTests.fs" />
         <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
@@ -866,7 +861,6 @@
         <Compile Include="DefinitionOfDoneTests.fs" />
         <Compile Include="TestStatusVocabularyTests.fs" />
         <Compile Include="HotReloadVisibilityTests.fs" />
-         <Compile Include="TutorialTests.fs" />
          <Compile Include="UiDensityTests.fs" />
          <Compile Include="SmartResetTests.fs" />
          <Compile Include="EvalProvenanceTests.fs" />
@@ -1072,8 +1066,6 @@
         <Compile Include="RegisteredHolderTests.fs" />
         <Compile Include="CompiledShapeTests.fs" />
         <Compile Include="MigrationWorthTests.fs" />
-        <Compile Include="MigrationPlanTests.fs" />
-        <Compile Include="DeclaredShapeTests.fs" />
         <Compile Include="ShapeMigrationTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />

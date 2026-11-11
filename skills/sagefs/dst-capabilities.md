@@ -8,7 +8,7 @@ is a regression in the evidence, not just in the code.
 
 Everything here is in `SageFs.Simulation/` and `SageFs.Tests/`. The counts are
 from 2026-10-04: **44 simulations, 41 invariant modules, 21 generator modules,
-20 mutation suites.**
+19 mutation suites** (20 on that date; the `ResultEx` suite went with its unused module on 2026-11-11).
 
 ## The shape every simulation shares
 
@@ -102,10 +102,10 @@ the startup race it models is a real class of bug.
 transformation that breaks exactly one thing, applied to real code, where the
 requirement is that an existing assertion then FAILS.
 
-There are **20 mutation suites**, for: `Affordances`, `BinaryPrimitives`,
+There are **19 mutation suites**, for: `Affordances`, `BinaryPrimitives`,
 `CohortGit`, `CoverageView`, `CoverageViewProject`, `EvalStore`,
 `EventsStreamScope`, `HotReloadState`, `Nudge`, `ReloadPlanningDecision`,
-`RestartPolicyBoundary`, `ResultEx`, `SageFsError`, `SessionDisplay`,
+`RestartPolicyBoundary`, `SageFsError`, `SessionDisplay`,
 `SessionLifecycle`, `SessionOperations`, `SseWriterCohort`,
 `TestCachePersistence`, `Watchdog`, `WorkflowTypes`.
 

@@ -32,7 +32,7 @@ you remember or not.
 ## 2. Railway-Oriented Programming Eliminates Try/Catch Spaghetti
 
 SageFs uses `Result<'T, SageFsError>` throughout. Errors are values, not exceptions.
-The `ResultEx` module gives you composable combinators:
+The standard `Result` combinators compose:
 
 ```fsharp
 request

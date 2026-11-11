@@ -79,7 +79,6 @@ let main argv =
     let mutationTests =
       testList "Mutation Score" [
         HotReloadStateMutationTests.hotReloadMutationTests
-        ResultExMutationTests.resultExMutationTests
         SageFsErrorMutationTests.sageFsErrorMutationTests
         SessionLifecycleMutationTests.sessionLifecycleMutationTests
         CoverageViewMutationTests.coverageViewMutationTests
