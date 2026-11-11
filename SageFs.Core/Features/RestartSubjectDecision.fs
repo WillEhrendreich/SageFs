@@ -83,6 +83,8 @@ let private unscopeableOf (reason: ReloadOutcome.RestartReason) =
     Some(sprintf "%s, which only a re-launch can pick up" (SageFs.Features.MetadataDelta.RudeCause.describe cause))
   | ReloadOutcome.RestartReason.MetadataDeltaUnavailable why ->
     Some(sprintf "the running process cannot take an in-place patch (%s), so the whole app is re-launched" why)
+  | ReloadOutcome.RestartReason.MetadataDeltaFaulted (exceptionType, _) ->
+    Some(sprintf "the metadata-delta save failed with %s, so what the process holds is not known and the whole app is re-launched" exceptionType)
   | ReloadOutcome.RestartReason.TypeShapeChanged (_, RestartScope.Scoped _) -> None
 
 let ofReasons (reasons: ReloadOutcome.RestartReason list) : Decision =

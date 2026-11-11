@@ -124,6 +124,11 @@ type RestartReason =
   /// will edit the assembly, a debugger is attached, the runtime lacks a capability, the build is not unoptimized).
   /// Nothing about the edit is wrong; the app has to restart to take it.
   | MetadataDeltaUnavailable of why: string
+  /// A step of the metadata-delta save threw an exception nothing turned into an answer (a file the build did not
+  /// write where it was expected, a body the reader could not parse, a key the writer did not index). The process may
+  /// still run the old body, so SageFs restarts the app to run the saved code. This is a SageFs defect, and the
+  /// exception's type and message are kept for the report.
+  | MetadataDeltaFaulted of exceptionType: string * message: string
 
 module RestartReason =
 
@@ -172,6 +177,8 @@ module RestartReason =
       sprintf "'%s' is generic, and SageFs cannot list every instantiation the app can run (%s), so a patch could leave one on the old body" declaration detail
     | RestartReason.RudeEdit cause -> RudeCause.describe cause
     | RestartReason.MetadataDeltaUnavailable why -> sprintf "SageFs cannot patch this app in place: %s" why
+    | RestartReason.MetadataDeltaFaulted (exceptionType, message) ->
+      sprintf "the metadata-delta save failed with %s (%s), so the app was restarted to run the code you saved instead of the old body" exceptionType message
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
   let remedy =
@@ -227,6 +234,8 @@ module RestartReason =
       "Restart the app to pick it up. A method body, a closure body and a method added to a type the app already runs are patched in place; this edit changes something that only takes effect when the process starts."
     | RestartReason.MetadataDeltaUnavailable _ ->
       "Restart the app to pick it up. Nothing is wrong with the edit: the running process cannot take an in-place patch right now, and a restart starts a process that can."
+    | RestartReason.MetadataDeltaFaulted _ ->
+      "Nothing is wrong with the edit, and the app runs it after the restart. The failure is a SageFs defect: report it with the exception type and message above."
 /// A `let mutable` whose initializer you edited while the app was running. The
 /// app kept its live value (rule 3 of the state spec), and this is what the
 /// save says about it.

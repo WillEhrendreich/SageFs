@@ -40,6 +40,10 @@ type Refusal =
   | Rude of RudeCause
   /// The route cannot be used right now, and the edit is not why.
   | Unavailable of why: string
+  /// A step of the save threw something none of the steps turned into an answer: a file the build did not write, a
+  /// body the reader cannot parse, a key the writer did not index. The old body may still be serving, so the app
+  /// restarts to run the code that was saved. The exception's type and message are kept, because this is a defect.
+  | Faulted of exceptionType: string * message: string
 
 /// What the save does.
 [<RequireQualifiedAccess>]
@@ -123,3 +127,7 @@ module DeltaSession =
     match refusal with
     | Refusal.Rude cause -> RudeCause.describe cause
     | Refusal.Unavailable why -> why
+    | Refusal.Faulted (exceptionType, message) -> sprintf "the delta route failed with %s (%s)" exceptionType message
+
+  /// The refusal for an exception a save threw.
+  let faulted (e: exn) : Refusal = Refusal.Faulted(e.GetType().Name, e.Message)

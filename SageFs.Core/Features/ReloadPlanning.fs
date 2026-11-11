@@ -143,6 +143,8 @@ type ReloadChange =
   | RefusedByDelta of cause: SageFs.Features.MetadataDelta.RudeCause
   /// The metadata-delta route cannot be used for this app right now (see `RestartReason.MetadataDeltaUnavailable`).
   | DeltaUnavailable of why: string
+  /// A step of the metadata-delta save threw (see `RestartReason.MetadataDeltaFaulted`).
+  | DeltaFaulted of exceptionType: string * message: string
 
 /// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
 /// code changes land, state stays.
@@ -207,6 +209,8 @@ module ReloadChange =
     | ReloadChange.GenericInstantiationsUnknown (name, detail) -> sprintf "%s is generic, and %s" name detail
     | ReloadChange.RefusedByDelta cause -> SageFs.Features.MetadataDelta.RudeCause.describe cause
     | ReloadChange.DeltaUnavailable why -> sprintf "this app cannot take an in-place patch: %s" why
+    | ReloadChange.DeltaFaulted (exceptionType, message) ->
+      sprintf "the metadata-delta save failed with %s (%s)" exceptionType message
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
 
@@ -268,6 +272,7 @@ module ReloadChange =
     | ReloadChange.GenericInstantiationsUnknown (name, detail) -> RestartReason.GenericInstantiationsUnknown (name, detail)
     | ReloadChange.RefusedByDelta cause -> RestartReason.RudeEdit cause
     | ReloadChange.DeltaUnavailable why -> RestartReason.MetadataDeltaUnavailable why
+    | ReloadChange.DeltaFaulted (exceptionType, message) -> RestartReason.MetadataDeltaFaulted (exceptionType, message)
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason
 

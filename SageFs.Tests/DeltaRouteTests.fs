@@ -175,6 +175,41 @@ let deltaRouteTests =
         | Landing.DidNotLand why -> why |> Expect.isNotEmpty (sprintf "%A says why" outcome)
         | other -> failtestf "%A did not land, and reads as %A" outcome other
 
+    testCase "WHY - a save whose step throws is a restart that names the exception, so the old body never keeps serving behind an internal fault" <| fun _ ->
+      let directory = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-delta-fault-%s" (Guid.NewGuid().ToString "N"))
+      IO.Directory.CreateDirectory directory |> ignore
+      try
+        let corrupt = IO.Path.Combine(directory, "App.dll")
+        IO.File.WriteAllBytes(corrupt, [| 0x4Duy; 0x5Auy; 1uy; 2uy |])
+        // The calls a save makes, given input that makes each throw.
+        let steps : (string * (unit -> unit) * string) list =
+          [ "a build that wrote a file that is not an image", (fun () -> PeImage.OfFile corrupt |> ignore), "BadImageFormatException"
+            "a build that wrote somewhere else", (fun () -> PeImage.OfFile(IO.Path.Combine(directory, "Elsewhere.dll")) |> ignore), "FileNotFoundException"
+            "a key the writer did not index",
+            (fun () -> Collections.Generic.Dictionary<string, int>()["Ns.T::m#Int32(Int32)"] |> ignore),
+            "KeyNotFoundException"
+            "a probe hook on a type that is not nested",
+            (fun () -> ProbeTarget.ofMethod (typeof<Console>.GetMethod("Beep", Type.EmptyTypes)) |> ignore),
+            "NullReferenceException" ]
+        for what, step, expectedType in steps do
+          let seen = Collections.Generic.List<exn>()
+          let answer =
+            RunAppDelta.answerFaults seen.Add (fun () -> async { step (); return RunAppDelta.SaveResult.Unchanged })
+            |> Async.RunSynchronously
+          match answer with
+          | RunAppDelta.SaveResult.Restart(Refusal.Faulted(exceptionType, message), []) ->
+            exceptionType |> Expect.equal (sprintf "%s: the exception type is named" what) expectedType
+            message |> Expect.isNotEmpty (sprintf "%s: and its message kept" what)
+            let reason = ReloadChange.restartReason (ReloadChange.DeltaFaulted(exceptionType, message))
+            match reason with
+            | ReloadOutcome.RestartReason.MetadataDeltaFaulted(t, _) -> t |> Expect.equal (sprintf "%s: the restart reason carries it" what) expectedType
+            | other -> failtestf "%s: should be MetadataDeltaFaulted, and is %A" what other
+            ReloadOutcome.RestartReason.describe reason |> Expect.stringContains (sprintf "%s: the user is told the app restarted" what) "restarted"
+          | other -> failtestf "%s: should be a restart naming the exception, and is %A" what other
+          seen.Count |> Expect.equal (sprintf "%s: the session hears of the fault once" what) 1
+      finally
+        try IO.Directory.Delete(directory, true) with _ -> ()
+
     testCase "WHY - a process starts tracking the module it loaded, or says what stops the runtime editing it" <| fun _ ->
       DeltaSession.start mvidA [] |> Expect.equal "nothing in the way" (Standing.Tracking(mvidA, 0))
       match DeltaSession.start mvidA [ CapabilityGap.EnvironmentNotModifiable "unset"; CapabilityGap.ModuleOptimized "App" ] with

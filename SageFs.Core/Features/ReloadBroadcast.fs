@@ -70,6 +70,7 @@ let private refusalCaseName (reason: RestartReason) =
   // The emitter's own cause is the token: a client reads `VirtualSignatureChanged`, not a wrapper.
   | RestartReason.RudeEdit cause -> SageFs.Features.MetadataDelta.RudeCause.caseName cause
   | RestartReason.MetadataDeltaUnavailable _ -> "MetadataDeltaUnavailable"
+  | RestartReason.MetadataDeltaFaulted _ -> "MetadataDeltaFaulted"
 let private refusalOf (reason: RestartReason) : DevReload.ReloadRefusal =
   { Case = refusalCaseName reason
     Message = RestartReason.describe reason

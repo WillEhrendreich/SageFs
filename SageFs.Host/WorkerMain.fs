@@ -1768,6 +1768,8 @@ let run (sessionId: string) (requestedPort: int) = async {
               match refusal with
               | Features.MetadataDelta.Refusal.Rude cause -> Features.ReloadPlanning.ReloadChange.RefusedByDelta cause
               | Features.MetadataDelta.Refusal.Unavailable why -> Features.ReloadPlanning.ReloadChange.DeltaUnavailable why
+              | Features.MetadataDelta.Refusal.Faulted (exceptionType, message) ->
+                Features.ReloadPlanning.ReloadChange.DeltaFaulted (exceptionType, message)
             return! restartOrFallBack fileName (changeOf first) (rest |> List.map changeOf)
           | RunAppDelta.SaveResult.Landed landed ->
             reloadBaselines.[IO.Path.GetFullPath filePath] <- current
