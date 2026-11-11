@@ -104,6 +104,24 @@ module DevReloadHealthTracker =
       currentHealth <- Disabled
       onTransition <- None)
 
+/// How serious a diagnostic is, as the browser overlay tells them apart. A closed set: the overlay reads its
+/// spelling (`DevReloadSeverity.label`) off the wire, and nothing else writes one.
+[<RequireQualifiedAccess>]
+type DevReloadSeverity =
+  | Blocking
+  | Warning
+  | Info
+  | Hidden
+
+module DevReloadSeverity =
+  /// The one spelling of each severity on the wire. The overlay's script matches on these four words.
+  let label (severity: DevReloadSeverity) : string =
+    match severity with
+    | DevReloadSeverity.Blocking -> "error"
+    | DevReloadSeverity.Warning -> "warning"
+    | DevReloadSeverity.Info -> "info"
+    | DevReloadSeverity.Hidden -> "hidden"
+
 /// Structured diagnostic for browser error display. Carries source-mapped
 /// line numbers (LineOffset already applied) so the browser shows correct
 /// positions matching the user's source file.
@@ -113,7 +131,7 @@ type DevReloadDiagnostic = {
   EndLine: int
   Column: int
   EndColumn: int
-  Severity: string  // "error" | "warning" | "info" | "hidden"
+  Severity: DevReloadSeverity
   DiagCode: string option  // e.g. "FS0001" — named DiagCode to avoid field collision with EvalRequest.Code
   Message: string
   /// Lines around the error (±1 line context) for browser display.
@@ -163,7 +181,7 @@ module DevReloadDiagnostic =
       EndLine = diag.EndLine
       Column = diag.Column
       EndColumn = diag.EndColumn
-      Severity = diag.Severity
+      Severity = DevReloadSeverity.label diag.Severity
       DiagCode = (match diag.DiagCode with Some code -> code | None -> Unchecked.defaultof<string>)
       Message = diag.Message
       SourceContext = (match diag.SourceContext with Some lines -> lines | None -> Unchecked.defaultof<string array>)

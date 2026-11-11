@@ -217,6 +217,15 @@ let broadcastEvent (evt: DevReload.DevReloadEvent) =
 /// a save pipeline should make.
 let broadcastOutcome (outcome: ReloadOutcome) = broadcastEvent (eventOf outcome)
 
+/// What the browser overlay calls a compiler diagnostic's severity. Exhaustive: a new severity does not compile until the
+/// overlay has a word for it.
+let severityOf (severity: SageFs.Features.Diagnostics.DiagnosticSeverity) : DevReload.DevReloadSeverity =
+  match severity with
+  | SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking -> DevReload.DevReloadSeverity.Blocking
+  | SageFs.Features.Diagnostics.DiagnosticSeverity.Warning -> DevReload.DevReloadSeverity.Warning
+  | SageFs.Features.Diagnostics.DiagnosticSeverity.Info -> DevReload.DevReloadSeverity.Info
+  | SageFs.Features.Diagnostics.DiagnosticSeverity.Hidden -> DevReload.DevReloadSeverity.Hidden
+
 /// A compile failure with the structured diagnostics the browser overlay needs
 /// to render clickable file:line errors. Everything else about the outcome —
 /// the wording and the remedy — still comes from `ReloadOutcome`.

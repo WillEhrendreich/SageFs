@@ -259,7 +259,7 @@ let tests =
 
       let present : DevReload.DevReloadDiagnostic =
         { File = "App.fs"; Line = 10; EndLine = 10; Column = 5; EndColumn = 15
-          Severity = "error"; DiagCode = Some "FS0001"; Message = "Type <mismatch>"
+          Severity = DevReload.DevReloadSeverity.Blocking; DiagCode = Some "FS0001"; Message = "Type <mismatch>"
           SourceContext = Some [| "let a = 1"; "let b = \"x\"" |]; SourceContextStartLine = Some 9 }
 
       let absent : DevReload.DevReloadDiagnostic =

@@ -1300,7 +1300,7 @@ let run (sessionId: string) (requestedPort: int) = async {
                EndLine = Middleware.CompilationContext.mapDiagnosticLine lineOffset d.Range.EndLine
                Column = d.Range.StartColumn
                EndColumn = d.Range.EndColumn
-               Severity = Features.Diagnostics.DiagnosticSeverity.label d.Severity
+               Severity = Features.ReloadBroadcast.severityOf d.Severity
                DiagCode =
                  match d.Subcategory with
                  | s when String.IsNullOrWhiteSpace s -> None
@@ -1324,7 +1324,7 @@ let run (sessionId: string) (requestedPort: int) = async {
         // the only place a failed save says why.
         let diagnosticLines =
           diagnostics
-          |> List.map (fun d -> sprintf "  %s(%d,%d): %s: %s" d.File d.Line d.Column d.Severity d.Message)
+          |> List.map (fun d -> sprintf "  %s(%d,%d): %s: %s" d.File d.Line d.Column (DevReload.DevReloadSeverity.label d.Severity) d.Message)
           |> String.concat "\n"
         Log.warn "Reload failed for %s: %s\n%s\n%s" fileName ex.Message diagnosticLines (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       let compiledQualifiedAccessOf (filePath: string) =

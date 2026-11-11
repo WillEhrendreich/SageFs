@@ -227,7 +227,7 @@ let uxFeatureTests = testList "UX feature tests" [
   test "Diagnostic SourceContext fields default to None" {
     let diag : DevReloadDiagnostic = {
       File = "t.fs"; Line = 1; Column = 1; EndLine = 1; EndColumn = 1
-      Severity = "Error"; DiagCode = None; Message = "m"
+      Severity = DevReloadSeverity.Blocking; DiagCode = None; Message = "m"
       SourceContext = None; SourceContextStartLine = None
     }
     diag.SourceContext |> Expect.isNone "ctx"
@@ -239,7 +239,7 @@ let uxFeatureTests = testList "UX feature tests" [
       System.IO.File.WriteAllLines(tmp, [| "a"; "b"; "c"; "d"; "e" |])
       let diag = {
         File = tmp; Line = 3; Column = 1; EndLine = 3; EndColumn = 1
-        Severity = "Error"; DiagCode = None; Message = "m"
+        Severity = DevReloadSeverity.Blocking; DiagCode = None; Message = "m"
         SourceContext = None; SourceContextStartLine = None
       }
       let enriched = DevReloadDiagnostic.addSourceContext diag
@@ -252,7 +252,7 @@ let uxFeatureTests = testList "UX feature tests" [
   test "addSourceContext returns original for missing file" {
     let diag = {
       File = @"C:\no\such\file.fs"; Line = 1; Column = 1; EndLine = 1; EndColumn = 1
-      Severity = "Error"; DiagCode = None; Message = "m"
+      Severity = DevReloadSeverity.Blocking; DiagCode = None; Message = "m"
       SourceContext = None; SourceContextStartLine = None
     }
     let result = DevReloadDiagnostic.addSourceContext diag
