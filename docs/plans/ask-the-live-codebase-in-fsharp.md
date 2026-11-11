@@ -16,6 +16,67 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read on that commit; the sections under this one are the original plan, corrected where it had gone stale.
+
+### 1. Outcome
+
+After A lands, an agent in a session evaluates `Sage.Cohort.members ()` or `Sage.Symbols.referencesOf "SageFs.Features.CallerCheck.callersAsync"` and gets typed F# values back, under the same role gate the matching tool has, and a daemon profile can leave those read tools out of `tools/list` while they stay callable by name. Today those answers come back only as tool text. B adds active patterns over the cohort view. C (a type provider) is research and ships nothing unless its spike passes.
+
+Outcome gate for A. `SageQueryTests`: role parity over every `RolePreset` and every query equals `Capability.admitTool` for the mapped tool, no cell skipped. `SageQueryOutcomeTests` (`--integration-host`): a real session, an Implementer eval calls each function and gets the tool's answer on the same state, a Verifier token (no `Eval`) is refused at the tool, and the in-flight-eval deadlock check awaits completion, never a timeout. The token saving is measured with `ListedDefinitions.characters` (`SageFs.Tests/ToolListBudgetTests.fs:50`). Linux only; a per-eval environment variable on the host is unproven on Windows.
+
+### 2. Where the code is today
+
+- The figures in the plan below are stale. `tools/list` is 74 tools (`SageFs.Tests/McpAffordanceHardeningTests.fs:221`, `ToolDescriptionTests.fs:245`, `Readme.md:59`), and the full catalog weighs 38,286 characters, the starter list 5,395 (`SageFs.Tests/RatchetBudgets.fs:462`; the comment above it has the history from 112,840 on 2026-11-08). At four characters a token that is about 9,600 tokens, not 28,000. The research note `mcp-tool-list-by-harness-2026-10-26.md` (untracked, repo root) measured the 0.6.929 daemon before the diet.
+- A profile already exists: `ToolListProfile = Full | Starter`, env `SAGEFS_TOOL_LIST`, default `Full` (`SageFs.Core/ToolListProfile.fs:13,39`). `small-default-tool-list` is Done as an opt-in starter list. So A's "profile flag" is a third case of that DU, not a new mechanism.
+- Typed results before formatting: `McpCompletions.membersOf ctx sid name : Task<CompletionAnswer<CompletionEntry>>` (`SageFs/McpCompletions.fs:107`), `McpMembersRoute.listMembers` (`SageFs/McpMembersRoute.fs:13`), `McpReferencesRoute.referencesOf : Task<ReferenceReply>` (`SageFs/McpReferencesRoute.fs:25`), `McpReferencesPage.build` (`SageFs/McpReferencesPage.fs:65`). The frame is `Handle.ReadFrame()` (`SageFs.Core/Features/CohortOwner.fs:440`).
+- Roles: `ToolClass` (`SageFs.Core/Capability.fs:104`), `ToolClass.toolsOf` (`:174`: `list_members` and `list_references` are `SessionRead`, `get_cohort_status` is `CohortRead`, nineteen tools are `CodeAnalysis`), `RolePreset.toolClasses` (`:263`; `Eval` is Implementer only), `admitTool` (`:889`), `visibleTools` (`:907`), `CapabilityTransport` (`:1004`).
+- Checking: `fsiSession.ParseAndCheckInteraction` (`SageFs.Core/Features/Diagnostics.fs:66,109`). `SageFs.Core/EvalActorDecision.fs` exists; that it serialises evals per session is `[not verified]` and is what experiment 2 reads.
+- Wire: `EndpointContracts.apiVersion = 4` (`SageFs.Core/EndpointContracts.fs:38`). A new route is a contract addition.
+- No `QueryGate`, `SagePrelude`, `SageQuery` or type provider exists (grep over the tree).
+
+### 3. Steps
+
+0. **Measure, no code.** (1) Per-tool weight: in a session on `SageFs.Tests`, call `ListedDefinitions.registered ()` and `characters` per tool (`ToolListBudgetTests.fs:31,50`) and sum the read tools A would move. Write the number here. If it is under about 12,000 characters (3,000 tokens) of the 38,286, A's saving is small and the item shrinks to B, which needs no route. (2) The handle spike and the deadlock check ("Measure first" 2). (3) The provider spike, only with Will's yes to the SDK dependency in a scratch directory.
+1. **Pure.** `SageFs.Core/Features/QueryGate.fs` after `Capability.fs` (`SageFs.Core/SageFs.Core.fsproj:73`): a closed `Query` DU, `toolOf : Query -> string`, `admit preset query` implemented as `Capability.admitTool (grantOf preset) (toolOf query)`. RED in `SageFs.Tests/SageQueryTests.fs` (after `CapabilityTests.fs`, `SageFs.Tests/SageFs.Tests.fsproj:1105`): every `toolOf` is in `ToolClass.toolsOf`; parity over `RolePreset.all` and `Query.all`.
+2. **Pure plus simulation.** `SageFs.Core/Features/QueryHandle.fs`, a pure state machine (mint, use, expire on eval end), and `SageFs.Simulation/QueryHandleSim.fs` with the invariants in "Tests" and the forgets-expiry twin. RED test 3: a handle for one eval is refused for the next; a handle minted for token X cannot be used as Y.
+3. **Edge.** `POST /api/query/<name>` in a new `SageFs/McpQueryRoute.fs` before `McpServer.fs` (`SageFs/SageFs.fsproj:247`), serialising through `SageFs.Json` profiles only. Wire commit: an `EndpointContracts.fs` row, `Plugin: n/a internal route read by the generated prelude only`.
+4. **Pure.** `SageFs.Core/Features/SagePrelude.fs` producing source text, BCL only. RED tests 4 and 5 (compiles in a bare session via `check_fsharp_code` in the outcome tier; round trip through `SageFs.Json`).
+5. **Edge.** `SageQueryOutcomeTests.fs` with `Integration.hostList` (`SageFs.Tests/TestInfrastructure.fs:482`); then `ToolListProfile.Queries` as a third case with its filter and a `ToolListProfileTests` extension; docs in `docs/mcp-tools.md` and `skills/sagefs`.
+6. **B.** One file of active patterns, after 5.
+7. **C.** Only on experiment 3 passing, on a branch.
+
+`DECISION:` a new loopback route that accepts only per-eval handles. Recommendation: yes. `DECISION:` `FSharp.TypeProviders.SDK` for a scratch spike. Recommendation: scratch only, and discuss before any tree change. `DECISION:` the profile stays opt-in until a week of dogfood. Recommendation: yes; it is the same guard `small-default-tool-list` keeps.
+
+### 4. How to check it
+
+- REPL first: a session on `SageFs.Tests` for step 0 (reflection over `SageFsTools`); a session on `SageFs.Core` for steps 1, 2 and 4.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (`ToolListBudgetTests` is in that lane; a new profile must not change the Full catalog).
+- Inner loop: `--filter-test-list "SageQuery"`.
+- Acceptance: the unfiltered `--summary` run; the unfiltered `--integration-host` tier for step 5.
+
+### 5. Traps in this repo
+
+- The tool-list weight only goes down (`RatchetBudgets.toolList`). A route is not a tool and weighs nothing there. Do not add a tool.
+- SAGE-005: `admit preset query` is fine; a route handler `(name: string) (body: string)` is a finding. Parse into `Query` before any function takes two strings.
+- JSON: `SageFs.Json` profiles only on the daemon side (`JsonCentralizationTests`). The prelude is generated source outside the ratchet's roots and uses BCL `System.Text.Json`; keep it there.
+- Never `#load` a Core file into a session with Core loaded. The prelude shares no Core type, which is why it round-trips JSON.
+- The handle is a bearer secret for one eval: never in a tool argument, a log line or the transcript. Follow `CapabilityTransport` (`Capability.fs:1004`).
+- No wall-clock wait in the deadlock check.
+- Project files whole; no new NuGet package without discussion (the provider SDK is exactly that).
+
+### 6. Size and order
+
+Step 0 one day. A (1 to 5) one to two weeks; B two days; C unsized. Steps 1 and 4 are file-disjoint once the JSON contract type exists; 3 owns the server. First commit: the step 0 numbers written into this plan, then `test(query): RED every role's verdict on a query equals admitTool for its tool (ask-the-live-codebase step 1)`.
+
+### 7. Not now
+
+- Flipping the default profile.
+- The `Coupled` active pattern: waits on the `plan-a-cohort-as-code` coverage measurement.
+- C beyond its spike.
+- Which caller a handle names when sub-agents share a connection: `a-token-per-subagent-in-claude-code` (the plan below says `each-agent-its-own-member`, which is not a roadmap item).
+
 This item holds three ideas that share one precondition (a place inside the session where typed things about the repo and the cohort can be reached) and differ a lot in risk:
 
 - A. Typed query functions in the session, so the MCP read tools can leave the always-loaded list (the "code execution with MCP" pattern).
@@ -36,7 +97,7 @@ The outcome gate for A is the experiment harness the tool-list research asks for
 
 ## What exists today
 
-- The MCP list is 71 tools, about 28,000 tokens (`mcp-tool-list-by-harness-2026-10-26.md`, untracked in `~/Work/SageFs`; section 7 "One larger idea" is the reasoning for A and names the enforcement problem). That document also sets the guard for any list change: additive first, every tool stays callable by name, the experiment is the gate.
+- The MCP list was 71 tools, about 28,000 tokens, when this was written (`mcp-tool-list-by-harness-2026-10-26.md`, untracked in `~/Work/SageFs`; section 7 "One larger idea" is the reasoning for A and names the enforcement problem). On 2026-11-11 it is 74 tools and 38,286 characters, about 9,600 tokens (`SageFs.Tests/RatchetBudgets.fs:462`), after the diet; the thresholds in "Measure first" must be redone against that figure. That document also sets the guard for any list change: additive first, every tool stays callable by name, the experiment is the gate.
 - The read tools already have typed results before they are formatted. `McpCompletions.membersOf ctx sid name` returns `CompletionAnswer<CompletionEntry>` and `McpMembersRoute.listMembers` only formats it (`SageFs/McpMembersRoute.fs`, `McpListMembers.formatListMembers`). `McpReferencesRoute.referencesOf` returns `ReferenceReply` and `McpReferencesPage.build` renders it. The cohort frame is `CohortFrame<MemberId>` from `Handle.ReadFrame()`, projected by `Cohort.project`.
 - Role gating is per tool: `Capability.ToolClass.toolsOf` lists each tool's class, `Capability.admitTool grant toolName` decides, and `visibleTools` filters `tools/list`. `list_members` and `list_references` are `SessionRead`; `get_cohort_status` is `CohortRead`; analysis tools are `CodeAnalysis`. `Eval` (`send_fsharp_code`, `cancel_eval`, `manage_scratch_pad`) is a separate class held by the Implementer preset only. `Capability.fs`'s header says any grant that includes `Eval` "can run arbitrary code as the daemon's OS user", so the narrow presets are the ones that mean something against a hostile agent.
 - The FSI host is deliberately small. `docs/how-isolation-works.md` and the host tests (`FsiHostBuildTests.fs`, `FsiSessionContractTests.fs`) say the host closure contains nothing SageFs-owned and loads no SageFs assembly. `AGENTS.md` says never `#load` a file from a project the session already loaded, and `#load` only a pure file. So a prelude is generated source or a separately named assembly a user session references, not something added to the host's closure.
@@ -123,7 +184,7 @@ Steps 2 and 4 are file-disjoint and can run in parallel once the JSON contract t
 
 - The session becomes a second API surface. Every function needs a tool-parity test or it becomes a bypass of the per-tool gate, which is the failure the research note warns about.
 - A generated prelude is loaded as source into the user's session. It must not shadow user names; put everything under one module and test that a user binding named `Sage` still works or is refused with a reason.
-- Depends on the tool-list experiment harness (not built). `a-token-per-subagent-in-claude-code` and `each-agent-its-own-member` decide which caller a handle names when sub-agents share a connection. `plan-a-cohort-as-code` supplies the coverage coupling `Coupled` needs.
+- Depends on the tool-list experiment harness (not built). `a-token-per-subagent-in-claude-code` decides which caller a handle names when sub-agents share a connection (an earlier draft also named `each-agent-its-own-member`, which is not a roadmap item). `plan-a-cohort-as-code` supplies the coverage coupling `Coupled` needs.
 
 ## Size
 

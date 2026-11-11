@@ -16,6 +16,67 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read on that commit; the sections under this one are the original plan, corrected where it had gone stale.
+
+### 1. Outcome
+
+You write a cohort plan as an F# value in a SageFs session. `CohortPlan.tryBuild` refuses it, naming both members and both canonical scopes, when two claims overlap, when a claim escapes the repository, when a member name repeats, or when a member's grant is wider than the conductor's. An accepted plan becomes the ordered list of `mint_member` and `acquire_claim` calls an orchestrator makes, and `CohortPlan.rehearse` proves the real `Cohort.decide` accepts each one. Today the orchestrator writes that list in a brief by hand (`demo-actors-plan.md`, untracked at the repo root) and learns about an overlap when the second agent's `acquire_claim` answers `ClaimConflict`.
+
+Outcome gate. `CohortPlanTests` (default suite, pure) covers the matrix in "What done looks like" against `tryBuild` and `rehearse`. `CohortPlanOutcomeTests` (`--integration-host`) applies an accepted plan to a real daemon under `SAGEFS_IDENTITY_POLICY=TokenRequired` and reads `get_cohort_status`: the held claims equal the plan's claims and nothing else. Linux is the whole proven matrix. The pure half has no platform. The daemon half has nothing platform-specific in it and no run on Windows or macOS.
+
+### 2. Where the code is today
+
+- `ClaimScope` is `File | Project` (`SageFs.Core/Cohort.fs:97`); `PathRefusal` is `Absolute | EscapesRoot` (`:101`). `ClaimPath.tryCanonical` on a string is `:121`, `ClaimScope.tryCanonical` is `:155`, `ClaimScope.overlaps` is `:175`. `Purpose.tryCreate` bounds a purpose to one line of 200 characters (`:193`).
+- `Cohort.decide clock entropy state command` is `Cohort.fs:2119`. `CohortState.forScope` is `:562`. `AcquireClaim of who * scope * purpose * cohort` is a case of `CohortCommand` (`:644`, 25 cases today). Empty entropy is accepted (module doc, `:69`).
+- Grants (`SageFs.Core/Capability.fs`): `Grant = { Preset; Scope: ScopePrefix; Route; NotAfter }` (`:619`), `Widening` (`:630`), `Grant.isNarrowerOrEqual` (`:649`), `Grant.wideningsOf requested minter` (`:656`), `RolePreset` (`:213`), `RolePreset.toolClasses` (`:263`), `ScopePrefix` with a private constructor and `tryParse`, `isWithin`, `covers` (`:46-95`), `RouteBinding.ofRequest sessionId workingDirectory` (`:362`), `Capability.admitClaim grant scope` (`:898`). `ScopePrefix.commonOf` does not exist; step 2 adds it.
+- Token transport: `CapabilityTransport.headerName`, `metaKey`, `bridgeEnvVar`, `policyEnvVar` (`Capability.fs:1004-1018`). `SageFs.Tests/CapabilityHttpIntegrationTests.fs:35-59` connects with the SDK's `McpClient.CreateAsync` and calls tools with `_meta`; `CohortMcpToolsIntegrationTests.fs:185` has `withDaemon`.
+- Coverage input for `propose`: `SageFs/DaemonMode.fs:3027` builds `coveredFilesOf` from `InputHashCoverage.selectionFiles` (the plan said line 2975; it moved).
+- Nothing named `CohortPlan` exists in `SageFs*`, `tools` or `scripts`. `tools/sagefs-call.fsx` does not exist, tracked or untracked; the reference below is wrong and is left as history.
+- Compile order: `Capability.fs` is `SageFs.Core/SageFs.Core.fsproj:73`; the new slice goes after it. `CapabilityTests.fs` is `SageFs.Tests/SageFs.Tests.fsproj:1105`; `Program.fs` is `:1194` and every test file must come before it.
+- Tests that must stay green: `CapabilityTests.fs`, `ClaimPathTests.fs`, `CohortPropertyTests.fs`. This item does not touch `Cohort.fs`.
+
+### 3. Steps
+
+Each step: RED test committed red with the step number, then the smallest change, committed green.
+
+1. **Pure.** `SageFs.Tests/CohortPlanTests.fs`, list `"CohortPlan: overlap and escape"`: two members claiming `File "src/A.fs"` and `File "src/../src/A.fs"` give `ClaimsOverlap` naming both members and both canonical scopes; a `File` under another member's `Project` directory is refused; `../x.fs` is `ClaimEscapesRepo`; a repeated name is `DuplicateMember`; a plan with three mistakes returns three refusals. Add `<Compile Include="CohortPlanTests.fs" />` after line 1105 of `SageFs.Tests.fsproj`. Then `SageFs.Core/Features/CohortPlan.fs` (`PlanMember`, `PlanRefusal`, `CohortPlan` with a private constructor, `tryBuild` for overlap, escape and duplicates only), added to `SageFs.Core.fsproj` after line 73.
+2. **Pure, `Capability.fs`.** `ScopePrefix.commonOf : ClaimScope list -> Result<ScopePrefix, PathRefusal>` (longest common directory; a `Project` claim contributes its directory). `GrantWiderThanConductor` in `tryBuild` through `Grant.wideningsOf`. RED: an `Implementer` member under an `Analysis` conductor is refused with `Widening.Role`; a member whose claims span `src/` and `tests/` gets `ScopePrefix.repoRoot`. Land this step alone; `Capability.fs` is shared.
+3. **Pure.** `rehearse` and the two properties (builder accepts implies `decide` accepts; `decide` answers `ClaimConflict` implies builder refuses) with a generator over about six path names so collisions are common. Fixed `Clock`, `Entropy = [||]`.
+4. **Pure.** `calls : CohortPlan -> PlanCall list`, and the fold test: `calls` through `decide` from `CohortState.forScope` ends with held claims equal to the plan's. A paragraph in `docs/agents.md` section 6 (`:282`).
+5. **Simulation, pure.** `SageFs.Simulation/CohortPlanSim.fs` (after `CohortVacancySpec.fs`, `SageFs.Simulation.fsproj:66`) and `SageFs.Tests/CohortPlanSimTests.fs`: random plans applied with `FaultInjection.drop` and `FaultInjection.duplicate` (`SageFs.Simulation/FaultInjection.fs:61,71`) over the call list. Invariants: the cohort never holds a claim the plan did not declare; never two overlapping `Held` claims. Twin: a builder that skips `tryCanonical`. The retried-`AcquireClaim` finding stands: the repeat answers `ClaimConflict(scope, holder = self)` with no claim id, so an applier reads status before calling that a failure.
+6. **Edge.** `SageFs/CohortPlanApply.fs` over `McpClient` (pattern: `CapabilityHttpIntegrationTests.fs:35-59`): join as conductor, `mint_member` per member, `acquire_claim` per claim with that member's token in `_meta["sagefs/memberToken"]`. `CohortPlanOutcomeTests.fs` registered with `Integration.hostList` (`SageFs.Tests/TestInfrastructure.fs:482`), daemon from `withDaemon`, `SAGEFS_IDENTITY_POLICY=TokenRequired` in the child's environment through `SpawnEnvironment.apply`.
+7. `DECISION:` build `propose`? Run "Measure first" first. Options: (a) build it over `coveredFilesOf`-shaped input, (b) stop at the builder. Recommendation: expect (b); `SageFs.Tests` has hub files (`TestInfrastructure.fs`) that most tests touch, so coverage will not separate work there.
+
+### 4. How to check it
+
+- REPL first: `create_project_session` on `SageFs.Core`, `send_fsharp_code` each test body against `SageFs.Features.CohortPlan` before writing it, `check_fsharp_code` on the new file. Never `#load` `CohortPlan.fs` into a session that has Core loaded.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --filter-test-list "CohortPlan"`. The token is in the list name, so `--filter-test-case` would match nothing and still exit 0.
+- Acceptance: the unfiltered `--summary` run names `CohortPlanTests`; for step 6, `--integration-host --summary --filter-test-list "CohortPlanOutcome"` as the loop and the unfiltered `--integration-host` tier as the gate.
+
+### 5. Traps in this repo
+
+- SAGE-005. `tryBuild conductor members` is fine. A helper such as `overlapOf (a: string) (b: string)` is a new finding, and `RatchetBudgets.analyzerFindings` (`SageFs.Tests/RatchetBudgets.fs:431`) holds `SageFs.Core/SAGE-005` at exactly 179. Pass `PlanMember` values, not two names.
+- No new `CohortCommand` case belongs in this item, so no ledger fixture and no deterministic history are needed. If you find you need one, stop: the whole point is that `decide` already accepts what the builder emits.
+- Step 6 starts a daemon: `SpawnEnvironment.apply` on the `ProcessStartInfo`. A ratchet counts the spawns that skip it.
+- No wall-clock waits in step 6. A call returns when the ledger has the row (`Handle.Commit`, `SageFs.Core/Features/CohortOwner.fs:425`).
+- Commit `SageFs.Core.fsproj`, `SageFs.Tests.fsproj` and `SageFs.Simulation.fsproj` whole, from a clean tree.
+- No new NuGet package. `McpClient` is already referenced by the tests.
+
+### 6. Size and order
+
+Steps 1 to 4: two to three days for one person. Steps 5 and 6: two to three more. Step 2 lands alone. Step 5 can run beside 4. First commit: `test(cohort): RED two members claiming one file is refused as ClaimsOverlap (plan-a-cohort-as-code step 1)`, which adds `CohortPlanTests.fs` and its fsproj line and does not compile.
+
+### 7. Not now
+
+- `cohort { }` builder sugar: wait until a real plan reads badly as a pipeline.
+- Worktree creation from a plan: `tidy_workspace` territory.
+- `propose`: gated on the measurement.
+- `Contract` claims (`claim-an-interface`): `overlaps` takes the new case when it lands, and `PlanMember.Claims` carries it for free.
+- Re-applying a plan after a daemon restart: `tokens-survive-a-restart`.
+
 ## What done looks like
 
 You write a cohort plan as an F# value in a SageFs session. Building it fails, at the line that builds it, if two members' claims overlap, if a claim escapes the repository, if a member's token grant would be wider than the conductor's, or if the plan cannot be run through the real cohort reducer. The error names both members and both scopes. A valid plan renders as the exact list of cohort calls (mint, claim) an orchestrator makes, and after those calls `get_cohort_status` shows the claims the plan declared and nothing else. A second, later stage proposes a claim split from coverage data for you to edit; it ships only if the first measurement below says coverage can separate work at all.
@@ -28,8 +89,8 @@ The outcome gate is a matrix of plans {disjoint files, the same file twice, a fi
 - Claims are made by the caller's own identity (`AcquireClaim of who * scope * purpose * cohort`). The conductor cannot claim on behalf of a member. A member acts through its token, presented per call in `_meta["sagefs/memberToken"]` or per connection in `X-SageFs-Member-Token` (`Capability.CapabilityTransport`).
 - `mint_member` seats the member in the cohort (`docs/mcp-tools.md`, member tokens section). A `Grant` is `{ Preset; Scope: ScopePrefix; Route: RouteBinding; NotAfter }`; `Grant.isNarrowerOrEqual` and `Grant.wideningsOf` say whether a request is wider than its minter, and `Capability.admitClaim` says whether a claim fits a prefix. `RouteBinding.ofRequest` turns a session or checkout into a binding.
 - The hand-written plans this replaces live outside the tree: `demo-actors-plan.md` and the "file-disjoint background islands" briefs in `~/Work/SageFs` (untracked). The vision document sketches a `cohort { ... }` computation expression (section 6.1, untracked) and a later "auto-cohort planning" step.
-- Coverage data: `TestCoverageBitmaps`, `InstrumentationMap.merge` and `InputHashCoverage.selectionFiles` give the files a test covers; `DaemonMode.fs` near line 2975 builds `coveredFilesOf` from them and `Features.LiveTesting.AffectedTests.affected` selects tests for a diff. `CompileOrderInsight.fs` knows F# compile order. `coverage_intel` is the MCP tool over failing tests only.
-- Nothing builds a plan. `tools/sagefs-call.fsx` (untracked in the main checkout) is a one-off caller, and house rules say logic goes in projects with tests and scripts stay thin glue.
+- Coverage data: `TestCoverageBitmaps`, `InstrumentationMap.merge` and `InputHashCoverage.selectionFiles` give the files a test covers; `DaemonMode.fs` near line 3027 (2026-11-11; it was 2975) builds `coveredFilesOf` from them and `Features.LiveTesting.AffectedTests.affected` selects tests for a diff. `CompileOrderInsight.fs` knows F# compile order. `coverage_intel` is the MCP tool over failing tests only.
+- Nothing builds a plan. (The plan once named `tools/sagefs-call.fsx` as a one-off caller; on 2026-11-11 no such file exists, tracked or untracked.) House rules say logic goes in projects with tests and scripts stay thin glue.
 
 ## Design
 

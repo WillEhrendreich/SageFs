@@ -16,6 +16,72 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read on that commit; the sections under this one are the original plan, corrected where it had gone stale.
+
+### 1. Outcome
+
+An agent on a second machine presents a member token to a second, typed listener on the host, joins the cohort, claims files and lands pushed commits, with the same refusals and the same ledger a local member gets. A reply lost on the wire never leaves it unsure whether its claim exists: a retry with the same command id returns the first answer. The listener has no eval route. Today the daemon binds loopback only (`LoopbackHost`, `SageFs.Core/SageFsConfig.fs:154`), `HttpOriginGuard.decide` rejects a foreign `Host` (`SageFs.Core/HttpOriginGuard.fs:232`), and nothing carries cohort traffic off the machine.
+
+Outcome gate, two parts. Simulation: `CohortRemoteSim` ends in a state a fault-free run could have produced, and every client knows every command's outcome. Real: `CohortRemoteOutcomeTests` (`--integration-host`), two OS processes on loopback, the listener on a second port, the matrix in "What done looks like". Linux only. Across two real machines over SSH or a tailnet: unproven, and step 0 is that experiment, by hand.
+
+### 2. Where the code is today
+
+- Pure core: `Cohort.decide` (`SageFs.Core/Cohort.fs:2119`). `CohortOwner.handle` stamps `clock ()` and `entropy ()` once (`SageFs.Core/Features/CohortOwner.fs:359-360`) and appends at `:369`; `OwnerState = { Cohort; NextSeq }` (`:155`, internal). `Handle.Commit` `:425`, `Post` `:436`, `ReadFrame` `:440`, `ReadCohortState` `:448`, `Events` `:459`, `Flush` `:463`.
+- No command carries an id. `RequestLanding` (`CohortCommand`, `Cohort.fs:644`) mints a `LandingId` from entropy on every arrival; a repeated `AcquireClaim` answers `ClaimConflict(scope, holder = self)` (`CohortError`, `:853`). There is no dedupe anywhere.
+- Identity: `MemberId` (`SageFs.Core/MemberTable.fs:13`); `ConnectionIdentity.resolve capability clientKey transportHandle agentName` (`:161`) picks token, then client key, then session id, then name. Transport names `Capability.fs:1004-1018`; `admitTool` `:889`, `admitClaim` `:898`, `visibleTools` `:907`, `IdentityPolicy` `:913`.
+- Scope from the host's disk: `Scope.repositoryRootOf` (`SageFs.Core/CohortScope.fs:95`), `ofWorkingDirectory` (`:141`); a path that does not exist on the host becomes `Named`.
+- Git: `rebaseCommitsOntoSettling` runs `checkout --force --detach <memberTip>` in the host repo (`SageFs/CohortGit.fs:407-412`); `rebaseCommitsOnto` `:483`. `McpCohortTools.requestLanding` splits `commits` on `,` and commits `RequestLanding` with no existence check (`SageFs/McpCohortTools.fs:341-352`).
+- Matrix: `frameOf` reads `getSessionTestOutcomes sid` per member with a session (`CohortOwner.fs:187-197`).
+- Integration binding is one ref: `cohortIntegrationRef` (`SageFs/McpCohortIntegration.fs:41`).
+- Event delivery: `Handle.Events` is in-process (`CohortOwner.fs:459`). SSE: `SseReplay.CatchUp = Replay | Resync` (`SageFs.Core/SseReplay.fs:95`).
+- Durations: `cohortLeaseWindow` 30 minutes (`SageFs.Core/Timeouts.fs:500`), `cohortSettledRetention` `:505`, `ownerReply` `:452`.
+- Wire: `EndpointContracts.apiVersion = 4` (`SageFs.Core/EndpointContracts.fs:38`). The bridge posts to `http://localhost:<port>/` (`SageFs/McpStdioBridge.fs:502,544`) and sends `SAGEFS_MEMBER_TOKEN` as the header (`Capability.fs:1010`).
+- Simulation scaffolding: `FaultInjection.reorderWithin`, `drop`, `duplicate`, `withClockSkew` (`SageFs.Simulation/FaultInjection.fs:39,61,71,93`); `CohortLandingGenerators.fromSeed` (`SageFs.Simulation/CohortLandingGenerators.fs:20`); the `Intent` generators in `SageFs.Tests/CohortPropertyTests.fs:95-131`.
+- Nothing named `CohortRemote`, `Envelope` or `CommandId` exists.
+
+### 3. Steps
+
+0. **Measure, no code.** "Measure first" 1 and 3, by hand, and write what broke into "Surprises". Then run step 3's simulation with no dedupe and read which command classes break under retry ("Measure first" 2).
+1. **Pure.** `SageFs.Core/Features/CohortRemote.fs` after `CohortOwner.fs` (`SageFs.Core/SageFs.Core.fsproj:350`): `CommandId`, `Envelope<'m>`, `Outcome<'m>`, `Dedupe` as a pure map with `remember`, `recall`, `trimOlderThan`, and `applyEnvelope decide dedupe state envelope`. RED in `SageFs.Tests/CohortRemoteTests.fs` (after `CohortClearClaimTests.fs`, `SageFs.Tests/SageFs.Tests.fsproj:1172`): a duplicated `AcquireClaim` envelope returns the first outcome, claim id and fence included, and the folded ledger has one `ClaimAcquired`; a duplicated `RequestLanding` queues one landing.
+2. **Edge, `CohortOwner.fs`.** `OwnerState` gains `Dedupe`; a second mailbox case `ApplyIdempotent(id, cmd, reply)` beside `Apply`, so no existing caller changes; `handle` consults the map before `decide`. Not ledgered. RED: through a real `Handle`, two commits with one id give one ledger row.
+3. **Simulation.** `SageFs.Simulation/CohortRemoteSim.fs` plus one reply-drop combinator in `FaultInjection.fs`; `SageFs.Tests/CohortRemoteSimTests.fs`. Invariants as in "Tests" below. Twin: an owner with no dedupe, caught by one-landing-per-id.
+4. **Edge, owner.** A resume cursor, `Handle.LedgerFrom seq`, over the ledger port. RED: after N commits, `LedgerFrom k` returns rows k to N.
+5. **Edge, listener.** `SageFs/CohortRemoteListener.fs` before `McpServer.fs` (`SageFs/SageFs.fsproj:247`): a second Kestrel binding on a configured interface address (`RemoteBindHost`, a typed value that cannot be `0.0.0.0`), routes `POST /cohort/command`, `GET /cohort/frame`, `GET /cohort/events?fromSeq=`, token required, scope from the token's `Route`, no eval route. RED tests 3 to 5 of "Tests": the route table holds no eval route; an envelope whose `Member` is not the token's member is refused before `decide`; a sha the host lacks is refused with that sha. Wire commit: the routes in `EndpointContracts.fs`.
+6. **Edge, landing.** `git cat-file -e <sha>` per commit before `RequestLanding` is committed (`McpCohortTools.fs:352`), as a `CohortGit` function with a typed refusal.
+7. **Outcome gate.** `CohortRemoteOutcomeTests.fs` with `Integration.hostList` (`SageFs.Tests/TestInfrastructure.fs:482`), the second process via `Process.Start` with `SpawnEnvironment.apply`, every wait on a returned seq through `LedgerFrom`. Then docs and a security note beside `HttpOriginGuard.fs`.
+
+`DECISION:` dedupe in `OwnerState` only (forgotten on restart) or ledgered. Recommendation: `OwnerState`; see trap 1. `DECISION:` cohort verbs on the second listener as MCP (tool list filtered by `Capability.visibleTools`) or a small HTTP surface. Recommendation: MCP, one vocabulary. `DECISION:` run step 0 first. Recommendation: yes; an afternoon, and it says whether anyone wants the rest.
+
+### 4. How to check it
+
+- REPL first: a session on `SageFs.Core`; the envelope fold of step 1 is pure and evals in seconds. After `CohortOwner.fs` edits, `hard_reset_fsi_session rebuild=true`.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Inner loop: `--filter-test-list "CohortRemote"`.
+- Acceptance: the unfiltered `--summary` run (steps 1 to 4); the unfiltered `--integration-host` tier (steps 5 to 7).
+
+### 5. Traps in this repo
+
+- No new `CohortCommand` case is planned. If `CommandId` becomes a ledgered field instead, every fixture under `SageFs.Tests/cohorts/` changes shape and `fromJsonl` must still read the old rows; that is the price of the second option in DECISION 1.
+- SAGE-005: `applyEnvelope` takes one `CommandId` and one `'m`; `LedgerFrom (seq: int64<ledgerSeq>)` takes one measured integer. Do not write `(host: string) (port: string)`; parse `RemoteBindHost` first.
+- Timing: the simulation is seeded; the outcome gate waits on seq, never a stopwatch.
+- Wire: `EndpointContracts.fs` and `McpCohortTools.fs` are on the `Plugin:` trailer list in `AGENTS.md`. The plugin lands first if anything it reads changes; otherwise `Plugin: n/a` with the reason.
+- The second listener widens the surface of a process that evaluates code. A review by someone other than the author before it ships.
+- Child processes: `SpawnEnvironment.apply`. Project files whole, from a clean tree.
+
+### 6. Size and order
+
+L. Step 0 an afternoon; 1 to 4 a week; 5 to 7 another week plus the review. Order: 1, then 2, then 4 (one file); 3 beside 2; 5 after 1; 6 any time. First commit: `test(cohort): RED a duplicated AcquireClaim envelope returns the first outcome (a-cohort-across-machines step 1)`.
+
+### 7. Not now
+
+- Conductor verbs (`mint_member`, `set_integration_ref`) over the network.
+- Token persistence (`tokens-survive-a-restart`).
+- The phone viewer (`watch-your-agents-from-your-phone`) should share `RemoteBindHost`; build the type here, the viewer there.
+- A remote test matrix and trunk follow on a remote machine.
+- A per-scope integration binding for two hosted cohorts.
+
 ## What done looks like
 
 An agent on a second machine joins a cohort hosted on the first, claims files, and lands commits, with the same refusals and the same ledger a local member gets. It reaches the host over an authenticated connection that can call cohort verbs and cannot evaluate F#. The host never trusts the remote machine's clock, paths or process ids. A reply lost on the wire never leaves the remote agent unsure whether its claim exists.
@@ -36,7 +102,7 @@ What does not, with the file that shows it:
 
 | Not yet transparent | Where | What a remote member needs |
 |:--|:--|:--|
-| The daemon only binds loopback. `LoopbackHost` has no other case, because eval is remote code execution. `HttpOriginGuard.decide` rejects a non-loopback `Host`. | `SageFs.Core/SageFsConfig.fs` near line 139, `HttpOriginGuard.fs` line 231 | A second listener, typed, serving only cohort verbs and refusing eval at the type level. Roadmap item `watch-your-agents-from-your-phone` plans the Tailscale-bound read-only version of this. |
+| The daemon only binds loopback. `LoopbackHost` has no other case, because eval is remote code execution. `HttpOriginGuard.decide` rejects a non-loopback `Host`. | `SageFs.Core/SageFsConfig.fs:154`, `HttpOriginGuard.fs:232` (2026-11-11; the plan first said 139 and 231) | A second listener, typed, serving only cohort verbs and refusing eval at the type level. Roadmap item `watch-your-agents-from-your-phone` plans the Tailscale-bound read-only version of this. |
 | A command carries no id. `RequestLanding` mints a new `LandingId` from fresh entropy on every arrival, `AcquireClaim` that already succeeded answers `ClaimConflict(scope, holder = self)` with no claim id or fence, `ReleaseClaim` twice answers `NotClaimHolder`. | `Cohort.fs` `decide` arms | An idempotency key per command and a recorded outcome, so a retry returns the first answer. |
 | The cohort scope is an absolute path on the host: `Repository of rootPath`, derived by walking the host's disk (`Scope.repositoryRootOf`). A remote path that does not exist there becomes a different `Named` cohort. | `SageFs.Core/CohortScope.fs` | Scope chosen by the token's route, never by a caller-supplied directory. The docs already say a token call must pass `working_directory` inside its route; a remote cannot know that path. |
 | Commits are read from a shared object store: `rebaseCommitsOnto` runs `git checkout --force --detach <memberTip>` in the host repo. | `SageFs/CohortGit.fs` near line 384 | The remote pushes to a ref on the host before `request_landing`, and the daemon checks the commits exist before it queues. |

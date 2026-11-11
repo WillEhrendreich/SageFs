@@ -16,6 +16,69 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read on that commit; the sections under this one are the original plan, corrected where it had gone stale.
+
+### 1. Outcome
+
+An agent in Codex CLI, Copilot CLI, Cursor or OpenCode that types `dotnet build`, `test`, `run` or `fsi` in an F# repo with a Ready session is stopped with the text Claude Code's agents get, with the same hatch (`SAGEFS_FINAL_GATE=1`), allowlist (`.SageFs/repl-guard.json`) and advise mode (`SAGEFS_REPL_GUARD=advise`), and `sagefs hooks install --host <h>` writes that host's hook config. Today only Claude Code has the hook (`tools/agent-hooks/`); every other host has `AGENTS.md` prose.
+
+Outcome gate. `HostAdapterTests` (default suite) pins the Claude output byte for byte and parses one recorded stdin fixture per host. The real-host run is an on-demand dedicated suite (trap 1) that drives each installed host without a terminal and reads the hook's own log after the process exits. Linux only, and each host's hook shape is a fact only after step 1 records it. All five candidate hosts are installed on this machine today as mise shims: `codex`, `copilot`, `cursor-agent`, `opencode`, `claude`, so step 1 can run now.
+
+### 2. Where the code is today
+
+- `tools/agent-hooks/SageFs.AgentHooks.fsproj:25-28` compiles `HatchUse.fs` (linked from Core), `ReplGuard.fs` (572 lines), `Verdict.fs` (146), `Hook.fs` (129). `publish.fsx` publishes it single-file ReadyToRun as `sagefs-repl-guard` in that folder; `settings.json` points at that path (README). `SageFs.Tests/SageFs.Tests.fsproj:1082-1083` links `ReplGuard.fs` and `Verdict.fs`, so the tests compile the real code.
+- The Claude seams, all in `tools/agent-hooks/Verdict.fs`: `parseInput` reads `tool_input.command` and `cwd` (`:53`); `denyJson` writes `hookSpecificOutput.permissionDecision = "deny"` (`:103`); `adviceJson` writes `additionalContext` (`:111`); `verdict world input` (`:118`) is the whole run; `World` (`:16-28`) injects env, repo config, project scan, health, lease and the hatch report.
+- Constants in `tools/agent-hooks/ReplGuard.fs`: `FinalGateVariable = "SAGEFS_FINAL_GATE"` (`:141`), `GuardMode.Variable = "SAGEFS_REPL_GUARD"` (`:155`), `ConfigDirectory = ".SageFs"` (`:184`), `ConfigFileName = "repl-guard.json"` (`:187`).
+- IO in `tools/agent-hooks/Hook.fs`: `GET /health` (`:49-58`), `POST /api/lease/request` (`:77`), `POST /api/hatch/record` (`:102`), port 37749 or `SAGEFS_MCP_PORT` (`:17,43`). The daemon side is `SageFs/McpServer.fs:3731` and `HatchUse.tryParse` (`SageFs.Core/HatchUse.fs:80`). `HatchUse.all` is 2 x 3 = 6 combinations (`:67`).
+- Tests: `SageFs.Tests/ReplGuardTests.fs` (the decision) and `ReplGuardConfigTests.fs`, which drives `Verdict.verdict` with the stdin JSON, a real temp checkout and a fake daemon (`:8,85`). `ReleaseRulesTests.fs:478` asserts the old `sagefs-repl-guard.fsx` is gone.
+- Docs: `docs/agents.md` section 4 (`:239-272`) and `tools/agent-hooks/README.md`. `scripts/install-hooks.fsx` installs the git pre-push hook, not this one.
+- Neither `sagefs.nvim` (`grep -rn hatch ~/Work/sagefs.nvim/lua`: nothing) nor `sagefs-vscode/src` (one unrelated comment, `ProjectPickPure.fs:70`) reads the hatch count, so a `Host` dimension on it is `Plugin: n/a`.
+- Tiers: `Integration.dedicatedEntryPoints` (`SageFs.Tests/TestInfrastructure.fs:669`), `isBareFlagEntryPoint` (`:681`), `dedicatedCase entryPoint name body` (`:529`). `SageFs.Tests/TrustSignalTests.fs:94-101` fails the default suite when a bare-flag dedicated entry point is not invoked by `ci-pipeline.fsx`. An on-demand suite has a payload with a space in it (the VS Code example in the comment at `TestInfrastructure.fs:674-680`) and runs only under `--all`.
+- Fixtures: `SageFs.Tests/fixtures/` exists; `tests/fixtures/` (named below) does not. No host payload has been recorded; the table below is from summarised docs.
+- No `HostAdapter` exists.
+
+### 3. Steps
+
+1. **Capture, no product code.** `scripts/capture-host-hooks.fsx`, thin glue: for each host, write a logging-only hook config into a throwaway HOME, run the host once with a prompt that runs `echo` through its shell tool, copy the raw stdin JSON to `SageFs.Tests/fixtures/hosts/<host>/<case>.json`. Then by hand, per host: does `deny` block, does the agent see the reason, which cwd and env the hook gets, hook latency over ten runs, whether the host wants the hook trusted first. Replace the table below with what you saw. Commit the fixtures: `test(hooks): recorded hook payloads from codex, copilot, cursor-agent and opencode`.
+2. **Pure, a refactor.** RED in `SageFs.Tests/HostAdapterTests.fs` (after `ReplGuardConfigTests.fs`, `SageFs.Tests/SageFs.Tests.fsproj:1085`): golden strings of today's `denyJson "r"` and `adviceJson "r"`, captured before any edit; `HostAdapter.render ClaudeCode (DenyWith "r")` must equal them. Then `tools/agent-hooks/HostAdapter.fs` between `ReplGuard.fs` and `Verdict.fs` in both project files: `Host`, `HostCall`, `HostCaller`, `HostReply`, `parse`, `render`, Claude branch only; `Verdict.decide : World -> HostCall -> HostReply`; `verdict` becomes parse, decide, render. Green on its own; `ReplGuardConfigTests` is untouched.
+3. **Pure.** Codex and Copilot branches from the step 1 fixtures; the parse round-trip property for the Claude-shaped hosts; "every `Decision` maps to one reply per host, valid JSON of the recorded accepted shape". A source-scan test with budget zero: `ReplGuard.fs` and `Verdict.fs` name no host.
+4. **Pure plus a template.** The Cursor branch; the OpenCode plugin as a template string (`HostAdapter.openCodePlugin`) that spawns `sagefs-repl-guard --host opencode`. `Hook.fs` parses `--host` into the closed `Host` DU; an unknown value fails open with one stderr line.
+5. **Edge.** `sagefs hooks install --host <h> [--print]` in `SageFs/Program.fs` beside `hygiene` (`:168`): writes a file it did not create only after showing the diff, or prints with `--print`. Docs: `docs/agents.md` section 4, the README, `skills/sagefs/troubleshooting.md`.
+6. **Edge.** A `Host` dimension on `HatchUse` (closed DU; `all` becomes 6 times the hosts; a third wire token with Claude as the default for an old hook). `Plugin: n/a status field no editor reads`.
+7. **On-demand suite.** `SageFs.Tests/HostJourneyTests.fs` registered with `Integration.dedicatedCase "--all (on demand: codex, copilot, cursor-agent, opencode and claude on PATH, each logged in)"`: one case per host per matrix row, reading `SAGEFS_HOOK_LOG` lines after the host exits. A missing host binary fails its case with an install hint.
+
+`DECISION:` which hosts first. Recommendation: Codex and Copilot (closest shape), then Cursor, OpenCode last. `DECISION:` the real-host run as an on-demand `--all` suite, or a bare-flag tier that `ci-pipeline.fsx` must invoke and that makes every gate need five logged-in agent CLIs. Recommendation: on demand. `DECISION:` the PATH shim. Recommendation: not until step 1's nested-call count says so. `DECISION:` `Host` on the hatch count. Recommendation: yes.
+
+### 4. How to check it
+
+- REPL first: `create_project_session` on `SageFs.Tests` loads `ReplGuard.fs` and `Verdict.fs` through the link; eval `HostAdapter.render` against the golden strings there before writing the file.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`. After any hook change, `dotnet fsi tools/agent-hooks/publish.fsx`, because the published binary is what Claude Code runs.
+- Inner loop: `--filter-test-list "HostAdapter"`; the guard's own lists are named in `ReplGuardTests.fs` and `ReplGuardConfigTests.fs` (read them first; `--filter-test-case` on a list-name token matches nothing and exits 0).
+- Acceptance: the unfiltered `--summary` run. The on-demand run by hand before a ship: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --all --filter-test-list "HostJourney"` as the loop, `--all` whole as the gate.
+
+### 5. Traps in this repo
+
+- A bare-flag dedicated entry point not invoked by `ci-pipeline.fsx` turns `TrustSignalTests` red (`:94-101`), and the host run needs installed, logged-in CLIs no gate machine should need. Register it on demand (payload with a space) and say so in the plan.
+- Fail-open on a parse problem hides a changed host format. Count `ParseProblem`s into the hatch report so `get_daemon_status` shows them.
+- SAGE-005: `parse (host: Host) (stdin: string)` is fine; `render (reason: string) (context: string)` is not. The hook project is outside the analyzer's roots (`SageFs.Core`, `SageFs`, `SageFs.Host`), but `HatchUse.fs` is in Core, so step 6 counts.
+- The hook must start fast: nothing in `HostAdapter.fs` may reference Core or spawn a process (README: about 15 ms against 1.3 s for `dotnet fsi`).
+- A fixture's recorded accepted output is the host's schema; a test reads it, it does not restate it.
+- Child processes in steps 1 and 7: `SpawnEnvironment.apply`.
+- Commit `tools/agent-hooks/SageFs.AgentHooks.fsproj` and `SageFs.Tests.fsproj` whole, from a clean tree.
+
+### 6. Size and order
+
+Step 1 one day. Step 2 half a day. Steps 3 to 5 three to four days. Steps 6 and 7 two days. Step 1 before everything. Steps 3 and 4 can split by host if each host is its own file and one match in `HostAdapter.fs` is merged by hand. First product commit: `test(hooks): RED the Claude adapter renders byte-for-byte what denyJson and adviceJson print today (repl-guard-for-other-agents step 2)`.
+
+### 7. Not now
+
+- The PATH shim.
+- Confirmation gates and scope checks in other hosts (`confirmation-gates-in-every-agent-host`, `check-the-scope-before-the-write`): they reuse step 1's fixtures and step 2's adapter, so they wait for step 2.
+- Aider, Zed, Cline, Gemini CLI, Windsurf.
+- The operator credential on the hook's two HTTP calls (`a-token-for-every-daemon-call`).
+
 ## What done looks like
 
 In a host other than Claude Code (the candidates are Codex CLI, GitHub Copilot CLI, Cursor, OpenCode), an agent that types `dotnet build`, `test`, `run` or `fsi` in an F# repo while a SageFs session is Ready is stopped with the same message Claude Code's agents get, and the same escape hatch (`SAGEFS_FINAL_GATE=1`), allowlist (`.SageFs/repl-guard.json`) and advise mode (`SAGEFS_REPL_GUARD=advise`) apply. Nothing about the decision is copied per host: one pure decision, one thin adapter per host. The outcome gate runs each host for real over the matrix: host by command class (slow verb with a Ready session, same with no session, declared final gate, Release build, pack, non-F# directory, daemon down, Faulted session) and asserts allowed or blocked and that the text reaches the agent. A host that cannot be run on the machine fails the tier with an instruction to install it; it does not pass silently.
@@ -84,18 +147,18 @@ Wire and client impact: none on the daemon. The hook's two HTTP calls (`/api/lea
 RED first.
 
 1. `SageFs.Tests/HostAdapterTests.fs` (new): `WHY - the Claude adapter renders byte-for-byte what the hook printed before the split`. Golden strings captured from the current `denyJson` and `adviceJson` before any edit. Fails to compile today.
-2. Fixtures from real runs: one recorded stdin JSON per host per case (`tests/fixtures/hosts/<host>/<case>.json`), captured by the capture step (Steps, 1). `WHY - each host's recorded shell call parses to the command and directory the agent typed` for all hosts. Property over the Claude and Copilot adapters: for any command string and cwd, `parse (render-input command cwd)` round-trips.
+2. Fixtures from real runs: one recorded stdin JSON per host per case (`SageFs.Tests/fixtures/hosts/<host>/<case>.json`; `SageFs.Tests/fixtures/` is the directory that exists), captured by the capture step (Steps, 1). `WHY - each host's recorded shell call parses to the command and directory the agent typed` for all hosts. Property over the Claude and Copilot adapters: for any command string and cwd, `parse (render-input command cwd)` round-trips.
 3. `WHY - every Decision maps to exactly one reply per host and each reply is valid JSON of that host's shape`. The host's output schema is read from the fixture's recorded accepted output (the real run proves the host accepted it).
 4. `WHY - a Deny reply for Codex and Copilot is also exit code 2 or carries a reason`: the documented block forms.
 5. The decision tests in `ReplGuardTests.fs` stay as they are and run against `Verdict.decide`; a test asserts the repl-guard decision code never mentions a host name (a source scan, budget zero), so adapters stay the only host-aware code.
 6. Simulation: none new. The decision already has seeded coverage in `ReplGuardTests`; the adapters are pure total functions covered by the properties above. If the shim is built, it needs a sim of the nested-call case (`ship.fsx` running `dotnet build` with and without the hatch variable) with a twin that forgets to read the variable.
-7. Outcome gate, new local tier `--integration-hosts`: for each host installed on the machine, a scripted non-interactive run (`codex exec`, `copilot -p`, `cursor-agent -p`, `opencode run`, `claude -p`) with a prompt that asks the agent to run `dotnet build` in a throwaway F# repo with a test daemon and a Ready session. Pass criteria are read from files after the process exits: the hook's own log line (one JSON line per verdict, written by the hook when `SAGEFS_HOOK_LOG` names a file) and the daemon's `hatch` counts. The matrix rows above are separate prompts. A missing host binary fails the tier with an install hint. This tier is local-first (run on the desktop before a ship; CI only checks that the fixtures and adapters agree), consistent with how the demo recordings work.
+7. Outcome gate, an on-demand dedicated suite (a bare-flag tier such as `--integration-hosts` would have to be invoked by `ci-pipeline.fsx` or `TrustSignalTests` goes red; see the work order's trap 1): for each host installed on the machine, a scripted non-interactive run (`codex exec`, `copilot -p`, `cursor-agent -p`, `opencode run`, `claude -p`) with a prompt that asks the agent to run `dotnet build` in a throwaway F# repo with a test daemon and a Ready session. Pass criteria are read from files after the process exits: the hook's own log line (one JSON line per verdict, written by the hook when `SAGEFS_HOOK_LOG` names a file) and the daemon's `hatch` counts. The matrix rows above are separate prompts. A missing host binary fails the tier with an install hint. This tier is local-first (run on the desktop before a ship; CI only checks that the fixtures and adapters agree), consistent with how the demo recordings work.
 
 No wall-clock waits: each run ends when the host process exits; assertions read the log file.
 
 ## Steps
 
-1. Capture, no product code: a script `scripts/capture-host-hooks.fsx` that installs a logging-only hook into each host and records the raw stdin JSON and the effect of each output shape (does the host honour `deny`, does the agent see the reason). Output goes to `tests/fixtures/hosts/`. This also settles the "none of the four hosts has been run" caveat shared with `confirmation-gates-in-every-agent-host` and `check-the-scope-before-the-write`, and its fixtures serve all three.
+1. Capture, no product code: a script `scripts/capture-host-hooks.fsx` that installs a logging-only hook into each host and records the raw stdin JSON and the effect of each output shape (does the host honour `deny`, does the agent see the reason). Output goes to `SageFs.Tests/fixtures/hosts/`. This also settles the "none of the four hosts has been run" caveat shared with `confirmation-gates-in-every-agent-host` and `check-the-scope-before-the-write`, and its fixtures serve all three.
 2. Test 1 (golden for the Claude output), then the `HostAdapter.fs` split with the Claude branch only. Owns `tools/agent-hooks/Verdict.fs`, new `HostAdapter.fs`, the fsproj, `HostAdapterTests.fs`. Behaviour unchanged, so this commit is a refactor and green on its own.
 3. Codex and Copilot adapters (closest to Claude's shape). Owns the two branches and their fixtures. Parallel with 4 only if the owners add separate files (`HostAdapter.Codex.fs`, etc.) and a single match in `HostAdapter.fs` is edited by the orchestrator at merge.
 4. Cursor adapter, then the OpenCode plugin template and its runner.
