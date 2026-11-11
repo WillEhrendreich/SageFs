@@ -112,6 +112,21 @@ let tests =
         finally Directory.Delete(repo, true)
       }
 
+      // `set_integration_ref` hands a caller's string to `rev-parse`. `--show-toplevel` is an option to git, which printed the
+      // repository's path, and the cohort then treated that path as the integration sha.
+      testAsync "WHY - revParse refuses a reference git would read as an option, so a caller's ref cannot become a flag" {
+        let repo = Directory.CreateTempSubdirectory("cohortgit-option-").FullName
+        try
+          do! initRepo repo
+          do! writeAndCommit repo "a.txt" "hello" "initial"
+          for reference in [ "--show-toplevel"; "--output=/tmp/x"; "-h" ] do
+            let! result = CohortGit.revParse repo reference
+            match result with
+            | Error _ -> ()
+            | Ok answer -> failtestf "%s was answered as a revision: %s" reference answer
+        finally Directory.Delete(repo, true)
+      }
+
       testAsync "diffNames lists exactly the files changed between two commits" {
         let repo = Directory.CreateTempSubdirectory("cohortgit-diff-").FullName
         try
@@ -301,4 +316,22 @@ let tests =
           (try Directory.Delete(worktreeParent, true) with _ -> ())
       }
     ]
+  ]
+
+[<Tests>]
+let referenceArgumentTests =
+  testList "CohortGit.referenceArgument" [
+    testCase "WHY - a reference that starts with '-' is refused with a sentence, because git reads it as an option" <| fun _ ->
+      for reference in [ "--show-toplevel"; "--output=/tmp/x"; "-h"; "-" ] do
+        match CohortGit.referenceArgument reference with
+        | Error reason -> reason |> Expect.stringContains "names the reference" reference
+        | Ok _ -> failtestf "%s was accepted" reference
+
+    testCase "WHY - an ordinary branch, tag, sha or revision expression passes unchanged" <| fun _ ->
+      for reference in [ "HEAD"; "main"; "refs/heads/feature-x"; "v1.2.3"; "56fcabbc"; "HEAD~1"; "main^{commit}" ] do
+        CohortGit.referenceArgument reference |> Expect.equal reference (Ok reference)
+
+    testCase "WHY - an empty reference is refused, never handed to git as nothing" <| fun _ ->
+      for reference in [ ""; "   " ] do
+        CohortGit.referenceArgument reference |> Result.isError |> Expect.isTrue (sprintf "'%s' is refused" reference)
   ]

@@ -96,3 +96,40 @@ let frictionSanitizerPropertyTests =
         (result.Length, MaxTextLen)
         |> Expect.isLessThanOrEqual "sanitized output must be bounded"
   ]
+
+/// The Unix redaction was an allow list of top directories (`/home`, `/tmp`, `/var` ...), so `/work/acme/secret.fs`,
+/// `/data/...` and `/src/...` went out as written. Any absolute path is redacted now, whatever its first directory.
+[<Tests>]
+let anyAbsolutePathTests =
+  let segment = FsCheck.FSharp.Gen.choose (1, 999_999) |> FsCheck.FSharp.Gen.map (sprintf "seg%dx")
+  let segments = FsCheck.FSharp.Gen.listOfLength 3 segment
+  testList "Friction sanitizer, any absolute path" [
+    testProperty "WHY - no directory or file name of a Unix absolute path survives, whatever directory it starts in"
+    <| FsCheck.FSharp.Prop.forAll (FsCheck.FSharp.Arb.fromGen segments) (fun parts ->
+      let text = sprintf "read /%s failed" (String.concat "/" parts)
+      let result = sanitizeText text MaxTextLen
+      parts |> List.forall (fun part -> not (result.Contains part)))
+
+    testProperty "WHY - no directory or file name of a Windows drive path survives, on any drive letter"
+    <| FsCheck.FSharp.Prop.forAll (FsCheck.FSharp.Arb.fromGen (FsCheck.FSharp.Gen.zip (FsCheck.FSharp.Gen.elements [ 'A' .. 'Z' ]) segments)) (fun (drive, parts) ->
+      let text = sprintf @"read %c:\%s failed" drive (String.concat @"\" parts)
+      let result = sanitizeText text MaxTextLen
+      parts |> List.forall (fun part -> not (result.Contains part)))
+
+    testCase "WHY - text with a slash that is not a path keeps its words" <| fun _ ->
+      sanitizeText "read and/or write, 50 / 50, w/o a path" MaxTextLen
+      |> Expect.equal "nothing to redact" "read and/or write, 50 / 50, w/o a path"
+  ]
+
+/// `send_fsharp_code` logged every eval's source at Debug, keys and connection strings included.
+[<Tests>]
+let codeSummaryTests =
+  testList "Eval source in the log" [
+    testCase "WHY - the log line for an eval carries its length and a hash, never the source" <| fun _ ->
+      let code = "let conn = \"Server=db;Password=hunter2\";;"
+      let summary = codeSummary code
+      summary |> Expect.stringContains "the length" (sprintf "%d chars" code.Length)
+      summary.Contains "hunter2" |> Expect.isFalse "the secret is not in the line"
+      codeSummary (code + " ") |> Expect.notEqual "two submissions are told apart" summary
+      codeSummary null |> Expect.equal "no code is no characters" "0 chars"
+  ]

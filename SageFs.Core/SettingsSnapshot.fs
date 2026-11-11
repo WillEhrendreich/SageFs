@@ -174,11 +174,16 @@ type WorkerCommandLine =
 [<RequireQualifiedAccess>]
 module WorkerCommandLine =
 
-  /// The argument text for a worker of this session. An empty snapshot adds no argument.
-  let render (sessionId: string) (settings: SettingsSnapshot) : string =
+  /// The arguments for a worker of this session, one per element, for `ProcessStartInfo.ArgumentList`. An empty snapshot
+  /// adds no argument.
+  let parts (sessionId: string) (settings: SettingsSnapshot) : string list =
     match SettingsSnapshot.isEmpty settings with
-    | true -> sprintf "%s 0" sessionId
-    | false -> sprintf "%s 0 %s" sessionId (SettingsSnapshot.encode settings)
+    | true -> [ sessionId; "0" ]
+    | false -> [ sessionId; "0"; SettingsSnapshot.encode settings ]
+
+  /// The argument text for a worker of this session: `parts`, joined.
+  let render (sessionId: string) (settings: SettingsSnapshot) : string =
+    parts sessionId settings |> String.concat " "
 
   /// What a worker reads from its arguments.
   let parse (argv: string[]) : Result<WorkerCommandLine, WorkerCommandLineError> =

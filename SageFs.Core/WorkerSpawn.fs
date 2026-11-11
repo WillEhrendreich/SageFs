@@ -23,6 +23,13 @@ module WorkerSpawn =
     AdoptedCore: (string * DateTime) option
   }
 
+  /// The program and the argv a worker is started with. Each argument is its own element, so a host path with a space
+  /// or a quote, or a setting that encodes with one, is never split or rejoined by a shell-style parser.
+  let launchCommand (launch: Args.HostLaunch) (parts: string list) : string * string list =
+    match launch with
+    | Args.HostLaunch.NativeExecutable exe -> exe, parts
+    | Args.HostLaunch.ViaDotnetMuxer (dotnet, hostDll) -> dotnet, hostDll :: parts
+
   /// Start a worker OS process. Returns immediately with the Process
   /// (does NOT wait for the worker to report its port).
   let startWorkerProcess
@@ -33,7 +40,7 @@ module WorkerSpawn =
     (workflow: WorkflowTypes.SessionWorkflow)
     (onExited: int -> int -> unit)
     : Result<SpawnedWorker, SageFsError> =
-    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) targets false autoOpenNamespaces workflow
+    let _, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) targets false autoOpenNamespaces workflow
     let projects = SessionProjectTarget.paths targets
     // A project built for a newer runtime than the worker host's needs that runtime (roll-forward);
     // one that needs a runtime nobody installed is refused with what to install, not left to fail
@@ -96,14 +103,10 @@ module WorkerSpawn =
       Error (SageFsError.WorkerSpawnFailed reason)
     | Ok launch ->
 
-    let psi = ProcessStartInfo()
-    match launch with
-    | Args.HostLaunch.NativeExecutable exe ->
-      psi.FileName <- exe
-      psi.Arguments <- args
-    | Args.HostLaunch.ViaDotnetMuxer (dotnet, hostDll) ->
-      psi.FileName <- dotnet
-      psi.Arguments <- sprintf "\"%s\" %s" hostDll args
+    let program, argv = launchCommand launch (WorkerCommandLine.parts (SessionId.value sessionId) (SettingsInForce.current ()))
+    let psi = ProcessStartInfo(program)
+    for argument in argv do
+      psi.ArgumentList.Add argument
     psi.WorkingDirectory <- workingDir
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true

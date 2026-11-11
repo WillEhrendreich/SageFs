@@ -68,6 +68,22 @@ let workerCommandLineTests =
       WorkerCommandLine.parse (line.Split ' ')
       |> Expect.equal "and the worker reads the same three things back" (Ok { SessionId = "abc-123"; HttpPort = 0; Settings = snapshot })
 
+    // The worker spawn was the one argv in the repo built as a string (`"\"%s\" %s"`): a host path with a quote in it, or a
+    // setting that encodes with a space, split into the wrong arguments with nothing said. It is a list now.
+    testCase "WHY - the worker's argv is a list: a host path with a space and a quote stays one argument, ahead of the parts" <| fun _ ->
+      let hostDll = "/opt/my \"odd\" dir/SageFs.Host.dll"
+      let parts = WorkerCommandLine.parts "abc-123" SettingsSnapshot.empty
+      parts |> Expect.equal "the session and the port" [ "abc-123"; "0" ]
+      WorkerSpawn.launchCommand (Args.HostLaunch.ViaDotnetMuxer ("dotnet", hostDll)) parts
+      |> Expect.equal "the muxer runs the dll with the parts after it" ("dotnet", hostDll :: parts)
+      WorkerSpawn.launchCommand (Args.HostLaunch.NativeExecutable "/opt/x/SageFs.Host") parts
+      |> Expect.equal "the native host takes the parts" ("/opt/x/SageFs.Host", parts)
+
+    testCase "WHY - render is the parts joined, so the string tests and harnesses read the same command line" <| fun _ ->
+      let snapshot = snapshotOf [ "SAGEFS_WARMUP_MAX_MINUTES", "25" ]
+      WorkerCommandLine.render "abc-123" snapshot
+      |> Expect.equal "one source" (String.concat " " (WorkerCommandLine.parts "abc-123" snapshot))
+
     testCase "WHY — a worker started with no snapshot is the same two arguments it always was" <| fun _ ->
       WorkerCommandLine.render "abc-123" SettingsSnapshot.empty |> Expect.equal "no third argument" "abc-123 0"
       WorkerCommandLine.parse [| "abc-123"; "0" |]

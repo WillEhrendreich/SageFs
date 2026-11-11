@@ -25,8 +25,11 @@ let private WindowsPathRegex =
   Regex(@"[A-Za-z]:[\\\/](?:[^\\\/*??""<>|\s]*[\\\/])*[^\\\/*??""<>|\s]*", RegexOptions.Compiled)
 let private UncPathRegex =
   Regex(@"\\\\[^\s\\/:*?""<>|]+(?:\\[^\s\\/:*?""<>|]+)+", RegexOptions.Compiled)
+// Any absolute path (or one under `~`), whatever its first directory: an allow list of top directories let `/work/...`,
+// `/data/...` and `/src/...` through as written. A slash after a word, a dot, a colon or another slash is not the start of
+// a path (`and/or`, `./rel`, a URL's `//host`), and neither is a slash followed by a space (`50 / 50`).
 let private UnixPathRegex =
-  Regex(@"\/(?:home|Users|root|tmp|var|opt|etc|srv|mnt)\/[^\s'"",<>]*", RegexOptions.Compiled)
+  Regex(@"(?<![\w.:/\\])~?\/[^\s/'"",<>]+(?:\/[^\s'"",<>]*)*", RegexOptions.Compiled)
 let private Ipv4Regex =
   Regex(@"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b", RegexOptions.Compiled)
 let private EmailRegex =
@@ -43,6 +46,16 @@ let private redactPaths (s: string) : string =
 let private redactIps (s: string) : string = Ipv4Regex.Replace(s, "<ip>")
 let private redactEmails (s: string) : string = EmailRegex.Replace(s, "<email>")
 let private redactSessionIds (s: string) : string = SessionIdRegex.Replace(s, "<session-id>")
+
+/// What a log line says about a piece of submitted source: its length and the first 12 hex digits of its SHA-256,
+/// enough to tell two submissions apart and match one to a transcript, and nothing of what it says. People paste
+/// connection strings and keys into a REPL, and the daemon log at Debug wrote every eval's source.
+let codeSummary (code: string) : string =
+  match code with
+  | null -> "0 chars"
+  | text ->
+    let hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes text)
+    sprintf "%d chars, sha256 %s" text.Length (System.Convert.ToHexString(hash).Substring(0, 12).ToLowerInvariant())
 
 /// Apply all redactions, trim, and cap to maxLen.
 let sanitizeText (s: string) (maxLen: int) : string =

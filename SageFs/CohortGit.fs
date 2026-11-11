@@ -176,10 +176,24 @@ let classifyRebaseFailure (failure: string list) : RebaseFailure =
 let private infraError (reason: string) : string list =
   [ infraFailureMarker + reason ]
 
-/// `git rev-parse <reference>`, trimmed.
+/// A reference a caller names, as git's argument. One that starts with `-` is refused, because git reads it as an
+/// option (`--show-toplevel` printed a path that was then taken for a sha), and an empty one names nothing.
+let referenceArgument (reference: string) : Result<string, string> =
+  match reference with
+  | null -> Error "no reference was given; name a branch, tag or commit"
+  | r when String.IsNullOrWhiteSpace r -> Error "the reference is empty; name a branch, tag or commit"
+  | r when r.StartsWith("-", StringComparison.Ordinal) ->
+    Error (sprintf "'%s' starts with '-', so git would read it as an option; name a branch, tag or commit" r)
+  | r -> Ok r
+
+/// `git rev-parse --verify <reference>`, trimmed. `--end-of-options` keeps git from reading the reference as a flag even
+/// if a caller's text gets past `referenceArgument`.
 let revParse (repoDir: string) (reference: string) : Async<Result<string, string>> =
-  runGit repoDir shortTimeout [ "rev-parse"; reference ]
-  |> mapOk trim
+  match referenceArgument reference with
+  | Error reason -> async { return Error reason }
+  | Ok argument ->
+    runGit repoDir shortTimeout [ "rev-parse"; "--verify"; "--end-of-options"; argument ]
+    |> mapOk trim
 
 /// The repo's current HEAD sha.
 let currentHead (repoDir: string) : Async<Result<string, string>> =
