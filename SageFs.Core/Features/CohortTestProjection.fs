@@ -48,7 +48,7 @@ module CohortTestProjection =
         match e.Status with
         | TestRunStatus.Passed _ -> passing <- toCohortTestId e.TestId :: passing
         | TestRunStatus.Failed _ -> failing <- toCohortTestId e.TestId :: failing
-        | TestRunStatus.Stale -> stale <- toCohortTestId e.TestId :: stale
+        | TestRunStatus.Stale | TestRunStatus.Quarantined _ -> stale <- toCohortTestId e.TestId :: stale
         | TestRunStatus.Detected
         | TestRunStatus.Queued
         | TestRunStatus.Running

@@ -105,7 +105,7 @@ let private flakeSampleAdded : Mutant<Planner> =
             (fun state ->
               let updated = update state
               { updated with
-                  FlakyHistory = FlakyDetection.recordResult record.Verdict.TestId record.Verdict.Result updated.FlakyHistory }),
+                  FlakyHistory = FlakyDetection.recordResult updated.InputEpoch record.Verdict.TestId record.Verdict.Result updated.FlakyHistory }),
             log') }
 
 let private basisSwapped : Mutant<Planner> =

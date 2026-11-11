@@ -56,7 +56,7 @@ let genStcData =
     let! results = Gen.listOfLength resCount genResultEntry
     let! gen' = Gen.choose(0, 100) |> Gen.map uint32
     let! ts = Gen.choose(0, 1000000000) |> Gen.map int64
-    return { CoverageEntries = covs; ResultEntries = results; FlakyEntries = []; ImapGeneration = gen'; CreatedAtMs = ts }
+    return { CoverageEntries = covs; ResultEntries = results; FlakyEntries = []; QuarantineEntries = []; ImapGeneration = gen'; CreatedAtMs = ts }
   }
 
 
@@ -400,7 +400,7 @@ let stcMappingTests = testList "STC Mapping" [
     let data: StcData = {
       CoverageEntries = []
       ResultEntries = [{ TestId = "legacy"; Outcome = Outcome.Fail; DurationMs = FixtureDurations.savedResultMs; Message = Some "assertion failed" }]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
     let restored = TestCacheMapping.toLiveTestState data
     match restored.LastResults.[TestId.TestId "legacy"].Result with
@@ -730,7 +730,7 @@ let robustnessTests = testList "Robustness rejects corrupted and adversarial inp
     for o in [ Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error; Outcome.NotRun
                Outcome.AssertionFailed; Outcome.ExceptionThrown; Outcome.TimedOut ] do
       let d: StcData = {
-        CoverageEntries = []; FlakyEntries = []; ImapGeneration = 0u; CreatedAtMs = FixtureDurations.unwrittenAtMs
+        CoverageEntries = []; FlakyEntries = []; QuarantineEntries = []; ImapGeneration = 0u; CreatedAtMs = FixtureDurations.unwrittenAtMs
         ResultEntries = [{ TestId = "t1"; Outcome = o; DurationMs = FixtureDurations.savedMsTiny; Message = None }] }
       let bytes = TestCacheWriter.write d
       match TestCacheReader.read bytes with
@@ -750,7 +750,7 @@ let robustnessTests = testList "Robustness rejects corrupted and adversarial inp
         { TestId = "c"; Outcome = Outcome.TimedOut; DurationMs = FixtureDurations.savedMsDistinct.[2]; Message = Some "m" }
         { TestId = "d"; Outcome = Outcome.Fail; DurationMs = FixtureDurations.savedMsDistinct.[3]; Message = Some "m" }
       ]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
     let bytes = TestCacheWriter.write data
     let tresOffset = System.BitConverter.ToUInt64(bytes, 64 + 2 * 16 + 4) |> int
@@ -787,7 +787,7 @@ let robustnessTests = testList "Robustness rejects corrupted and adversarial inp
       let d: StcData = {
         CoverageEntries = []
         ResultEntries = [{ TestId = "x"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedMsTiny; Message = None }]
-        FlakyEntries = []
+        FlakyEntries = []; QuarantineEntries = []
         ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
       let bytes = TestCacheWriter.write d
       let i = idx.Get % bytes.Length
@@ -803,7 +803,7 @@ let robustnessTests = testList "Robustness rejects corrupted and adversarial inp
     (fun (n: NonNegativeInt) ->
       let n = n.Get % 50
       let entries = [ for i in 0..n-1 -> { TestId = sprintf "t%d" i; Outcome = Outcome.Pass; DurationMs = uint32 i; Message = None } ]
-      let d: StcData = { CoverageEntries = []; ResultEntries = entries; FlakyEntries = []; ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
+      let d: StcData = { CoverageEntries = []; ResultEntries = entries; FlakyEntries = []; QuarantineEntries = []; ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
       let bytes = TestCacheWriter.write d
       match TestCacheReader.read bytes with
       | Result.Ok rt -> rt.ResultEntries.Length = entries.Length
@@ -817,7 +817,7 @@ let versionAndValidationTests = testList "Version & Validation" [
     let d: StcData = {
       CoverageEntries = []
       ResultEntries = [{ TestId = "x"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedMsTiny; Message = None }]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
     let bytes = TestCacheWriter.write d
     let patched = Array.copy bytes
@@ -835,7 +835,7 @@ let versionAndValidationTests = testList "Version & Validation" [
     let d: StcData = {
       CoverageEntries = []
       ResultEntries = [{ TestId = "x"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedMsTiny; Message = None }]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
     match TestCacheReader.read (TestCacheWriter.write d) with
     | Result.Ok _ -> ()
@@ -845,7 +845,7 @@ let versionAndValidationTests = testList "Version & Validation" [
     let d: StcData = {
       CoverageEntries = []
       ResultEntries = [{ TestId = "x"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedMsTiny; Message = None }]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
     let bytes = TestCacheWriter.write d
     let corrupted = Array.copy bytes
@@ -858,7 +858,7 @@ let versionAndValidationTests = testList "Version & Validation" [
     let d: StcData = {
       CoverageEntries = []
       ResultEntries = [{ TestId = "x"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedMsTiny; Message = None }]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs }
     let bytes = TestCacheWriter.write d
     let patched = Array.copy bytes
@@ -924,7 +924,7 @@ let boundsCheckTests = testList "bounds check" [
     let data: StcData = {
       CoverageEntries = [ { TestId = "t1"; BitmapWordCount = 1u; BitmapWords = [| 1UL |] } ]
       ResultEntries = [ { TestId = "t1"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedResultMs; Message = None } ]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 1u; CreatedAtMs = FixtureDurations.unwrittenAtMs
     }
     let bytes = TestCacheWriter.write data
@@ -988,7 +988,7 @@ let goldenFileTests = testList "golden files" [
         { TestId = "test-alpha"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedResultMs; Message = None }
         { TestId = "test-beta"; Outcome = Outcome.Fail; DurationMs = FixtureDurations.savedResultMsOther; Message = Some "assertion failed" }
       ]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 42u; CreatedAtMs = FixtureDurations.goldenCreatedAtMs
     }
     let bytes1 = TestCacheWriter.write data
@@ -1004,7 +1004,7 @@ let goldenFileTests = testList "golden files" [
       ResultEntries = [
         { TestId = "golden-test"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.savedResultMs; Message = None }
       ]
-      FlakyEntries = []
+      FlakyEntries = []; QuarantineEntries = []
       ImapGeneration = 7u; CreatedAtMs = FixtureDurations.goldenCreatedAtMs
     }
     let bytes = TestCacheWriter.write data
@@ -1182,7 +1182,7 @@ let sessionIsolationTests = testList "Session Isolation" [
               Outcome = Outcome.Pass
               DurationMs = uint32 (100 * i)
               Message = Option.None } ]
-        FlakyEntries = []
+        FlakyEntries = []; QuarantineEntries = []
         ImapGeneration = 1u
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
     let dataA = mkCache "Alpha" cA

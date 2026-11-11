@@ -45,7 +45,10 @@ let private genResultWindow : Gen<ResultWindow> =
     let! windowSize = Gen.choose (1, 12)
     let! sampleCount = Gen.choose (0, windowSize * 2)
     let! outcomes = Gen.listOfLength sampleCount genTestOutcome
-    return outcomes |> List.fold (fun w o -> ResultWindow.add o w) (ResultWindow.create windowSize)
+    let! epochs = Gen.listOfLength sampleCount (Gen.choose (0, 3))
+    return
+      List.zip outcomes epochs
+      |> List.fold (fun w (o, e) -> ResultWindow.addAt (InputEpoch (int64 e)) o w) (ResultWindow.create windowSize)
   }
 
 /// A handful of distinct tests, each with its own independently-generated
@@ -165,6 +168,52 @@ let flakyPersistenceTests = testList "FlakyHistory persistence" [
     match TestCacheReader.read bytes with
     | Error e -> failwithf "a pre-fix v2 cache (no FLKY section) must still load, got Error %s" e
     | Ok data -> data.FlakyEntries |> Expect.equal "absent FLKY decodes to empty flaky history" []
+
+  testCase "WHY — a quarantine survives a restart, because a restart that releases it would show the flake's next green as fresh" <| fun _ ->
+    let at = DateTimeOffset.FromUnixTimeMilliseconds FixtureDurations.unwrittenAtMs
+    let state = { LiveTestState.empty with Quarantined = Map.ofList [ TestId.TestId "flaky.q", EnvironmentalFlaky (3, at) ] }
+    let bytes = TestCacheWriter.write (TestCacheMapping.fromLiveTestState state)
+    match TestCacheReader.read bytes with
+    | Error e -> failwithf "expected a read, got Error %s" e
+    | Ok data -> (TestCacheMapping.toLiveTestState data).Quarantined |> Expect.equal "same quarantine" state.Quarantined
+
+  testCase "WHY — a format-3 flaky window loads with no flips counted, because nobody recorded where its edits were" <| fun _ ->
+    // Format 3 wrote FLKY slots with no input epoch. Pass, Fail, Pass under one epoch would quarantine on load.
+    let flky =
+      use ms = new MemoryStream()
+      use bw = new BinaryWriter(ms)
+      bw.Write(1u)
+      BinaryPrimitives.writeLpString bw "flaky.v3"
+      bw.Write(3u); bw.Write(0u); bw.Write(3u)
+      bw.Write([| 0uy; 1uy; 0uy |])
+      bw.Flush()
+      ms.ToArray()
+    let empty = [| 0uy; 0uy; 0uy; 0uy |]
+    let payloads = [ 0x494D4150u, empty; 0x54434F56u, empty; 0x464C4B59u, flky; 0x54524553u, empty ]
+    let headerSize = 64
+    let offsets = payloads |> List.scan (fun off (_, p: byte[]) -> off + uint64 p.Length) (uint64 (headerSize + 4 * 16))
+    use ms = new MemoryStream()
+    use bw = new BinaryWriter(ms)
+    bw.Write([| 0x53uy; 0x54uy; 0x43uy; 0x31uy |])
+    bw.Write(3us); bw.Write(1us); bw.Write(4u); bw.Write(0u); bw.Write(0L)
+    bw.Write(List.last offsets); bw.Write(0u); bw.Write(0u); bw.Write(0u)
+    bw.Write(Array.zeroCreate<byte> 20)
+    List.zip payloads (List.take 4 offsets)
+    |> List.iter (fun ((tag, p), off) -> bw.Write(tag); bw.Write(off); bw.Write(Crc32.computeAll p))
+    payloads |> List.iter (fun (_, p) -> bw.Write(p))
+    bw.Flush()
+    let bytes = ms.ToArray()
+    let forCrc = Array.copy bytes
+    forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
+    Array.Copy(BitConverter.GetBytes(Crc32.computeAll forCrc), 0, bytes, 36, 4)
+    match TestCacheReader.read bytes with
+    | Error e -> failwithf "a format-3 cache must load, got Error %s" e
+    | Ok data ->
+      let history = (TestCacheMapping.toLiveTestState data).FlakyHistory
+      ResultWindow.toList history.[TestId.TestId "flaky.v3"]
+      |> Expect.equal "the outcomes are kept" [ TestOutcome.Pass; TestOutcome.Fail; TestOutcome.Pass ]
+      FlakyDetection.assessTest (TestId.TestId "flaky.v3") history
+      |> Expect.equal "no flip is counted across unknown edits" TestStability.Stable
 
   // ── Corruption must degrade to a Result, never crash the daemon ─────
 

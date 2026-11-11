@@ -10,6 +10,8 @@ type VscTestOutcome =
   | Errored of message: string
   | Stale
   | PolicyDisabled
+  /// Flaky with no edit between its flips: left out of automatic runs, and never shown as its last verdict.
+  | Quarantined of reason: string
   /// Detected or queued: known, but no result yet — never a pass.
   | NotYetRun
 
@@ -466,7 +468,7 @@ module VscLiveTestState =
         match r.Outcome with
         | VscTestOutcome.Passed -> (p + 1, f, s, d)
         | VscTestOutcome.Failed _ | VscTestOutcome.Errored _ -> (p, f + 1, s, d)
-        | VscTestOutcome.Stale -> (p, f, s + 1, d)
+        | VscTestOutcome.Stale | VscTestOutcome.Quarantined _ -> (p, f, s + 1, d)
         | VscTestOutcome.PolicyDisabled -> (p, f, s, d + 1)
         | _ -> (p, f, s, d)
       ) (0, 0, 0, 0)

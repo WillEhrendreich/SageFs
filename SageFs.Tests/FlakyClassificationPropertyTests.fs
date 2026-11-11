@@ -206,13 +206,6 @@ let classificationQuarantineTests = testList "classification to quarantine integ
     QuarantineLogic.evaluate id FlakyClassification.Stable q now
     = QuarantineAction.Release id
 
-  testProperty "Stable does NOT release Manual quarantine" <| fun (n: byte) ->
-    let id = tid "t1"
-    let now = DateTimeOffset.UtcNow
-    let q = Map.ofList [ id, ManualQuarantine (sprintf "reason %d" (int n), now) ]
-    QuarantineLogic.evaluate id FlakyClassification.Stable q now
-    = QuarantineAction.NoChange
-
   testProperty "Environmental idempotent when already quarantined" <| fun (flips: byte) ->
     let f = max 2 (int flips)
     let id = tid "t1"

@@ -235,13 +235,6 @@ type SageFsModel = {
   /// The sessions the cohort made to verify landings. The landing gate drives them; a save or a keystroke does not
   /// (`LiveTestFileRouting.SessionPurpose.Verifying`).
   VerifyingSessions: Set<string>
-  /// Tests currently quarantined (environmentally flaky, or manually) and therefore
-  /// excluded from the next automatic selection. Recoverable: `QuarantineLogic.evaluate`
-  /// releases an `EnvironmentalFlaky` entry once the test classifies `Stable` again — a
-  /// `ManualQuarantine` entry is never auto-released. Session-agnostic: `TestId` is a
-  /// content hash of the test's own identity, so one quarantine map covers every session
-  /// that discovers the same test.
-  QuarantinedTests: Map<Features.LiveTesting.TestId, Features.LiveTesting.QuarantineReason>
   EvalsFinished: EvalTally
 }
 
@@ -278,7 +271,6 @@ module SageFsModel =
     PendingSuggestion = None
     PerSessionLiveTesting = Map.empty
     VerifyingSessions = Set.empty
-    QuarantinedTests = Map.empty
     EvalsFinished = EvalTally.empty
   }
 
@@ -864,30 +856,6 @@ module SageFsUpdate =
           LiveTesting = promotedState
           PerSessionLiveTesting = parkedBackground }
 
-  /// Fold every result's flaky classification into a quarantine decision.
-  /// This is the fold where a test result lands and `FlakyHistory` is
-  /// updated (`applyBufferedTestResults` below) — `QuarantineLogic.evaluate`
-  /// had zero non-test callers before this (a test could be classified
-  /// flaky and the product never demoted it), so this is the natural and
-  /// correct place to close that gap: the classification input (the
-  /// just-updated history) is already in hand here.
-  let private evaluateQuarantineForBatch
-    (results: Features.LiveTesting.TestRunResult list)
-    (flakyHistory: Map<Features.LiveTesting.TestId, Features.LiveTesting.ResultWindow>)
-    (lastResults: Map<Features.LiveTesting.TestId, Features.LiveTesting.TestRunResult>)
-    (quarantined: Map<Features.LiveTesting.TestId, Features.LiveTesting.QuarantineReason>)
-    : Map<Features.LiveTesting.TestId, Features.LiveTesting.QuarantineReason> =
-    let now = DateTimeOffset.UtcNow
-    results
-    |> List.map (fun r -> r.TestId)
-    |> List.distinct
-    |> List.fold
-      (fun q testId ->
-        let classification = Features.LiveTesting.FlakyDetection.classifyFlakiness testId flakyHistory lastResults
-        Features.LiveTesting.QuarantineLogic.evaluate testId classification q now
-        |> fun action -> Features.LiveTesting.QuarantineLogic.apply action q)
-      quarantined
-
   // ── Confirming an evaluated run against a real build ────────────────────────────────────────────────
   // A keystroke's tests run against code the live session EVALUATED. Every row says which kind of code
   // produced its verdict, and an evaluated verdict is confirmed (or contradicted) by a real build once the
@@ -1040,8 +1008,16 @@ module SageFsUpdate =
           // Each result is marked with what the run it belongs to ran against, BEFORE the rows are
           // computed from it, so a row never shows a verdict with the wrong provenance.
           let provenance = Features.LiveTesting.RunBasis.provenanceOf cycle.RunBasis
+          // Each sample carries the input epoch it ran under, and the quarantine is decided before the rows are
+          // computed, so a quarantined row never shows its last verdict.
+          let history =
+            allResults
+            |> List.fold (fun h r -> Features.LiveTesting.FlakyDetection.recordResult cycle.TestState.InputEpoch r.TestId r.Result h) cycle.TestState.FlakyHistory
+          let latest = allResults |> List.fold (fun m r -> Map.add r.TestId r m) cycle.TestState.LastResults
           let stamped =
             { cycle.TestState with
+                FlakyHistory = history
+                Quarantined = Features.LiveTesting.QuarantineLogic.evaluateBatch allResults history latest DateTimeOffset.UtcNow cycle.TestState.Quarantined
                 Provenances =
                   allResults
                   |> List.fold (fun all result -> Map.add result.TestId provenance all) cycle.TestState.Provenances }
@@ -1049,22 +1025,13 @@ module SageFsUpdate =
             Features.LiveTesting.LiveTesting.mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries
               stamped
               nonEmptyBatches
-          let updatedHistory =
-            allResults
-            |> List.fold
-              (fun hist result ->
-                Features.LiveTesting.FlakyDetection.recordResult result.TestId result.Result hist)
-              merged.FlakyHistory
-          let mergedWithHistory =
-            Features.LiveTesting.RequestedRuns.stampResults sessionId allResults { merged with FlakyHistory = updatedHistory }
-          let quarantined' =
-            evaluateQuarantineForBatch allResults updatedHistory mergedWithHistory.LastResults model.QuarantinedTests
+          let mergedWithHistory = Features.LiveTesting.RequestedRuns.stampResults sessionId allResults merged
           let refresh =
             match Array.isEmpty changedEntries with
             | true -> LiveTestingStatusRefresh.KeepExisting
             | false -> LiveTestingStatusRefresh.PatchChangedEntries changedEntries
           let cycle', timings = finalizeLiveTestingState refresh cycle mergedWithHistory
-          cycle', (timings, changedEntries, quarantined')) model
+          cycle', (timings, changedEntries)) model
       mergeSw.Stop()
       Instrumentation.liveTestingBufferedMergeMs.Record(mergeSw.Elapsed.TotalMilliseconds)
       let pendingResults =
@@ -1073,7 +1040,7 @@ module SageFsUpdate =
       Instrumentation.liveTestingBufferedApplyMs.Record(applySw.Elapsed.TotalMilliseconds)
       match outcome with
       | None -> model, []
-      | Some (timings, changedEntries, quarantined') ->
+      | Some (timings, changedEntries) ->
         match timings with
         | Some phaseTimings when applySw.Elapsed.TotalMilliseconds >= 100.0 ->
           Utils.Log.warn
@@ -1086,7 +1053,7 @@ module SageFsUpdate =
             nonEmptyBatches.Length
             changedEntries.Length
         | _ -> ()
-        { model' with PendingRunSummary = pendingResults; QuarantinedTests = quarantined' }, []
+        { model' with PendingRunSummary = pendingResults }, []
 
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
     match msg with
@@ -1753,7 +1720,7 @@ module SageFsUpdate =
         let changedIds = Set.ofArray testIds
         let lt =
           refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->
-            { s with AffectedTests = changedIds })
+            { Features.LiveTesting.LiveTestState.noteReload s with AffectedTests = changedIds })
         // Primary belongs wholly to one session (see `LiveTestState.ownerSessionId`).
         let targetSession = Features.LiveTesting.LiveTestState.ownerSessionId lt.TestState
         // Quarantine gate: a test QuarantineLogic.evaluate quarantined (see
@@ -1764,7 +1731,7 @@ module SageFsUpdate =
         // policy-deferred tests) and echoed to the session output.
         let runIds, quarantinedIds =
           testIds
-          |> Array.partition (fun id -> not (Features.LiveTesting.QuarantineLogic.isQuarantined id model.QuarantinedTests))
+          |> Array.partition (fun id -> not (Features.LiveTesting.QuarantineLogic.isQuarantined id lt.TestState.Quarantined))
         let fullNameOf id =
           lt.TestState.DiscoveredTests
           |> Array.tryFind (fun tc -> tc.Id = id)
@@ -2225,6 +2192,8 @@ module SageFsUpdate =
         { s with
             TestCoverageBitmaps = cachedState.TestCoverageBitmaps
             LastResults = cachedState.LastResults
+            FlakyHistory = cachedState.FlakyHistory
+            Quarantined = cachedState.Quarantined
             LastGeneration = cachedState.LastGeneration })
       { model with LiveTesting = lt }, []
 

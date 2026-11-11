@@ -102,6 +102,8 @@ let bucketForOutcome
     DecorationBucket.Running, sprintf "◌ %s (stale — %s)" displayName reasonText
   | VscTestOutcome.PolicyDisabled ->
     DecorationBucket.Passed, sprintf "⊘ %s (disabled by policy)" displayName
+  | VscTestOutcome.Quarantined reason ->
+    DecorationBucket.Running, sprintf "? %s (quarantined, %s)" displayName reason
   | VscTestOutcome.NotYetRun ->
     DecorationBucket.Running, notYetRunText displayName
 
@@ -183,6 +185,7 @@ let inlineFailureDecision (state: VscLiveTestState) (filePath: string) (testName
     | VscTestOutcome.Errored _
     | VscTestOutcome.Running
     | VscTestOutcome.Stale
+    | VscTestOutcome.Quarantined _
     | VscTestOutcome.NotYetRun -> false
   match outcomes with
   | [] -> InlineFailureDecision.Keep

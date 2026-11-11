@@ -110,6 +110,9 @@ let create
           run.skipped item
         | VscTestOutcome.PolicyDisabled ->
           run.skipped item
+        // Its last verdict is not reported: a quarantined test did not run on this code.
+        | VscTestOutcome.Quarantined _ ->
+          run.skipped item
         // No result yet: reporting one (even skipped) would claim the test ran.
         | VscTestOutcome.NotYetRun -> ()
       | false, _ -> ()

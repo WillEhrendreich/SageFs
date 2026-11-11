@@ -57,12 +57,23 @@ module TestCacheTypes =
     WriteIndex: uint32
     Count: uint32
     Outcomes: byte[]
+    /// The input epoch of each window slot (format 4). A cache written before epochs existed reads every slot
+    /// as its own epoch, so no flip is counted from a history whose edits nobody recorded.
+    Epochs: int64[]
+  }
+
+  /// A quarantined test (QRNT section, format 4), so a restart neither releases nor forgets it.
+  type QuarantineEntry = {
+    TestId: string
+    FlipCount: uint32
+    DetectedAtMs: int64
   }
 
   type StcData = {
     CoverageEntries: CoverageEntry list
     ResultEntries: ResultEntry list
     FlakyEntries: FlakyEntry list
+    QuarantineEntries: QuarantineEntry list
     ImapGeneration: uint32
     CreatedAtMs: int64
   }
@@ -72,6 +83,7 @@ module TestCacheTypes =
       CoverageEntries = []
       ResultEntries = []
       FlakyEntries = []
+      QuarantineEntries = []
       ImapGeneration = 0u
       CreatedAtMs = System.DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds()
     }
@@ -128,6 +140,18 @@ module TestCacheWriter =
       bw.Write(e.WriteIndex)
       bw.Write(e.Count)
       for b in e.Outcomes do bw.Write(b)
+      for epoch in e.Epochs do bw.Write(epoch)
+    bw.Flush()
+    ms.ToArray()
+
+  let private writeQrnt (entries: QuarantineEntry list) : byte[] =
+    use ms = new MemoryStream()
+    use bw = new BinaryWriter(ms)
+    bw.Write(uint32 (List.length entries))
+    for e in entries do
+      BinaryPrimitives.writeLpString bw e.TestId
+      bw.Write(e.FlipCount)
+      bw.Write(e.DetectedAtMs)
     bw.Flush()
     ms.ToArray()
 
@@ -136,8 +160,9 @@ module TestCacheWriter =
     let tcovPayload = writeTcov data.CoverageEntries
     let tresPayload = writeTres data.ResultEntries
     let flkyPayload = writeFlky data.FlakyEntries
+    let qrntPayload = writeQrnt data.QuarantineEntries
 
-    let sectionCount = 4u
+    let sectionCount = 5u
     let headerSize = 64
     let dirEntrySize = 16
     let dirSize = int sectionCount * dirEntrySize
@@ -151,27 +176,29 @@ module TestCacheWriter =
     let imapOffset = uint64 (headerSize + dirSize)
     let tcovOffset = imapOffset + uint64 imapPayload.Length
     let flkyOffset = tcovOffset + uint64 tcovPayload.Length
-    let tresOffset = flkyOffset + uint64 flkyPayload.Length
+    let qrntOffset = flkyOffset + uint64 flkyPayload.Length
+    let tresOffset = qrntOffset + uint64 qrntPayload.Length
     let totalSize = tresOffset + uint64 tresPayload.Length
 
     let imapCrc = Crc32.computeAll imapPayload
     let tcovCrc = Crc32.computeAll tcovPayload
     let tresCrc = Crc32.computeAll tresPayload
     let flkyCrc = Crc32.computeAll flkyPayload
+    let qrntCrc = Crc32.computeAll qrntPayload
 
     use ms = new MemoryStream()
     use bw = new BinaryWriter(ms)
 
     // Header (64 bytes) — matches spec §3.2
     bw.Write([| 0x53uy; 0x54uy; 0x43uy; 0x31uy |]) // "STC1"
-    bw.Write(3us)                                     // format_version — bumped for the FLKY
-                                                      //   (flaky-history) section
+    bw.Write(4us)                                     // format_version — 3 added the FLKY section, 4
+                                                      //   added an input epoch per FLKY slot and QRNT
     bw.Write(1us)                                     // min_reader_version — unchanged: FLKY is
                                                       //   additive and the reader treats an
                                                       //   absent/unknown section as no data, so a
                                                       //   v1 reader tolerant of extra sections
                                                       //   still reads IMAP/TRES fine
-    bw.Write(sectionCount)                            // section_count (u32) — now 4
+    bw.Write(sectionCount)                            // section_count (u32) — now 5
     bw.Write(0u)                                      // flags
     bw.Write(data.CreatedAtMs)                        // created_at_ms
     bw.Write(totalSize)                               // total_file_size
@@ -180,16 +207,18 @@ module TestCacheWriter =
     bw.Write(data.ImapGeneration)                     // imap_generation
     bw.Write(Array.zeroCreate<byte> 20)               // reserved to 64
 
-    // Directory (4 × 16 bytes: tag:u32 + offset:u64 + crc:u32)
+    // Directory (5 × 16 bytes: tag:u32 + offset:u64 + crc:u32)
     bw.Write(0x494D4150u); bw.Write(imapOffset); bw.Write(imapCrc) // IMAP
     bw.Write(0x54434F56u); bw.Write(tcovOffset); bw.Write(tcovCrc) // TCOV
     bw.Write(0x54524553u); bw.Write(tresOffset); bw.Write(tresCrc) // TRES
     bw.Write(0x464C4B59u); bw.Write(flkyOffset); bw.Write(flkyCrc) // FLKY
+    bw.Write(0x51524E54u); bw.Write(qrntOffset); bw.Write(qrntCrc) // QRNT
 
-    // Payloads — physical order matches the offsets above (IMAP, TCOV, FLKY, TRES)
+    // Payloads — physical order matches the offsets above (IMAP, TCOV, FLKY, QRNT, TRES)
     bw.Write(imapPayload)
     bw.Write(tcovPayload)
     bw.Write(flkyPayload)
+    bw.Write(qrntPayload)
     bw.Write(tresPayload)
     bw.Flush()
 
@@ -284,7 +313,10 @@ module TestCacheReader =
   /// caches — that decodes to an empty history, never an error (see `read`).
   let private flkyTag = 0x464C4B59u
 
-  let private parseFlky (payload: byte[]) : Result<FlakyEntry list, string> =
+  /// The first format whose FLKY slots carry an input epoch.
+  let private epochsSince = 4us
+
+  let private parseFlky (formatVersion: uint16) (payload: byte[]) : Result<FlakyEntry list, string> =
     try
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
@@ -305,9 +337,10 @@ module TestCacheReader =
         // the whole stream: writeIndex(4) + count(4) + one outcome byte per
         // window slot must all fit in what parseFlky was actually handed.
         let remaining = ms.Length - ms.Position
-        match remaining < 8L + int64 windowSize with
+        let perSlot = match formatVersion >= epochsSince with | true -> 9L | false -> 1L
+        match remaining < 8L + perSlot * int64 windowSize with
         | true ->
-          Error (sprintf "FLKY parse error: window size %d needs %d more bytes but only %d remain" windowSize (8L + int64 windowSize) remaining)
+          Error (sprintf "FLKY parse error: window size %d needs %d more bytes but only %d remain" windowSize (8L + perSlot * int64 windowSize) remaining)
         | false ->
         let writeIndex = br.ReadUInt32()
         let sampleCount = br.ReadUInt32()
@@ -319,8 +352,35 @@ module TestCacheReader =
           match windowSize with
           | 0u -> [||]
           | n -> [| for _ in 1u .. n -> br.ReadByte() |]
-        Ok { TestId = tid; WindowSize = windowSize; WriteIndex = writeIndex; Count = sampleCount; Outcomes = outcomes })
+        let epochs =
+          match formatVersion >= epochsSince with
+          | true -> [| for _ in 1u .. windowSize -> br.ReadInt64() |]
+          // Migration from format 3: every slot its own epoch, so the old history counts no flip.
+          | false -> Array.init (int windowSize) (fun i -> -(int64 i + 1L))
+        Ok { TestId = tid; WindowSize = windowSize; WriteIndex = writeIndex; Count = sampleCount; Outcomes = outcomes; Epochs = epochs })
     with ex -> err (sprintf "FLKY parse error: %s" ex.Message)
+
+  let private qrntTag = 0x51524E54u
+
+  let private parseQrnt (payload: byte[]) =
+    try
+      use ms = new MemoryStream(payload)
+      use br = new BinaryReader(ms)
+      // Each QRNT entry is a tid lp-string (>=4 bytes) + flips u32 + detectedAt i64: a floor of 16 bytes.
+      let rawCount = br.ReadUInt32() |> int64
+      let maxPossible = max 0L (ms.Length - 4L) / 16L
+      match rawCount > maxPossible with
+      | true -> err (sprintf "QRNT parse error: count %d exceeds section payload capacity %d" rawCount maxPossible)
+      | false ->
+      readItems (int rawCount) [] (fun () ->
+        let tid = BinaryPrimitives.readLpStringBounded br (max 0L (ms.Length - ms.Position))
+        let flips = br.ReadUInt32()
+        let at = br.ReadInt64()
+        Ok { TestId = tid; FlipCount = flips; DetectedAtMs = at })
+    with
+    // A short section ends the stream; a length that does not fit is refused by readLpStringBounded.
+    | :? EndOfStreamException as ex -> err (sprintf "QRNT parse error: %s" ex.Message)
+    | :? InvalidOperationException as ex -> err (sprintf "QRNT parse error: %s" ex.Message)
 
   let read (data: byte[]) : Result<StcData, string> =
     if data.Length < 64 then err "File too short for STC1 header"
@@ -340,6 +400,7 @@ module TestCacheReader =
         if minVersion > readerVersion then
           err (sprintf "File requires reader version %d but this reader is version %d" minVersion readerVersion)
         else
+        let formatVersion = BitConverter.ToUInt16(data, 4)
         let rawSectionCount = BitConverter.ToUInt32(data, 8)
         let createdAtMs = BitConverter.ToInt64(data, 16)
         let imapGen = BitConverter.ToUInt32(data, 40)
@@ -419,14 +480,23 @@ module TestCacheReader =
             let flakyResult =
               match Map.tryFind flkyTag payloadMap with
               | None -> ok []
-              | Some flkyP -> parseFlky flkyP
+              | Some flkyP -> parseFlky formatVersion flkyP
             match flakyResult with
             | Result.Error e -> err e
             | Result.Ok flakyEntries ->
+            // QRNT is optional the same way: a cache from before it has no quarantine to restore.
+            let quarantineResult =
+              match Map.tryFind qrntTag payloadMap with
+              | None -> ok []
+              | Some qrntP -> parseQrnt qrntP
+            match quarantineResult with
+            | Result.Error e -> err e
+            | Result.Ok quarantineEntries ->
             ok {
               CoverageEntries = coverage
               ResultEntries = results
               FlakyEntries = flakyEntries
+              QuarantineEntries = quarantineEntries
               ImapGeneration = imapGen
               CreatedAtMs = createdAtMs
             }
@@ -503,13 +573,15 @@ module TestCacheMapping =
         WindowSize = uint32 w.WindowSize
         WriteIndex = uint32 w.WriteIndex
         Count = uint32 w.Count
-        Outcomes = w.Outcomes |> Array.map flakyOutcomeToByte })
+        Outcomes = w.Outcomes |> Array.map flakyOutcomeToByte
+        Epochs = w.Epochs |> Array.map (fun (InputEpoch e) -> e) })
 
   let private flakyHistoryOf (entries: FlakyEntry list) : Map<TestId, ResultWindow> =
     entries
     |> List.map (fun e ->
       let window : ResultWindow = {
         Outcomes = e.Outcomes |> Array.map flakyOutcomeOfByte
+        Epochs = e.Epochs |> Array.map InputEpoch
         WriteIndex = int e.WriteIndex
         Count = int e.Count
         WindowSize = int e.WindowSize }
@@ -559,6 +631,11 @@ module TestCacheMapping =
       CoverageEntries = coverageEntries
       ResultEntries = resultEntries
       FlakyEntries = flakyEntriesOf state.FlakyHistory
+      QuarantineEntries =
+        state.Quarantined
+        |> Map.toList
+        |> List.map (fun (TestId.TestId tid, EnvironmentalFlaky (flips, at)) ->
+          { TestId = tid; FlipCount = uint32 flips; DetectedAtMs = at.ToUnixTimeMilliseconds() })
       CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
 
   /// Restore LiveTestState from deserialized StcData.
@@ -623,7 +700,12 @@ module TestCacheMapping =
         TestCoverageBitmaps = coverageBitmaps
         LastResults = lastResults
         LastGeneration = gen
-        FlakyHistory = flakyHistoryOf data.FlakyEntries }
+        FlakyHistory = flakyHistoryOf data.FlakyEntries
+        Quarantined =
+          data.QuarantineEntries
+          |> List.map (fun e ->
+            TestId.TestId e.TestId, EnvironmentalFlaky (int e.FlipCount, DateTimeOffset.FromUnixTimeMilliseconds e.DetectedAtMs))
+          |> Map.ofList }
 
 
 /// File I/O for .sagetc binary cache files.

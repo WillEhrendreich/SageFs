@@ -206,4 +206,5 @@ let formatCodeLensTitle (durationMs: float option) (outcome: VscTestOutcome) : s
   | VscTestOutcome.Errored msg -> sprintf "✗ Error: %s" msg
   | VscTestOutcome.Stale -> "◌ Stale"
   | VscTestOutcome.PolicyDisabled -> "⊘ Disabled"
+  | VscTestOutcome.Quarantined _ -> "? Quarantined"
   | VscTestOutcome.NotYetRun -> "◆ Not yet run"

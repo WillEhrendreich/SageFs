@@ -2040,18 +2040,18 @@ let flakyDetectionTests = testList "FlakyDetection" [
     ResultWindow.countFlips w1 = ResultWindow.countFlips w2
 
   test "outcomeOf maps Passed to Pass" {
-    FlakyDetection.outcomeOf (TestResult.Passed FixtureDurations.slowResult)
+    FlakyDetection.outcomeOf (TestResult.Passed FixtureDurations.slowResult) |> Option.get
     |> Expect.equal "Passed→Pass" TestOutcome.Pass
   }
 
   test "outcomeOf maps Failed to Fail" {
-    FlakyDetection.outcomeOf (TestResult.Failed (TestFailure.AssertionFailed "msg", FixtureDurations.slowResult))
+    FlakyDetection.outcomeOf (TestResult.Failed (TestFailure.AssertionFailed "msg", FixtureDurations.slowResult)) |> Option.get
     |> Expect.equal "Failed→Fail" TestOutcome.Fail
   }
 
   test "recordResult creates window for new test" {
     let tid = TestId.create "t1" TestFramework.Expecto
-    let updated = FlakyDetection.recordResult tid (TestResult.Passed FixtureDurations.usualResult) Map.empty
+    let updated = FlakyDetection.recordResult (InputEpoch 0L) tid (TestResult.Passed FixtureDurations.usualResult) Map.empty
     Expect.isTrue "should have entry" (Map.containsKey tid updated)
     (Map.find tid updated).Count |> Expect.equal "1 result" 1
   }

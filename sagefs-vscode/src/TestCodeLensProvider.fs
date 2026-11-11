@@ -83,6 +83,8 @@ let create () =
                 | _ -> sprintf "%s — stale" t.DisplayName
               | LiveTestingTypes.VscTestOutcome.PolicyDisabled ->
                 sprintf "%s — disabled by policy" t.DisplayName
+              | LiveTestingTypes.VscTestOutcome.Quarantined reason ->
+                sprintf "%s — quarantined, %s" t.DisplayName reason
               | _ -> t.DisplayName
             | None -> t.DisplayName
           let cmd = createObj [

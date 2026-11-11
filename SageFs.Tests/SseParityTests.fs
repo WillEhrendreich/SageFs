@@ -418,3 +418,43 @@ let sseParityTests = testList "SSE Parity" [
 ]
 
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant sseParityTests |> ignore
+
+// ── Live-testing wire values: every value the daemon can send, each client can read ─────────────────────────
+// A row status the editor cannot parse falls through to its catch-all, and a quarantined row read as "unknown
+// status" says less than the daemon did. The cases are read from the server's own union, never typed here.
+
+/// The quoted literals matched at the start of a match arm inside one function's body.
+let private matchArmLiterals (source: string) (startMarker: string) (endMarker: string) : Set<string> =
+  let startIdx = source.IndexOf(startMarker: string)
+  let endIdx = if startIdx >= 0 then source.IndexOf(endMarker, startIdx) else -1
+  match startIdx >= 0 && endIdx > startIdx with
+  | false -> failwithf "Could not find %s ... %s; the client's source changed shape, so update the markers" startMarker endMarker
+  | true ->
+    Regex.Matches(source.Substring(startIdx, endIdx - startIdx), "(?m)^\\s*\\|\\s*\"([A-Za-z_]+)\"")
+    |> Seq.cast<Match>
+    |> Seq.map (fun m -> m.Groups.[1].Value)
+    |> Set.ofSeq
+
+let private rowStatusCases : Set<string> =
+  Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFs.Features.LiveTesting.TestRunStatus>)
+  |> Array.map (fun c -> c.Name)
+  |> Set.ofArray
+
+[<Tests>]
+let liveTestingWireValueParity = testList "Live-testing wire values reach both editors" [
+  test "VS Code parses every row status the daemon can send" {
+    let parsed = matchArmLiterals (File.ReadAllText vscodeListenerSourcePath) "let parseTestResult" "let durationMs"
+    Set.difference rowStatusCases parsed
+    |> Expect.isEmpty "these TestRunStatus cases fall through to the listener's catch-all"
+  }
+
+  test "Neovim accepts every row status the daemon can send" {
+    let source = readPluginFile (Path.Combine(nvimRepoDir, "lua", "sagefs", "testing.lua"))
+    let startIdx = source.IndexOf "M.VALID_TEST_STATUSES = {"
+    let block = source.Substring(startIdx, source.IndexOf("}", startIdx) - startIdx)
+    let accepted = Regex.Matches(block, "(?m)^\\s*([A-Za-z]+)\\s*=\\s*true") |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.[1].Value) |> Set.ofSeq
+    Set.difference rowStatusCases accepted
+    |> Expect.isEmpty "these TestRunStatus cases are invalid statuses to the plugin"
+  }
+]
+

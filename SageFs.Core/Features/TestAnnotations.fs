@@ -223,7 +223,7 @@ module AnnotationFreshness =
     match status with
     | TestRunStatus.Running
     | TestRunStatus.Queued -> AnnotationFreshness.Running
-    | TestRunStatus.Stale -> AnnotationFreshness.Stale
+    | TestRunStatus.Stale | TestRunStatus.Quarantined _ -> AnnotationFreshness.Stale
     | _ ->
       match phase with
       | TestRunPhase.RunningButEdited _ -> AnnotationFreshness.Stale
@@ -252,6 +252,7 @@ module TestCodeLens =
     | TestRunStatus.Queued -> sprintf "◆ %s (queued)" name
     | TestRunStatus.Skipped r -> sprintf "○ %s: %s" name r
     | TestRunStatus.Stale -> sprintf "~ %s (stale)" name
+    | TestRunStatus.Quarantined reason -> sprintf "? %s (quarantined, %s)" name reason
     | TestRunStatus.PolicyDisabled ->
       sprintf "○ %s (disabled)" name
 
@@ -275,7 +276,7 @@ module FileAnnotations =
   let statusPriority = function
     | TestRunStatus.Failed _ -> 0
     | TestRunStatus.Running -> 1
-    | TestRunStatus.Stale -> 2
+    | TestRunStatus.Stale | TestRunStatus.Quarantined _ -> 2
     | TestRunStatus.Skipped _ -> 3
     | TestRunStatus.Detected -> 4
     | TestRunStatus.Queued -> 5

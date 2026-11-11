@@ -280,6 +280,7 @@
         <Compile Include="ErrorMessages.fs" />
         <Compile Include="WorkflowErrorContext.fs" />
         <Compile Include="Features\LiveTestingTypes.fs" />
+        <Compile Include="Features\CoverageSummary.fs" />
         <!-- Debounce, the test-cycle requests and TestCycleEffect, split out of
              LiveTestingTypes.fs: the god-file budget asks for a split before it
              absorbs anything new. -->

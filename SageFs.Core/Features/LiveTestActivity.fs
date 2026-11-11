@@ -55,7 +55,7 @@ module TestTally =
     | TestRunStatus.Passed _ -> { t with Passed = t.Passed + 1 }
     | TestRunStatus.Failed _ -> { t with Failed = t.Failed + 1 }
     | TestRunStatus.Running -> { t with Running = t.Running + 1 }
-    | TestRunStatus.Stale -> { t with Stale = t.Stale + 1 }
+    | TestRunStatus.Stale | TestRunStatus.Quarantined _ -> { t with Stale = t.Stale + 1 }
     | TestRunStatus.Detected
     | TestRunStatus.Queued -> { t with NotYetRun = t.NotYetRun + 1 }
     | TestRunStatus.Skipped _ -> { t with Skipped = t.Skipped + 1 }

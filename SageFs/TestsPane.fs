@@ -24,6 +24,7 @@ module TestsPane =
     | TestRunStatus.Detected       -> '\u25CC' // ◌
     | TestRunStatus.Skipped _      -> '\u25CB' // ○
     | TestRunStatus.PolicyDisabled -> '\u2500' // ─
+    | TestRunStatus.Quarantined _  -> '?'
 
   /// Foreground color (packed RGB) for the status icon.
   let iconFgColor (theme: ThemeConfig) (status: TestRunStatus) : uint32 =
@@ -36,6 +37,7 @@ module TestsPane =
     | TestRunStatus.Detected       -> Theme.hexToRgb theme.FgDim
     | TestRunStatus.Skipped _      -> Theme.hexToRgb theme.FgDim
     | TestRunStatus.PolicyDisabled -> Theme.hexToRgb theme.FgDim
+    | TestRunStatus.Quarantined _  -> Theme.hexToRgb theme.ColorWarn
 
   let private durationOf (status: TestRunStatus) : TimeSpan option =
     match status with

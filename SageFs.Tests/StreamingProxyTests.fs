@@ -63,7 +63,7 @@ let private isTerminal (status: TestRunStatus) =
   match status with
   | TestRunStatus.Running | TestRunStatus.Queued | TestRunStatus.Detected -> false
   | TestRunStatus.Passed _ | TestRunStatus.Failed _ | TestRunStatus.Skipped _
-  | TestRunStatus.Stale | TestRunStatus.PolicyDisabled -> true
+  | TestRunStatus.Stale | TestRunStatus.PolicyDisabled | TestRunStatus.Quarantined _ -> true
 
 /// Serve one SSE response on a free loopback port; `write` gets the response
 /// stream and decides what (and when) the fake worker sends.

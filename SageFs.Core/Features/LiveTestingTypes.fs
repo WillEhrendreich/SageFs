@@ -405,6 +405,8 @@ type TestRunStatus =
   | Skipped of reason: string
   | Stale
   | PolicyDisabled
+  /// Flaky with no edit between its flips, so automatic runs leave it out. Never shown as its last verdict.
+  | Quarantined of reason: string
 
 /// Why a real build contradicted what the live eval said.
 [<RequireQualifiedAccess>]
@@ -1316,9 +1318,15 @@ type CoverageVisibility =
 [<Struct; RequireQualifiedAccess>]
 type TestOutcome = Pass | Fail
 
-/// Fixed-size circular buffer of recent test outcomes.
+/// How many times the code or the inputs a session's tests run against have changed: a keystroke, a save, a hot
+/// reload. Two samples with the same epoch ran against the same code, so only they can disagree by flaking.
+[<Struct>]
+type InputEpoch = InputEpoch of int64
+
+/// Fixed-size circular buffer of recent test outcomes, each with the input epoch it ran under.
 type ResultWindow = {
   Outcomes: TestOutcome array
+  Epochs: InputEpoch array
   WriteIndex: int
   Count: int
   WindowSize: int
@@ -1327,37 +1335,42 @@ type ResultWindow = {
 module ResultWindow =
   let create windowSize = {
     Outcomes = Array.create windowSize TestOutcome.Pass
+    Epochs = Array.create windowSize (InputEpoch 0L)
     WriteIndex = 0
     Count = 0
     WindowSize = windowSize
   }
 
-  let add (outcome: TestOutcome) (w: ResultWindow) =
+  let addAt (epoch: InputEpoch) (outcome: TestOutcome) (w: ResultWindow) =
     let outcomes = Array.copy w.Outcomes
+    let epochs = Array.copy w.Epochs
     outcomes[w.WriteIndex] <- outcome
+    epochs[w.WriteIndex] <- epoch
     { w with
         Outcomes = outcomes
+        Epochs = epochs
         WriteIndex = (w.WriteIndex + 1) % w.WindowSize
         Count = min (w.Count + 1) w.WindowSize }
 
-  let toList (w: ResultWindow) =
+  let private ordered (slots: 'a array) (w: ResultWindow) =
     match w.Count = 0, w.Count < w.WindowSize with
     | true, _ -> []
-    | false, true ->
-      Array.toList w.Outcomes[0 .. w.Count - 1]
-    | false, false ->
-      let start = w.WriteIndex
-      [ for i in 0 .. w.WindowSize - 1 do
-          yield w.Outcomes[(start + i) % w.WindowSize] ]
+    | false, true -> Array.toList slots[0 .. w.Count - 1]
+    | false, false -> [ for i in 0 .. w.WindowSize - 1 -> slots[(w.WriteIndex + i) % w.WindowSize] ]
 
+  /// A sample that ran against the same code as the one before it: a plain re-run, no edit between.
+  let add (outcome: TestOutcome) (w: ResultWindow) =
+    let previous = match w.Count with 0 -> InputEpoch 0L | _ -> w.Epochs[(w.WriteIndex + w.WindowSize - 1) % w.WindowSize]
+    addAt previous outcome w
+
+  let toList (w: ResultWindow) = ordered w.Outcomes w
+
+  /// A flip is two neighbouring samples that disagree under the same input epoch. A red then a green with an edit
+  /// between them is the edit's verdict, not flakiness.
   let countFlips (w: ResultWindow) =
-    let items = toList w
-    match items with
-    | [] | [_] -> 0
-    | _ ->
-      items
-      |> List.pairwise
-      |> List.sumBy (fun (a, b) -> match a <> b with | true -> 1 | false -> 0)
+    List.zip (ordered w.Outcomes w) (ordered w.Epochs w)
+    |> List.pairwise
+    |> List.sumBy (fun ((a, ea), (b, eb)) -> match a <> b && ea = eb with | true -> 1 | false -> 0)
 
 /// Stability assessment for a test based on outcome history.
 [<RequireQualifiedAccess>]
@@ -1416,28 +1429,28 @@ module FlakyDetection =
         | false -> Some original
       | false -> None
 
-  let outcomeOf (result: TestResult) =
+  /// Only a test that ran says anything about its stability. A skip, a test no runner knew and one that never
+  /// reported are no sample at all: recording them as a pass would fabricate evidence.
+  let outcomeOf (result: TestResult) : TestOutcome option =
     match result with
-    | TestResult.Passed _ -> TestOutcome.Pass
-    | TestResult.Failed _ -> TestOutcome.Fail
-    | TestResult.Skipped _ | TestResult.NotRun | TestResult.NoResult _ -> TestOutcome.Pass
+    | TestResult.Passed _ -> Some TestOutcome.Pass
+    | TestResult.Failed _ -> Some TestOutcome.Fail
+    | TestResult.Skipped _ | TestResult.NotRun | TestResult.NoResult _ -> None
 
   let recordResult
+    (epoch: InputEpoch)
     (testId: TestId)
     (result: TestResult)
     (history: Map<TestId, ResultWindow>)
     : Map<TestId, ResultWindow> =
-    match result with
-    // A test that never reported says nothing about its stability — recording
-    // it as a pass or a fail would fabricate evidence either way.
-    | TestResult.NoResult _ -> history
-    | TestResult.Passed _ | TestResult.Failed _ | TestResult.Skipped _ | TestResult.NotRun ->
+    match outcomeOf result with
+    | None -> history
+    | Some outcome ->
       let window =
         history
         |> Map.tryFind testId
         |> Option.defaultWith (fun () -> ResultWindow.create FlakyDefaults.windowSize)
-      let updated = ResultWindow.add (outcomeOf result) window
-      Map.add testId updated history
+      Map.add testId (ResultWindow.addAt epoch outcome window) history
 
   let assessTest
     (testId: TestId)
@@ -1471,14 +1484,18 @@ module FlakyDetection =
       | None -> FlakyClassification.Environmental flipCount
 
 // ── Quarantine ────────────────────────────────────────────────────────
-// Auto-quarantines environmentally flaky tests so they don't block
-// the feedback loop. Manual quarantine is never auto-released.
+// Auto-quarantines environmentally flaky tests so they don't block the feedback loop. A quarantined test's row
+// says Quarantined, never its last verdict. There is no manual quarantine: a person who wants a test left out
+// writes an exclude scope (`TestScope`), which says what it does and is undone the same way.
 
-/// Why a test was quarantined — environmental flakiness is auto-detected,
-/// manual quarantine is human-initiated.
+/// Why a test was quarantined.
 type QuarantineReason =
   | EnvironmentalFlaky of flipCount: int * detectedAt: DateTimeOffset
-  | ManualQuarantine of reason: string * at: DateTimeOffset
+
+module QuarantineReason =
+  let describe (reason: QuarantineReason) =
+    match reason with
+    | EnvironmentalFlaky (flips, _) -> sprintf "flaky: its verdict flipped %d times with no edit between runs" flips
 
 /// Action to take after evaluating a test's flaky classification.
 [<RequireQualifiedAccess>]
@@ -1500,7 +1517,6 @@ module QuarantineLogic =
       QuarantineAction.DoQuarantine (testId, EnvironmentalFlaky (flips, now))
     | FlakyClassification.Environmental _, Some _ -> QuarantineAction.NoChange
     | FlakyClassification.Stable, Some (EnvironmentalFlaky _) -> QuarantineAction.Release testId
-    | FlakyClassification.Stable, Some (ManualQuarantine _) -> QuarantineAction.NoChange
     | FlakyClassification.Stable, None -> QuarantineAction.NoChange
     | FlakyClassification.PropertyCounterexample _, _ -> QuarantineAction.NoChange
     | FlakyClassification.Insufficient, _ -> QuarantineAction.NoChange
@@ -1514,6 +1530,21 @@ module QuarantineLogic =
     | QuarantineAction.DoQuarantine (testId, reason) -> quarantined |> Map.add testId reason
     | QuarantineAction.Release testId -> quarantined |> Map.remove testId
     | QuarantineAction.NoChange -> quarantined
+
+  /// Fold every result of a batch through its classification, from the history the batch just updated.
+  let evaluateBatch
+    (results: TestRunResult list)
+    (flakyHistory: Map<TestId, ResultWindow>)
+    (lastResults: Map<TestId, TestRunResult>)
+    (now: DateTimeOffset)
+    (quarantined: Map<TestId, QuarantineReason>)
+    : Map<TestId, QuarantineReason> =
+    results
+    |> List.map (fun r -> r.TestId)
+    |> List.distinct
+    |> List.fold
+      (fun q testId -> apply (evaluate testId (FlakyDetection.classifyFlakiness testId flakyHistory lastResults) q now) q)
+      quarantined
 
   /// Check if a test is currently quarantined.
   let isQuarantined
@@ -1740,6 +1771,10 @@ type LiveTestState = {
   DetectedProviders: ProviderDescription list
   AssemblyLoadErrors: AssemblyLoadError list
   FlakyHistory: Map<TestId, ResultWindow>
+  /// Bumped on every edit, save and hot reload. Each flaky sample records it (`ResultWindow.addAt`).
+  InputEpoch: InputEpoch
+  /// Tests left out of automatic runs for flakiness. Persisted beside `FlakyHistory`.
+  Quarantined: Map<TestId, QuarantineReason>
   /// Per-test packed coverage bitmaps from IL probe hits, keyed by TestId.
   /// All tests in the same batch share the same bitmap (conservative: any test might have hit any probe).
   TestCoverageBitmaps: Map<TestId, CoverageBitmap>
@@ -1880,6 +1915,8 @@ module LiveTestState =
     DetectedProviders = []
     AssemblyLoadErrors = []
     FlakyHistory = Map.empty
+    InputEpoch = InputEpoch 0L
+    Quarantined = Map.empty
     TestCoverageBitmaps = Map.empty
     Cached = CachedViews.empty
     LastDiscoveryTime = System.DateTimeOffset.MinValue
@@ -1887,6 +1924,19 @@ module LiveTestState =
     SessionDiscovery = Map.empty
     LastDecision = None
   }
+
+  /// The code the tests run against changed: a run in flight is now judging old code, and a flake sample from here
+  /// on is a new epoch.
+  let noteEdit (state: LiveTestState) =
+    let (InputEpoch epoch) = state.InputEpoch
+    { state with
+        InputEpoch = InputEpoch (epoch + 1L)
+        RunPhases = state.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
+
+  /// A hot reload changed the code without a keystroke: a new epoch, and the phase is left to the run.
+  let noteReload (state: LiveTestState) =
+    let (InputEpoch epoch) = state.InputEpoch
+    { state with InputEpoch = InputEpoch (epoch + 1L) }
 
   let statusEntryIndex (state: LiveTestState) : Map<TestId, TestStatusEntry> =
     match Map.isEmpty state.StatusIndex.Index, Array.isEmpty state.StatusIndex.Entries with
@@ -2042,6 +2092,7 @@ module StatusToGutter =
     | TestRunStatus.Skipped _ -> GutterIcon.TestSkipped
     | TestRunStatus.Stale -> GutterIcon.TestDiscovered
     | TestRunStatus.PolicyDisabled -> GutterIcon.TestSkipped
+    | TestRunStatus.Quarantined _ -> GutterIcon.TestFlaky
 
   let fromCoverageStatus (status: CoverageStatus) : GutterIcon =
     match status with
@@ -2066,6 +2117,7 @@ module StatusToGutter =
     | TestRunStatus.Skipped r -> sprintf "%s (skipped: %s)" testName r
     | TestRunStatus.Stale -> sprintf "%s (stale \u2014 needs re-run)" testName
     | TestRunStatus.PolicyDisabled -> sprintf "%s (disabled by policy)" testName
+    | TestRunStatus.Quarantined reason -> sprintf "%s (quarantined, %s)" testName reason
 
   let toAnnotation (line: int) (testName: string) (status: TestRunStatus) : LineAnnotation =
     { Line = line; Icon = fromTestStatus status; Tooltip = tooltip testName status }
@@ -2084,6 +2136,7 @@ module TestSummary =
     | TestRunStatus.Failed _ -> Bucket.Failed
     | TestRunStatus.Stale
     | TestRunStatus.Detected
+    | TestRunStatus.Quarantined _
     | TestRunStatus.Skipped _ -> Bucket.Stale
     | TestRunStatus.Running
     | TestRunStatus.Queued -> Bucket.Running
@@ -2169,75 +2222,6 @@ module TestSummary =
       sprintf "Tests: %d/%d \u25CF%d" s.Passed s.Total s.Stale
     | _ ->
       sprintf "Tests: %d/%d \u2713" s.Passed s.Total
-
-// --- Coverage Summary for per-session bitmap visualization ---
-
-type CoverageSummary = {
-  TotalProbes: int
-  CoveredProbes: int
-  CoveragePercent: float
-  /// Downsampled density array — each element is coverage ratio in that chunk
-  DensityStrip: float array
-}
-
-module CoverageSummary =
-  let empty = { TotalProbes = 0; CoveredProbes = 0; CoveragePercent = 0.0; DensityStrip = [||] }
-
-  /// Build a coverage summary from bitmaps belonging to a session.
-  /// Merges all bitmaps via OR to get total coverage, then downsamples for rendering.
-  let fromBitmaps (stripWidth: int) (bitmaps: CoverageBitmap seq) : CoverageSummary =
-    let bmArray = bitmaps |> Seq.filter (fun bm -> bm.Count > 0) |> Seq.toArray
-    match bmArray.Length with
-    | 0 -> empty
-    | _ ->
-      let first = bmArray.[0]
-      let compatible = bmArray |> Array.filter (fun bm -> bm.Count = first.Count)
-      match compatible.Length with
-      | 0 -> empty
-      | _ ->
-        let combined =
-          compatible
-          |> Array.reduce (fun acc bm ->
-            let bits = Array.init acc.Bits.Length (fun i -> acc.Bits.[i] ||| bm.Bits.[i])
-            { Bits = bits; Count = acc.Count })
-        let totalProbes = combined.Count
-        let coveredProbes = CoverageBitmap.popCount combined
-        let coveragePercent =
-          match totalProbes with
-          | 0 -> 0.0
-          | n -> float coveredProbes / float n * 100.0
-        let bools = CoverageBitmap.toBoolArray combined
-        let chunkSize = max 1 (totalProbes / stripWidth)
-        let strip =
-          [| for i in 0 .. stripWidth - 1 do
-               let startIdx = i * chunkSize
-               let endIdx = min (startIdx + chunkSize) totalProbes
-               match endIdx > startIdx with
-               | true ->
-                 let chunk = bools.[startIdx .. endIdx - 1]
-                 let hits = chunk |> Array.filter id |> Array.length
-                 float hits / float chunk.Length
-               | false -> 0.0 |]
-        { TotalProbes = totalProbes
-          CoveredProbes = coveredProbes
-          CoveragePercent = coveragePercent
-          DensityStrip = strip }
-
-  /// Render compact text strip for TUI: █▓▒░· per chunk + percentage
-  let toTextStrip (summary: CoverageSummary) : string =
-    match summary.TotalProbes with
-    | 0 -> ""
-    | _ ->
-      let blocks =
-        summary.DensityStrip
-        |> Array.map (fun d ->
-          match d with
-          | x when x >= 0.75 -> '\u2588'
-          | x when x >= 0.50 -> '\u2593'
-          | x when x >= 0.25 -> '\u2592'
-          | x when x > 0.0 -> '\u2591'
-          | _ -> '\u00B7')
-      sprintf "%s %.0f%%" (System.String(blocks)) summary.CoveragePercent
 
 // --- Test Treemap (WizTree-style: area = duration) ---
 
@@ -2484,8 +2468,9 @@ module LiveTesting =
     (category: TestCategory)
     (testId: TestId)
     : TestRunStatus =
-    match Map.tryFind category state.RunPolicies with
-    | Some RunPolicy.Disabled -> TestRunStatus.PolicyDisabled
+    match Map.tryFind category state.RunPolicies, Map.tryFind testId state.Quarantined with
+    | Some RunPolicy.Disabled, _ -> TestRunStatus.PolicyDisabled
+    | _, Some reason -> TestRunStatus.Quarantined (QuarantineReason.describe reason)
     | _ ->
       let resultStatus =
         match Map.tryFind testId state.LastResults with

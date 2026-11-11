@@ -28,6 +28,10 @@ module TestTreemap =
       | TestRunStatus.Skipped _ ->
         Some { DisplayName = e.DisplayName; FullName = e.FullName
                DurationMs = SageFs.Timeouts.notRun.TotalMilliseconds; Status = TreemapStatus.Skipped }
+      // Quarantined keeps a cell, never its last verdict's colour.
+      | TestRunStatus.Quarantined _ ->
+        Some { DisplayName = e.DisplayName; FullName = e.FullName
+               DurationMs = SageFs.Timeouts.notRun.TotalMilliseconds; Status = TreemapStatus.Other }
       | _ -> None)
     |> Array.sortByDescending (fun e -> e.DurationMs)
 

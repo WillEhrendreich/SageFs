@@ -93,7 +93,7 @@ let debugRunRecordTests =
       cycle.TestState.FlakyHistory |> Expect.equal "the flake window is untouched" before.TestState.FlakyHistory
       cycle.TestState.DiscoveryGeneration |> Expect.equal "not a discovery" before.TestState.DiscoveryGeneration
       after.PendingRunSummary |> Expect.equal "no 'N passed' line will appear later under an unrelated run" model.PendingRunSummary
-      after.QuarantinedTests |> Expect.equal "no quarantine decision" model.QuarantinedTests
+      cycle.TestState.Quarantined |> Expect.equal "no quarantine decision" before.TestState.Quarantined
 
     testCase "WHY - the row shows no duration for a debug verdict, because the host's clock ran through every breakpoint" <| fun _ ->
       let model, sid = started ()

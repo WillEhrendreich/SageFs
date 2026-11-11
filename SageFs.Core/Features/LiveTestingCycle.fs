@@ -747,7 +747,7 @@ module LiveTestCycleState =
         let ts =
           match triviaOnlyChange with
           | true -> s.TestState
-          | false -> { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
+          | false -> LiveTestState.noteEdit s.TestState
         { s with
             Debounce = db
             TestState = ts
@@ -760,7 +760,7 @@ module LiveTestCycleState =
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestCycleState) =
     let db = s.Debounce |> TestCycleDebounce.onFileSave filePath now
-    let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
+    let ts = LiveTestState.noteEdit s.TestState
     { s with
         Debounce = db
         TestState = ts
@@ -789,7 +789,7 @@ module LiveTestCycleState =
                   debounce.TreeSitter
                   |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now }
         let analysisIdentity = AnalysisIdentity.ofContent content
-        let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
+        let ts = LiveTestState.noteEdit s.TestState
         { s with
             Debounce = db
             TestState = ts

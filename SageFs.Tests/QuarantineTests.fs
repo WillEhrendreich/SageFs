@@ -62,18 +62,6 @@ let evaluateTests = testList "QuarantineLogic.evaluate" [
     QuarantineLogic.evaluate (tid "t1") FlakyClassification.Insufficient Map.empty now
     |> Expect.equal "insufficient no change" QuarantineAction.NoChange
   }
-
-  test "ManualQuarantine not released by Stable" {
-    let existing = Map.ofList [ tid "t1", ManualQuarantine ("CI flaky", now) ]
-    QuarantineLogic.evaluate (tid "t1") FlakyClassification.Stable existing now
-    |> Expect.equal "manual not auto-released" QuarantineAction.NoChange
-  }
-
-  test "ManualQuarantine not released by Environmental" {
-    let existing = Map.ofList [ tid "t1", ManualQuarantine ("CI flaky", now) ]
-    QuarantineLogic.evaluate (tid "t1") (FlakyClassification.Environmental 5) existing now
-    |> Expect.equal "manual stays" QuarantineAction.NoChange
-  }
 ]
 
 let applyTests = testList "QuarantineLogic.apply" [
@@ -183,19 +171,6 @@ let propertyTests = testList "Quarantine properties" [
     QuarantineLogic.isQuarantined testId q = (q |> Map.containsKey testId)
   )
 
-  testProperty "ManualQuarantine survives any classification" (fun (flips: PositiveInt) ->
-    let testId = tid "manual"
-    let q = Map.ofList [ testId, ManualQuarantine ("reason", now) ]
-    let classifications = [
-      FlakyClassification.Stable
-      FlakyClassification.Environmental flips.Get
-      FlakyClassification.PropertyCounterexample "(0)"
-      FlakyClassification.Insufficient
-    ]
-    classifications |> List.forall (fun c ->
-      QuarantineLogic.evaluate testId c q now = QuarantineAction.NoChange)
-  )
-
   testProperty "Environmental quarantine released only by Stable" (fun (flips: PositiveInt) ->
     let testId = tid "env"
     let q = Map.ofList [ testId, EnvironmentalFlaky (flips.Get, now) ]
@@ -213,66 +188,93 @@ let propertyTests = testList "Quarantine properties" [
 ]
 
 // --- Production wiring ---
-// QuarantineLogic.evaluate/apply/isQuarantined/filterQuarantined were complete,
-// correct, and property-tested above with ZERO non-test callers: a test could
-// be classified flaky and the product would never demote it. This drives the
-// REAL fold (SageFsUpdate.update, via applyBufferedTestResults's
-// recordResult fold) and the REAL affected-test selection path
+// These drive the real fold (SageFsUpdate.update: applyBufferedTestResults records each sample with the cycle's
+// input epoch and decides the quarantine before the rows are computed) and the real selection path
 // (TuiEvent.AffectedTestsComputed), not QuarantineLogic directly.
+
+let private wiredId = TestId.create "Ns.Tests.wired" TestFramework.Expecto
+let private wiredCase : TestCase = { mkTestCase "wired" with Id = wiredId; Framework = TestFramework.Expecto }
+
+let private activeModel () =
+  let b = SageFsModel.initial ()
+  { b with
+      LiveTesting =
+        { b.LiveTesting with
+            TestState = { b.LiveTesting.TestState with Activation = LiveTestingActivation.Active; DiscoveredTests = [| wiredCase |] } } }
+
+let private ran (passed: bool) (model: SageFsModel) =
+  let result =
+    match passed with
+    | true -> TestResult.Passed FixtureDurations.usualResult
+    | false -> TestResult.Failed (TestFailure.AssertionFailed "no", FixtureDurations.usualResult)
+  let r : TestRunResult = { TestId = wiredId; TestName = wiredCase.FullName; Result = result; Timestamp = now; Output = None }
+  SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, [| r |]))) model |> fst
+
+let private edited (n: int) (model: SageFsModel) =
+  SageFsUpdate.update (SageFsMsg.BufferContentChanged (None, "Wired.fs", sprintf "let x = %d" n)) model |> fst
+
+let private rowOf (model: SageFsModel) =
+  LiveTestState.tryFindStatusEntry wiredId model.LiveTesting.TestState |> Option.map (fun e -> e.Status)
+
+let private isQuarantined (model: SageFsModel) = model.LiveTesting.TestState.Quarantined |> Map.containsKey wiredId
+
+/// One step of a session's life: an edit, or a run that passed (true) or failed (false).
+type WiredStep =
+  | Edit
+  | Ran of passed: bool
+
+let private play (steps: WiredStep list) =
+  steps
+  |> List.mapi (fun i step -> i, step)
+  |> List.scan
+    (fun model (i, step) ->
+      match step with
+      | Edit -> edited i model
+      | Ran passed -> ran passed model)
+    (activeModel ())
+
 let wiredIntoProductionTests = testList "QuarantineLogic wired into production" [
+  test "WHY — red then green across edits is not quarantined, because that is the TDD loop the product sells" {
+    let model = activeModel () |> ran true |> edited 1 |> ran false |> edited 2 |> ran true
+    model |> isQuarantined |> Expect.isFalse "pass, edit, fail, edit, pass is two verdicts, not a flake"
+    rowOf model |> Expect.equal "the row shows the fix" (Some (TestRunStatus.Passed FixtureDurations.usualResult))
+  }
+
+  test "WHY — a test that flips with no edit between runs is quarantined, and its row never shows its last green" {
+    let model = activeModel () |> ran true |> ran false |> ran true
+    model |> isQuarantined |> Expect.isTrue "two flips under one epoch is a flake"
+    match rowOf model with
+    | Some (TestRunStatus.Quarantined _) -> ()
+    | other -> failtestf "expected a Quarantined row, was %A" other
+    let summary = TestSummary.fromStatuses LiveTestingActivation.Active [| (rowOf model).Value |]
+    summary.Passed |> Expect.equal "a quarantined test is not counted as passing" 0
+  }
+
   test "a quarantined test is excluded from the next selection" {
-    let flakyId = tid "FlakyTest"
-    let flakyCase = mkTestCase "FlakyTest"
-
-    // Seed FlakyHistory with two prior outcomes (Pass, Fail) so the batch's
-    // next result completes a 3-sample window with 2 flips (Pass-Fail,
-    // Fail-Pass) — enough to classify Environmental per FlakyDefaults
-    // (minSamples=3, flipThreshold=2), which QuarantineLogic.evaluate
-    // quarantines.
-    let seededHistory =
-      ResultWindow.create FlakyDefaults.windowSize
-      |> ResultWindow.add TestOutcome.Pass
-      |> ResultWindow.add TestOutcome.Fail
-
-    let baseModel = SageFsModel.initial ()
-    let seededState =
-      { baseModel.LiveTesting.TestState with
-          Activation = LiveTestingActivation.Active
-          DiscoveredTests = [| flakyCase |]
-          FlakyHistory = Map.ofList [ flakyId, seededHistory ] }
-    let model =
-      { baseModel with
-          LiveTesting = { baseModel.LiveTesting with TestState = seededState } }
-
-    let batchResult : TestRunResult =
-      { TestId = flakyId
-        TestName = "FlakyTest"
-        Result = TestResult.Passed FixtureDurations.usualResult
-        Timestamp = now
-        Output = None }
-
-    // act: run the production result-merge path, then the production
-    // affected-test selection path.
-    let modelAfterResult, _ =
-      SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, [| batchResult |])))
-        model
+    let quarantined = activeModel () |> ran true |> ran false |> ran true
     let _, effects =
-      SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.AffectedTestsComputed ([| flakyId |], [])))
-        modelAfterResult
-
-    let selected =
-      effects
-      |> List.collect (function
-        | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) ->
-          req.Tests |> Array.toList |> List.map (fun tc -> tc.Id)
-        | _ -> [])
-
-    selected
-    |> List.contains flakyId
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.AffectedTestsComputed ([| wiredId |], []))) quarantined
+    effects
+    |> List.collect (function
+      | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) -> req.Tests |> Array.toList |> List.map (fun tc -> tc.Id)
+      | _ -> [])
+    |> List.contains wiredId
     |> Expect.isFalse "a quarantined test must not be selected"
   }
+
+  testProperty "for any sequence of edits and results, a quarantined test is never counted as passing" (fun (steps: WiredStep list) ->
+    play steps
+    |> List.forall (fun model ->
+      match isQuarantined model, rowOf model with
+      | true, Some (TestRunStatus.Quarantined _) -> true
+      | true, _ -> false
+      | false, _ -> true))
+
+  testProperty "a run between every two edits never quarantines" (fun (verdicts: bool list) ->
+    verdicts
+    |> List.collect (fun passed -> [ Edit; Ran passed ])
+    |> play
+    |> List.forall (isQuarantined >> not))
 ]
 
 [<Tests>]

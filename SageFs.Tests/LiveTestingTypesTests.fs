@@ -298,35 +298,45 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
   testList "FlakyDetection" [
     test "outcomeOf Pass is Pass" {
       FlakyDetection.outcomeOf (TestResult.Passed FixtureDurations.usualResult)
-      |> Expect.equal "should be Pass" TestOutcome.Pass
+      |> Expect.equal "should be Pass" (Some TestOutcome.Pass)
     }
     test "outcomeOf Failed is Fail" {
       FlakyDetection.outcomeOf (TestResult.Failed(TestFailure.AssertionFailed "x", TimeSpan.Zero))
-      |> Expect.equal "should be Fail" TestOutcome.Fail
+      |> Expect.equal "should be Fail" (Some TestOutcome.Fail)
     }
-    test "outcomeOf Skipped maps to Pass" {
+    test "WHY — a skipped test is no flake sample, because a skip says nothing about whether the code works" {
       FlakyDetection.outcomeOf (TestResult.Skipped "reason")
-      |> Expect.equal "skipped maps to Pass" TestOutcome.Pass
+      |> Expect.isNone "a skip is not a pass"
     }
-    test "outcomeOf NotRun maps to Pass" {
+    test "WHY — a test no runner knew is no flake sample, because it did not run" {
       FlakyDetection.outcomeOf TestResult.NotRun
-      |> Expect.equal "not run maps to Pass" TestOutcome.Pass
+      |> Expect.isNone "not run is not a pass"
     }
     test "recordResult adds to empty history" {
       let tid = TestId.create "test" TestFramework.XUnit
-      let history = FlakyDetection.recordResult tid (TestResult.Passed TimeSpan.Zero) Map.empty
+      let history = FlakyDetection.recordResult (InputEpoch 0L) tid (TestResult.Passed TimeSpan.Zero) Map.empty
       history |> Map.containsKey tid |> Expect.isTrue "should have entry"
     }
     test "assessTest on recorded history" {
       let tid = TestId.create "test" TestFramework.XUnit
       let history =
         Map.empty
-        |> FlakyDetection.recordResult tid (TestResult.Passed TimeSpan.Zero)
-        |> FlakyDetection.recordResult tid (TestResult.Failed(TestFailure.AssertionFailed "x", TimeSpan.Zero))
-        |> FlakyDetection.recordResult tid (TestResult.Passed TimeSpan.Zero)
+        |> FlakyDetection.recordResult (InputEpoch 0L) tid (TestResult.Passed TimeSpan.Zero)
+        |> FlakyDetection.recordResult (InputEpoch 0L) tid (TestResult.Failed(TestFailure.AssertionFailed "x", TimeSpan.Zero))
+        |> FlakyDetection.recordResult (InputEpoch 0L) tid (TestResult.Passed TimeSpan.Zero)
       FlakyDetection.assessTest tid history
       |> fun s -> match s with TestStability.Flaky _ -> true | _ -> false
       |> Expect.isTrue "should be Flaky"
+    }
+    test "WHY — red then green with an edit between is the edit's verdict, so it is not flaky" {
+      let tid = TestId.create "test" TestFramework.XUnit
+      let history =
+        Map.empty
+        |> FlakyDetection.recordResult (InputEpoch 1L) tid (TestResult.Passed TimeSpan.Zero)
+        |> FlakyDetection.recordResult (InputEpoch 2L) tid (TestResult.Failed(TestFailure.AssertionFailed "x", TimeSpan.Zero))
+        |> FlakyDetection.recordResult (InputEpoch 3L) tid (TestResult.Passed TimeSpan.Zero)
+      FlakyDetection.assessTest tid history
+      |> Expect.equal "three samples, three epochs, no flip" TestStability.Stable
     }
   ]
 

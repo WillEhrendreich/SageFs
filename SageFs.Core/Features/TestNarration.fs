@@ -16,6 +16,7 @@ module TestNarration =
     | TestRunStatus.Running -> "Running"
     | TestRunStatus.Stale -> "Stale"
     | TestRunStatus.PolicyDisabled -> "Disabled by policy"
+    | TestRunStatus.Quarantined reason -> sprintf "Quarantined: %s" reason
     | TestRunStatus.Skipped reason -> sprintf "Skipped: %s" reason
     | TestRunStatus.Passed dur ->
       sprintf "Passed in %.0fms" dur.TotalMilliseconds

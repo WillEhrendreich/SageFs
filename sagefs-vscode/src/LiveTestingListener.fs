@@ -141,6 +141,8 @@ let parseTestResult (entry: obj) : VscTestResult =
     | "Running" -> VscTestOutcome.Running
     | "Stale" -> VscTestOutcome.Stale
     | "PolicyDisabled" -> VscTestOutcome.PolicyDisabled
+    | "Quarantined" ->
+      fields |> Option.bind Array.tryHead |> Option.bind tryCastString |> Option.defaultValue "flaky" |> VscTestOutcome.Quarantined
     | "Detected"
     | "Queued" -> VscTestOutcome.NotYetRun
     | _ -> VscTestOutcome.Skipped "unknown status"

@@ -320,6 +320,7 @@ let debugOfferFor (outcome: VscTestOutcome) : DebugOffer =
   | VscTestOutcome.Running
   | VscTestOutcome.Stale
   | VscTestOutcome.PolicyDisabled
+  | VscTestOutcome.Quarantined _
   | VscTestOutcome.NotYetRun -> DebugOffer.NotOffered
 
 /// The command the Debug lens, the hover link and the Test Explorer profile all run.
