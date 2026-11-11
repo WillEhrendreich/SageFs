@@ -91,13 +91,13 @@ let tests =
         "sections"
         [ "All 9 tests passed"
           ""
-          "Last run: conservative fallback rebuild (9 selected)"
+          "Last run: conservative fallback, every discovered test (9 selected)"
           "Why: " + reason ]
 
     testCase "WHY — statusBarView — a decision with no reason has no empty Why line" <| fun _ ->
       let v = view { summary "settled" "All 9 passed" "All 9 tests passed" with Passed = 9; LastDecision = Some (decision "") }
       v.Tooltip.Split('\n') |> Array.toList
-      |> Expect.equal "no why" [ "All 9 tests passed"; ""; "Last run: conservative fallback rebuild (9 selected)" ]
+      |> Expect.equal "no why" [ "All 9 tests passed"; ""; "Last run: conservative fallback, every discovered test (9 selected)" ]
 
     testCase "WHY — statusBarView — no decision means the tooltip is just the headline" <| fun _ ->
       (view { summary "settled" "All 9 passed" "All 9 tests passed" with Passed = 9 }).Tooltip
@@ -106,6 +106,11 @@ let tests =
     testCase "WHY — statusBarView — an older daemon without an activity keeps the count-based wording" <| fun _ ->
       let v = view { summary "" "" "" with Total = 0; DiscoveryState = "discovering" }
       v.Text |> Expect.equal "legacy discovering" "$(sync~spin) Discovering tests..."
+
+    testCase "WHY — describeSelection — line narrowing has its own words, because it is the precision the daemon is proudest of" <| fun _ ->
+      { decision "" with Precision = VscSelectionPrecision.LineCoverageNarrowing; SelectedTests = [| "a"; "b" |] }
+      |> VscLiveTestingDecision.describeSelection
+      |> Expect.equal "line narrowing" "only the tests that run the changed lines (2 selected)"
   ]
 
 Expecto.Tests.runTestsWithCLIArgs [] [||] tests

@@ -52,6 +52,7 @@ let parseSelectionPrecision (value: string) =
   match value with
   | "exact_dependency_match" -> Some VscSelectionPrecision.ExactDependencyMatch
   | "coverage_approximation" -> Some VscSelectionPrecision.CoverageApproximation
+  | "line_coverage_narrowing" -> Some VscSelectionPrecision.LineCoverageNarrowing
   | "conservative_fallback" -> Some VscSelectionPrecision.ConservativeFallback
   | "no_impacted_tests" -> Some VscSelectionPrecision.NoImpactedTests
   | "suppressed_by_policy" -> Some VscSelectionPrecision.SuppressedByPolicy

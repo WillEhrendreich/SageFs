@@ -2009,7 +2009,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     LiveTestCycleState.liveTestingStatusBar state
     |> Expect.stringContains
       "status bar should surface fallback explanation so quiet ambient work is interpretable"
-      "why: fallback rebuild (2 selected)"
+      "why: fallback, every test (2 selected)"
 
   testCase "live testing status bar explains when policy intentionally deferred ambient work" <| fun _ ->
     let decision =

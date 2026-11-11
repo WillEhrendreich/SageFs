@@ -458,3 +458,20 @@ let liveTestingWireValueParity = testList "Live-testing wire values reach both e
   }
 ]
 
+[<Tests>]
+let selectionPrecisionParity = testList "Every selection precision the daemon can send reaches VS Code" [
+  test "VS Code parses every SelectionPrecision wire value the daemon writes" {
+    let sent =
+      Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFs.Features.LiveTesting.SelectionPrecision>)
+      |> Array.map (fun c ->
+        Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(c, [||]) :?> SageFs.Features.LiveTesting.SelectionPrecision
+        |> SageFs.Features.LiveTesting.LiveTestingDecision.precisionToWireValue)
+      |> Set.ofArray
+    let source = File.ReadAllText vscodeListenerSourcePath
+    let startIdx = source.IndexOf "let parseSelectionPrecision"
+    let block = source.Substring(startIdx, source.IndexOf("let parseFreshnessTrust", startIdx) - startIdx)
+    let parsed = Regex.Matches(block, "(?m)^\\s*\\|\\s*\"([a-z_]+)\"") |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.[1].Value) |> Set.ofSeq
+    Set.difference sent parsed
+    |> Expect.isEmpty "a precision VS Code cannot parse makes the whole decision None, and the tooltip says nothing"
+  }
+]

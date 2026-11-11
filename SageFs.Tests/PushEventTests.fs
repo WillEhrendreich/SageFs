@@ -127,7 +127,7 @@ let pushEventFormatForLlmTests = testList "PushEvent.formatForLlm" [
         [||]
         "fallback"
     PushEvent.formatForLlm (PushEvent.TestSummaryChanged (s, Some decision))
-    |> Expect.stringContains "last decision hint should be surfaced" "fallback rebuild")
+    |> Expect.stringContains "last decision hint should be surfaced, and a fallback that evaluates does not say rebuild" "why: fallback, every test")
   testCase "diagnosis ready shows severity and counts" (fun () ->
     let tid = SageFs.Features.LiveTesting.TestId.create "some.test" SageFs.Features.LiveTesting.TestFramework.Expecto
     let report =

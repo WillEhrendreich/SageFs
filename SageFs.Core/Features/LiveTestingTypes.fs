@@ -1169,7 +1169,7 @@ module LiveTestingDecision =
     | SelectionPrecision.LineCoverageNarrowing ->
       sprintf "why: line coverage (%d selected)" decision.Explanation.SelectedTests.Length
     | SelectionPrecision.ConservativeFallback ->
-      sprintf "why: fallback rebuild (%d selected)" decision.Explanation.SelectedTests.Length
+      sprintf "why: fallback, every test (%d selected)" decision.Explanation.SelectedTests.Length
     | SelectionPrecision.SuppressedByPolicy ->
       sprintf "why: deferred by policy (%d)" decision.Explanation.DeferredTests.Length
     | SelectionPrecision.NoImpactedTests ->

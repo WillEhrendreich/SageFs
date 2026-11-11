@@ -149,6 +149,7 @@ type VscLiveTestEvent =
 type VscSelectionPrecision =
   | ExactDependencyMatch
   | CoverageApproximation
+  | LineCoverageNarrowing
   | ConservativeFallback
   | NoImpactedTests
   | SuppressedByPolicy
@@ -214,8 +215,10 @@ module VscLiveTestingDecision =
       sprintf "exact dependency match (%d selected)" decision.SelectedTests.Length
     | VscSelectionPrecision.CoverageApproximation ->
       sprintf "coverage widened the rerun (%d selected)" decision.SelectedTests.Length
+    | VscSelectionPrecision.LineCoverageNarrowing ->
+      sprintf "only the tests that run the changed lines (%d selected)" decision.SelectedTests.Length
     | VscSelectionPrecision.ConservativeFallback ->
-      sprintf "conservative fallback rebuild (%d selected)" decision.SelectedTests.Length
+      sprintf "conservative fallback, every discovered test (%d selected)" decision.SelectedTests.Length
     | VscSelectionPrecision.NoImpactedTests ->
       "no impacted tests were identified"
     | VscSelectionPrecision.SuppressedByPolicy ->
