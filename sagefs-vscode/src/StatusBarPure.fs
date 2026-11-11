@@ -95,3 +95,10 @@ let noSessionView (supervised: bool) (restartCount: int) : StatusBarView =
 /// True when a string still carries a codicon token — used by the contract
 /// test to pin that `Tooltip` never does, for every view this module builds.
 let containsCodiconToken (s: string) : bool = s.Contains "$("
+
+/// What clicking the eval-performance status item does. The item turns warning and error coloured
+/// on slow evals and had no command at all; the eval timeline it summarises is on the dashboard.
+let evalPerfCommand : string = "sagefs.openDashboard"
+
+/// The last line of the eval-performance tooltip. Plain words, no codicon token.
+let evalPerfClickHint : string = "Click to open the dashboard."

@@ -769,7 +769,8 @@ let updateEvalPerfBar (stats: VscTimelineStats) =
           stats.P50Ms |> Option.map (sprintf "P50: %.1f ms") |> Option.defaultValue ""
           stats.P95Ms |> Option.map (sprintf "P95: %.1f ms") |> Option.defaultValue ""
           stats.P99Ms |> Option.map (sprintf "P99: %.1f ms") |> Option.defaultValue ""
-          stats.MeanMs |> Option.map (sprintf "Mean: %.1f ms") |> Option.defaultValue "" ]
+          stats.MeanMs |> Option.map (sprintf "Mean: %.1f ms") |> Option.defaultValue ""
+          StatusBarPure.evalPerfClickHint ]
         |> List.filter (fun s -> s <> "")
         |> String.concat "\n")
       sb.show ()
@@ -2650,7 +2651,8 @@ let activate (context: ExtensionContext) =
   context.subscriptions.Add (tsb :> obj :?> Disposable)
 
   let esb = Window.createStatusBarItem StatusBarAlignment.Left 48.
-  esb.tooltip <- Some "SageFs eval performance"
+  esb.tooltip <- Some (sprintf "SageFs eval performance. %s" StatusBarPure.evalPerfClickHint)
+  esb.command <- Some StatusBarPure.evalPerfCommand
   evalPerfStatusBar <- Some esb
   context.subscriptions.Add (esb :> obj :?> Disposable)
 

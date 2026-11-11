@@ -99,6 +99,25 @@ let tests =
       (sessionView (input "SageTech" "Live Testing" 0 false 0 5)).Tooltip
       |> Expect.equal "order" "SageFs: SageTech [Live Testing] — session c090e3e7 — 5 session(s) — click for session menu"
 
+    // WHY — the eval-performance item turns warning/error coloured above 100/500 ms and did nothing when
+    // clicked: it had a tooltip and no command (roast-5 finding 9). It now opens the dashboard, where the
+    // eval timeline lives, and the tooltip says so.
+    testCase "WHY - the eval-performance item's click command is a command package.json contributes" <| fun _ ->
+      let contributed =
+        System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "package.json")))
+          .RootElement.GetProperty("contributes").GetProperty("commands").EnumerateArray()
+        |> Seq.map (fun c -> c.GetProperty("command").GetString())
+        |> Set.ofSeq
+      contributed |> Expect.contains "contributed" evalPerfCommand
+
+    testCase "WHY - the eval-performance tooltip tells the person the item is clickable, codicon-free" <| fun _ ->
+      evalPerfClickHint.ToLowerInvariant() |> Expect.stringContains "says click" "click"
+      Expect.isFalse "no $( token" (containsCodiconToken evalPerfClickHint)
+
+    testCase "WHY - the eval-performance command is the one Extension.fs actually assigns" <| fun _ ->
+      System.IO.File.ReadAllText(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "src", "Extension.fs"))
+      |> Expect.stringContains "assigned from the pure constant" "esb.command <- Some StatusBarPure.evalPerfCommand"
+
     testCase "WHY - no verdict on the wire renders the historical bolt, not an invented warning" <| fun _ ->
       (sessionView { input "SageTech" "REPL" 0 false 0 1 with Health = SessionHealth.Unknown }).Text
       |> Expect.equal "unchanged for an older daemon" "$(zap) SageFs: SageTech [REPL]"
