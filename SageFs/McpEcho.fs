@@ -34,15 +34,13 @@ module EchoFailureText =
   /// The next step when the text names none.
   let noNextStep = "Fix what the message names, then call the tool again"
 
-  let startsWith (p: string) (text: string) = text.StartsWith(p, System.StringComparison.Ordinal)
-
   /// Which failure shape a reply has, if any. A JSON reply is an answer whatever it quotes, and an arrow counts
   /// only on the reply's last line, where `describeForAgent` puts it.
   let ofText (text: string) : EchoFailureText option =
     match text with
-    | t when startsWith (prefix EchoFailureText.ErrorLabel) t -> Some EchoFailureText.ErrorLabel
-    | t when startsWith (prefix EchoFailureText.ErrorSentence) t -> Some EchoFailureText.ErrorSentence
-    | t when startsWith "{" (t.TrimStart()) || startsWith "[" (t.TrimStart()) -> None
+    | t when t.StartsWith(prefix EchoFailureText.ErrorLabel, System.StringComparison.Ordinal) -> Some EchoFailureText.ErrorLabel
+    | t when t.StartsWith(prefix EchoFailureText.ErrorSentence, System.StringComparison.Ordinal) -> Some EchoFailureText.ErrorSentence
+    | t when t.TrimStart().StartsWith('{') || t.TrimStart().StartsWith('[') -> None
     | t ->
       let lastLine = t.TrimEnd().Split('\n') |> Array.last
       match lastLine.Contains(nextMarker, System.StringComparison.Ordinal) with

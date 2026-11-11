@@ -616,10 +616,14 @@ type DeltaChain private (state: ChainState) =
         | _ -> raise (RudeCauseRaised (RudeCause.MethodRemoved (next.TypeKey(m.GetDeclaringType()), nextReader.GetString m.Name)))
       | 0x04 ->
         let text = next.Describe(MetadataTokens.EntityHandle token)
-        match state.Index.Field text with
-        | FieldLookup.Found mapped -> mapped
-        | FieldLookup.Ambiguous (typeName, candidates) -> raise (RudeCauseRaised (RudeCause.FieldNameAmbiguous (typeName, candidates)))
-        | FieldLookup.Missing -> raise (RudeCauseRaised (RudeCause.FieldsChanged text))
+        let resolved =
+          match state.Index.Field text with
+          | FieldLookup.Found mapped -> Result.Ok mapped
+          | FieldLookup.Ambiguous (typeName, candidates) -> Result.Error (RudeCause.FieldNameAmbiguous (typeName, candidates))
+          | FieldLookup.Missing -> Result.Error (RudeCause.FieldsChanged text)
+        match resolved with
+        | Result.Ok mapped -> mapped
+        | Result.Error cause -> raise (RudeCauseRaised cause)
       | 0x01 ->
         let text = next.Describe(MetadataTokens.EntityHandle token)
         match state.Index.TypeRef text, Map.tryFind text ledger.Value.TypeRefs with

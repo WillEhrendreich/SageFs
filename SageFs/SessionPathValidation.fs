@@ -71,6 +71,24 @@ module SessionPathValidation =
     not (System.String.IsNullOrWhiteSpace p)
     && (p.StartsWith(@"\\") || p.StartsWith("//"))
 
+  /// The directory the person's home is, as a type of its own: `noticeFor` takes this and a working directory, and two
+  /// bare strings there could be swapped without the compiler noticing.
+  type HomeDir = HomeDir of string
+
+  /// Pure apart from following links: whether `workingDir` is `home` itself. `home` is a parameter so a test names it.
+  let noticeFor (HomeDir home: HomeDir) (workingDir: string) : SessionRootNotice =
+    match System.String.IsNullOrWhiteSpace home || System.String.IsNullOrWhiteSpace workingDir with
+    | true -> SessionRootNotice.NoNotice
+    | false ->
+      let trimmed (p: string) = p.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar)
+      match System.String.Equals(trimmed (resolveRealSessionPath home), trimmed (resolveRealSessionPath workingDir), System.StringComparison.Ordinal) with
+      | true -> SessionRootNotice.HomeDirectory workingDir
+      | false -> SessionRootNotice.NoNotice
+
+  /// `noticeFor` against this user's home directory.
+  let noticeForUser (workingDir: string) : SessionRootNotice =
+    noticeFor (HomeDir (System.Environment.GetFolderPath System.Environment.SpecialFolder.UserProfile)) workingDir
+
   /// Validate a session-create request's `workingDirectory`/`projects` with
   /// the SAME canonicalization + containment discipline
   /// `DashboardTypes.resolveSessionProjects` already applies on the
@@ -90,20 +108,6 @@ module SessionPathValidation =
   /// unsafe path — a request that named an unsafe path should get a clear
   /// refusal, never a session quietly created somewhere else. Pure — no IO
   /// beyond path/filesystem probes — so it is unit-tested directly.
-  /// Pure apart from following links: whether `workingDir` is `home` itself. `home` is a parameter so a test names it.
-  let noticeFor (home: string) (workingDir: string) : SessionRootNotice =
-    match System.String.IsNullOrWhiteSpace home || System.String.IsNullOrWhiteSpace workingDir with
-    | true -> SessionRootNotice.NoNotice
-    | false ->
-      let trimmed (p: string) = p.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar)
-      match System.String.Equals(trimmed (resolveRealSessionPath home), trimmed (resolveRealSessionPath workingDir), System.StringComparison.Ordinal) with
-      | true -> SessionRootNotice.HomeDirectory workingDir
-      | false -> SessionRootNotice.NoNotice
-
-  /// `noticeFor` against this user's home directory.
-  let noticeForUser (workingDir: string) : SessionRootNotice =
-    noticeFor (System.Environment.GetFolderPath System.Environment.SpecialFolder.UserProfile) workingDir
-
   let validateSessionCreateRequest (workingDir: string) (projects: string list) : Result<unit, SageFsError> =
     match System.String.IsNullOrWhiteSpace workingDir with
     | true -> Error (SageFsError.UnsafeSessionPath(workingDir, "workingDirectory is required"))

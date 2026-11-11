@@ -126,11 +126,11 @@ module ValidateSessionCreateRequestTests =
 
       test "WHY - the home directory itself gets a warning, because its watchers cover every file the person has" {
         withTempDir (fun home ->
-          SageFs.SessionPathValidation.noticeFor home home
+          SageFs.SessionPathValidation.noticeFor (SageFs.SessionPathValidation.HomeDir home) home
           |> Expect.equal "home itself" (SageFs.SessionPathValidation.SessionRootNotice.HomeDirectory home)
           let project = Path.Combine(home, "proj")
           Directory.CreateDirectory project |> ignore
-          SageFs.SessionPathValidation.noticeFor home project
+          SageFs.SessionPathValidation.noticeFor (SageFs.SessionPathValidation.HomeDir home) project
           |> Expect.equal "a project under home is ordinary" SageFs.SessionPathValidation.SessionRootNotice.NoNotice
           SageFs.SessionPathValidation.SessionRootNotice.describe (SageFs.SessionPathValidation.SessionRootNotice.HomeDirectory home)
           |> Option.defaultValue ""
@@ -140,13 +140,13 @@ module ValidateSessionCreateRequestTests =
       test "WHY - a session created in the home directory says in its reply that it gets no file events, because the notice used to be computed and printed nowhere" {
         withTempDir (fun home ->
           let reply = "Session 'abcd1234' created."
-          let warned = SageFs.SessionPathValidation.SessionRootNotice.appendTo (SageFs.SessionPathValidation.noticeFor home home) reply
+          let warned = SageFs.SessionPathValidation.SessionRootNotice.appendTo (SageFs.SessionPathValidation.noticeFor (SageFs.SessionPathValidation.HomeDir home) home) reply
           warned |> Expect.stringStarts "the reply itself comes first" reply
           warned |> Expect.stringContains "names the directory" home
           warned |> Expect.stringContains "says what the person loses" "no file events"
           let project = Path.Combine(home, "proj")
           Directory.CreateDirectory project |> ignore
-          SageFs.SessionPathValidation.SessionRootNotice.appendTo (SageFs.SessionPathValidation.noticeFor home project) reply
+          SageFs.SessionPathValidation.SessionRootNotice.appendTo (SageFs.SessionPathValidation.noticeFor (SageFs.SessionPathValidation.HomeDir home) project) reply
           |> Expect.equal "a project directory gets the reply alone" reply)
       }
 

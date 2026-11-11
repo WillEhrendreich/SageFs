@@ -2318,9 +2318,8 @@ let run
   // the moment it is ready, without a manual enable toggle.
   let mutable onSessionReadyExtra : (WorkerProtocol.SessionId -> unit) =
     fun _ -> ()
-  // Assigned after elmRuntime exists (below): the manager says the session list changed, and the model refreshes it.
-  let mutable onSessionsChangedCallback : (unit -> unit) =
-    fun () -> ()
+  // The manager says the session list changed; the model subscribes below, once elmRuntime exists.
+  let sessionsChangedEvent = Event<unit>()
 
   // Create SessionManager — the single source of truth for all sessions
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
@@ -2328,7 +2327,7 @@ let run
     SessionManager.createMonitored cts.Token
       { SessionManagerCallbacks.silent with
           OnSessionProgressChanged = fun () -> stateChangedEvent.Trigger SessionProgress
-          OnSessionsChanged = fun () -> onSessionsChangedCallback ()
+          OnSessionsChanged = fun () -> sessionsChangedEvent.Trigger ()
           OnTestDiscovery = fun sid report -> onTestDiscoveryCallback sid report
           OnInstrumentationMaps = fun sid maps -> onInstrumentationMapsCallback sid maps
           OnSessionReady = fun sid -> stateChangedEvent.Trigger (SessionReady sid); onSessionReadyExtra sid
@@ -2456,7 +2455,7 @@ let run
         | true, pending -> appOutputPending.[sidStr] <- entry :: pending
         | false, _ -> appOutputPending.[sidStr] <- [ entry ])
   // The model's session list follows the manager's snapshot: each one whose sessions differ dispatches a ListSessions (the loop folds piled-up ones).
-  onSessionsChangedCallback <- fun () -> elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+  sessionsChangedEvent.Publish.Add (fun () -> elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
   // The cohort's integration session is driven by the landing gate alone; the manager never levels the REPL of such a session.
   whoDrivesCallback <-
     fun sid ->

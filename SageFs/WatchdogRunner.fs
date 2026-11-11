@@ -249,8 +249,8 @@ let run
   (ct: CancellationToken)
   : Threading.Tasks.Task<WatchdogEnd> = task {
   let mutable state = emptyState DateTime.UtcNow
-  // `return` inside a task's while loop does not leave the loop, so the loop reads this instead.
-  let mutable ended : WatchdogEnd option = None
+  // `return` inside a task's while loop does not leave the loop, so the loop reads this completion instead.
+  let ending = Threading.Tasks.TaskCompletionSource<WatchdogEnd>()
   let port = daemonPort daemonArgs
 
   let checkDaemonStatus (pid: int option) =
@@ -282,7 +282,7 @@ let run
   Log.info "[watchdog] Supervisor started (check interval: %gs, grace period: %gs)"
     config.CheckInterval.TotalSeconds config.GracePeriod.TotalSeconds
 
-  while not ct.IsCancellationRequested && Option.isNone ended do
+  while not ct.IsCancellationRequested && not ending.Task.IsCompleted do
     let status = checkDaemonStatus state.DaemonPid
     let checkedAt = DateTime.UtcNow
     let action, newState = decide config (jitterSeed workingDirectory port checkedAt) state status checkedAt
@@ -303,14 +303,16 @@ let run
     | Action.Wait -> ()
     | Action.GiveUp reason ->
       Log.error "[watchdog] Giving up: %s. Exiting with code %d so the service manager sees a failure." reason watchdogGaveUpExitCode
-    ended <- endAfter action
+    endAfter action |> Option.iter (fun ended -> ending.TrySetResult ended |> ignore)
 
-    match ended with
-    | Some _ -> ()
-    | None ->
+    match ending.Task.IsCompleted with
+    | true -> ()
+    | false ->
       try
         do! Threading.Tasks.Task.Delay(config.CheckInterval, ct)
       with
       | :? OperationCanceledException -> ()
-  return ended |> Option.defaultValue WatchdogEnd.Cancelled
+  match ending.Task.IsCompleted with
+  | true -> return! ending.Task
+  | false -> return WatchdogEnd.Cancelled
 }
