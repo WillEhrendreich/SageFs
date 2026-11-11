@@ -920,6 +920,13 @@ module Cohort =
     /// refusal a site the compiler forces you to handle, and carries both scopes
     /// so the message can name WHICH scope the caller actually reached.
     | WrongCohortScope of requested: CohortScope * cohort: CohortScope
+    /// The owner shell's own step threw while applying the command (the ledger append, the frame projection), so the
+    /// command was NOT applied. `decide` never returns this: it is the shell answering a caller that would otherwise
+    /// wait forever on a reply the failed step took with it.
+    | OwnerStepFailed of reason: string
+    /// The owner did not answer within `waited`: it is stuck in a step that never returns. The command may or may not
+    /// have been applied; the caller reads the cohort again before acting. Shell-only, like `OwnerStepFailed`.
+    | OwnerUnresponsive of waited: TimeSpan
 
   /// WHICH cohort a command addresses — the one exhaustive place the scope field
   /// is read off a command.

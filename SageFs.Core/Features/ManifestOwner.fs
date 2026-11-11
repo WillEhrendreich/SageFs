@@ -170,28 +170,59 @@ module ManifestOwner =
         return owner
     }
 
-  /// A running manifest owner for one SageFs data directory.
-  type Handle internal (mailbox: MailboxProcessor<Command>) =
+  let private faultReason (ex: exn) : string =
+    sprintf "the manifest owner's step failed before it could report a result (%s), so the change may not be on disk" ex.Message
+
+  /// What the loop does for the caller of a message whose step threw (`ResilientActor.wrapLoopAnswering`'s `onFault`): each
+  /// kind of caller gets its own typed failure, so none waits on a reply the failed step took with it. A thrown step is
+  /// reported as `WriteFailed`, the case a caller already handles for "the change may not be durable".
+  let internal answerFault (message: Command) (ex: exn) : unit =
+    match message with
+    | Command.Apply (_, reply) -> reply (Error (CommitError.WriteFailed (faultReason ex)))
+    | Command.Read reply -> reply.Reply (Error (ManifestLoadError.IoError (faultReason ex)))
+    | Command.QuarantineCorrupt reply -> reply.Reply false
+    | Command.Flush reply -> reply.Reply ()
+
+  /// A running manifest owner for one SageFs data directory. `replyCeiling` is how long a caller waits for an answer
+  /// (`Timeouts.ownerReply`); an owner stuck in a step that never returns answers as a failure at the ceiling.
+  type Handle internal (mailbox: MailboxProcessor<Command>, replyCeiling: TimeSpan) =
+    let silent (what: string) =
+      sprintf "the manifest owner did not answer %s within %A" what replyCeiling
     /// Apply a mutation; completes once it is on disk (or has failed).
     member _.Commit(mutation: ManifestMutation) : Task<CommitResult> =
-      mailbox.PostAndAsyncReply(fun ch -> Command.Apply (mutation, ch.Reply)) |> Async.StartAsTask
+      async {
+        match! ResilientActor.awaitReply mailbox replyCeiling (fun ch -> Command.Apply (mutation, ResilientActor.replyOnce ch.Reply)) with
+        | Some result -> return result
+        | None -> return Error (CommitError.WriteFailed (silent "a commit"))
+      }
+      |> Async.StartAsTask
 
     /// Queue a mutation without waiting. `onCommitted` runs on the owner once it is applied.
     member _.Post(mutation: ManifestMutation, onCommitted: CommitResult -> unit) : unit =
-      mailbox.Post (Command.Apply (mutation, onCommitted))
+      mailbox.Post (Command.Apply (mutation, ResilientActor.replyOnce onCommitted))
 
     /// The manifest as the owner holds it (loaded from disk on first use).
     member _.Read() : Task<Result<DaemonManifestState, ManifestLoadError>> =
-      mailbox.PostAndAsyncReply Command.Read |> Async.StartAsTask
+      async {
+        match! ResilientActor.awaitReply mailbox replyCeiling Command.Read with
+        | Some result -> return result
+        | None -> return Error (ManifestLoadError.IoError (silent "a read"))
+      }
+      |> Async.StartAsTask
 
     /// Rename a corrupt manifest aside so later commits can write again.
     /// Returns true only when a corrupt file was actually renamed.
     member _.QuarantineCorrupt() : Task<bool> =
-      mailbox.PostAndAsyncReply Command.QuarantineCorrupt |> Async.StartAsTask
+      async {
+        match! ResilientActor.awaitReply mailbox replyCeiling Command.QuarantineCorrupt with
+        | Some renamed -> return renamed
+        | None -> return false
+      }
+      |> Async.StartAsTask
 
     /// Completes once every command queued before it has been applied.
     member _.Flush() : Task =
-      mailbox.PostAndAsyncReply Command.Flush |> Async.StartAsTask :> Task
+      ResilientActor.awaitFlush "the manifest owner" mailbox replyCeiling Command.Flush
 
     interface IDisposable with
       member _.Dispose() = (mailbox :> IDisposable).Dispose()
@@ -201,10 +232,13 @@ module ManifestOwner =
         (mailbox :> IDisposable).Dispose()
         ValueTask.CompletedTask
 
-  /// Start the owner for `sageFsDir`. It must be the only writer of that
-  /// directory's daemon.sagefm for as long as it runs.
-  let start (logger: Utils.ILogger) (sageFsDir: string) : Handle =
-    let step = ResilientActor.wrapLoop logger "manifest-owner" (handle logger sageFsDir)
+  /// The owner loop over an injected handler: `start` passes the real one, a test passes one that throws or never replies.
+  let internal startWithHandler
+    (logger: Utils.ILogger)
+    (replyCeiling: TimeSpan)
+    (handler: OwnerState -> Command -> Async<OwnerState>)
+    : Handle =
+    let step = ResilientActor.wrapLoopAnswering logger "manifest-owner" answerFault handler
     let mailbox =
       MailboxProcessor.Start(fun inbox ->
         let rec loop owner = async {
@@ -213,4 +247,9 @@ module ManifestOwner =
           return! loop next
         }
         loop { Holding = Holding.Unloaded; Lifecycle = Lifecycle.Serving })
-    new Handle(mailbox)
+    new Handle(mailbox, replyCeiling)
+
+  /// Start the owner for `sageFsDir`. It must be the only writer of that
+  /// directory's daemon.sagefm for as long as it runs.
+  let start (logger: Utils.ILogger) (sageFsDir: string) : Handle =
+    startWithHandler logger Timeouts.ownerReply (handle logger sageFsDir)

@@ -12,6 +12,15 @@ namespace SageFs
 /// of one DU and needs no `McpContext`.
 module CohortErrorMapping =
 
+  /// Why a conductor seat is empty, in words an agent can act on.
+  let vacancyWhy (why: Cohort.VacancyReason) : string =
+    match why with
+    | Cohort.VacancyReason.ConductorLeft -> "the conductor left"
+    | Cohort.VacancyReason.LeaseLapsed -> "the conductor's lease lapsed"
+    | Cohort.VacancyReason.Revoked -> "the conductor was revoked"
+    | Cohort.VacancyReason.NeverBound -> "no conductor was ever bound"
+    | Cohort.VacancyReason.Replaced -> "a person replaced the conductor"
+
   let toSageFsError (err: Cohort.CohortError<MemberTable.MemberId>) : SageFsError =
     let mid = MemberTable.MemberId.display
     let scopeStr (scope: Cohort.ClaimScope) =
@@ -185,15 +194,24 @@ module CohortErrorMapping =
     | Cohort.CohortError.ConductorVacant(former, since, why) ->
       let seat =
         match former with
-        | Some who -> sprintf "since %s (%A held it: %A)" (since.ToString "u") (mid who) why
+        | Some who -> sprintf "%s held it until %s, and %s" (mid who) (since.ToString "u") (vacancyWhy why)
         | None -> "no conductor has ever been bound"
       failed
-        (sprintf "This is a conductor-only action, and the conductor seat is VACANT %s." seat)
+        (sprintf "This is a conductor-only action, and the conductor seat is vacant: %s." seat)
         (match former with
          | Some _ ->
            "No tool fills an empty conductor seat on its own: delegate_conductor hands the seat on only from a SITTING conductor, and nothing is auto-promoted into one. seat_conductor asks the person at your client whether to seat a present member and acts only on their yes. A person can also run 'sagefs cohort seat <member id>' on the machine that runs the daemon (with no member id it lists who is present) or click Seat on the dashboard's cohort panel. Meanwhile do the work that needs no conductor: acquire_claim, release_claim, request_landing, withdraw_landing, veto_landing."
          | None ->
            "No member has ever been conductor in this cohort. The first member to join binds the seat, so join_cohort (if you have not) is what fills it.")
+    // The two shell-side cases. `decide` never returns them: the cohort owner does, so a tool call that used to hang answers.
+    | Cohort.CohortError.OwnerStepFailed reason ->
+      failed
+        (sprintf "The cohort owner could not apply that command: one of its own steps failed (%s). Nothing was recorded for it." reason)
+        "Run get_cohort_status to see the cohort as it stands, then repeat the command once. If it fails the same way, the daemon log has a '[cohort-owner]' line naming the step; give that line to the person who runs the daemon."
+    | Cohort.CohortError.OwnerUnresponsive waited ->
+      failed
+        (sprintf "The cohort owner did not answer within %.0f seconds, so this command may or may not have been applied." waited.TotalSeconds)
+        "Run get_cohort_status before you repeat the command, so you do not claim a scope or request a landing twice. If get_cohort_status does not answer either, tell the person who runs the daemon: the cohort owner is stuck in a step that never returns."
 
   // ── Member tokens (Capability.fs) ───────────────────────────────────────
 

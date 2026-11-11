@@ -101,6 +101,9 @@ module Linearizability =
     | VetoRefused
     | InvalidVetoReason
     | LandingAlreadyVetoed
+    /// The owner shell's two failures (a step threw, no answer in time). `decide` never produces them, so no permutation of a
+    /// history can; they share a kind because the check only needs the match to be total.
+    | OwnerFault
 
   let private kindOf (err: CohortError<'m>) : ErrorKind =
     match err with
@@ -132,6 +135,8 @@ module Linearizability =
     | CohortError.VetoRefused _ -> ErrorKind.VetoRefused
     | CohortError.InvalidVetoReason _ -> ErrorKind.InvalidVetoReason
     | CohortError.LandingAlreadyVetoed _ -> ErrorKind.LandingAlreadyVetoed
+    | CohortError.OwnerStepFailed _
+    | CohortError.OwnerUnresponsive _ -> ErrorKind.OwnerFault
 
   /// `Ok () ↔ Ok ()`; `Error e1 ↔ Error e2` iff same `ErrorKind` (payload —
   /// e.g. WHICH member holds a conflicting claim — is allowed to differ

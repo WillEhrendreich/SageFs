@@ -77,8 +77,15 @@ module TrunkFollowOwner =
         return machine
     }
 
-  /// A running trunk owner.
-  type Handle internal (mailbox: MailboxProcessor<Command>, readMachine: unit -> TrunkMachine, changes: IEvent<TrunkMachine>) =
+  /// What the loop does for the caller of a message whose step threw (`ResilientActor.wrapLoopAnswering`'s `onFault`). An event
+  /// carries no reply, so a thrown step leaves nobody waiting; a flush is answered, so the caller's wait ends.
+  let internal answerFault (message: Command) (_ex: exn) : unit =
+    match message with
+    | Command.Apply _ -> ()
+    | Command.Flush reply -> reply.Reply ()
+
+  /// A running trunk owner. `replyCeiling` is how long a flush waits for the owner (`Timeouts.ownerReply`).
+  type Handle internal (mailbox: MailboxProcessor<Command>, replyCeiling: TimeSpan, readMachine: unit -> TrunkMachine, changes: IEvent<TrunkMachine>) =
     /// Queue an event. The cohort's `LandingLanded` and the session's finished saves come in here.
     member _.Post(event: TrunkEvent) : unit = mailbox.Post (Command.Apply event)
 
@@ -89,7 +96,8 @@ module TrunkFollowOwner =
     member _.Changes : IEvent<TrunkMachine> = changes
 
     /// Completes once every event queued before it has been applied.
-    member _.Flush() : Task = mailbox.PostAndAsyncReply Command.Flush |> Async.StartAsTask :> Task
+    member _.Flush() : Task =
+      ResilientActor.awaitFlush "the trunk-follow owner" mailbox replyCeiling Command.Flush
 
     interface IDisposable with
       member _.Dispose() = (mailbox :> IDisposable).Dispose()
@@ -99,7 +107,13 @@ module TrunkFollowOwner =
         (mailbox :> IDisposable).Dispose()
         ValueTask.CompletedTask
 
-  let start (logger: Utils.ILogger) (performer: TrunkPerformer) : Handle =
+  /// The owner loop over an injected handler (it is given the loop's own `post`): `start` passes the real one, a test passes one
+  /// that throws or never replies.
+  let internal startWithHandler
+    (logger: Utils.ILogger)
+    (replyCeiling: TimeSpan)
+    (makeHandler: (TrunkMachine -> unit) -> (Command -> unit) -> TrunkMachine -> Command -> Async<TrunkMachine>)
+    : Handle =
     let machineRef = ref initial
     let publish (machine: TrunkMachine) = System.Threading.Interlocked.Exchange(machineRef, machine) |> ignore
     let changes = Event<TrunkMachine>()
@@ -109,11 +123,14 @@ module TrunkFollowOwner =
           publish machine
           changes.Trigger machine
         let stepLoop =
-          ResilientActor.wrapLoop logger "trunk-follow" (handle logger performer publishAndAnnounce inbox.Post)
+          ResilientActor.wrapLoopAnswering logger "trunk-follow" answerFault (makeHandler publishAndAnnounce inbox.Post)
         let rec loop (machine: TrunkMachine) = async {
           let! command = inbox.Receive()
           let! next = stepLoop machine command
           return! loop next
         }
         loop initial)
-    new Handle(mailbox, (fun () -> machineRef.Value), changes.Publish)
+    new Handle(mailbox, replyCeiling, (fun () -> machineRef.Value), changes.Publish)
+
+  let start (logger: Utils.ILogger) (performer: TrunkPerformer) : Handle =
+    startWithHandler logger Timeouts.ownerReply (fun publishAndAnnounce post -> handle logger performer publishAndAnnounce post)

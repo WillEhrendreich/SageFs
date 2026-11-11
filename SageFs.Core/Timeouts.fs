@@ -443,6 +443,14 @@ module Timeouts =
   /// `git worktree add`, which checks out a whole tree.
   let gitWorktreeAdd = forMachine (TimeSpan.FromMinutes(2.0))
 
+  // -- State owners --
+  /// The longest a caller waits for a state owner (the cohort owner, the manifest owner, the trunk-follow owner) to answer one
+  /// command. An owner's step is an append to a SQLite ledger or one atomic file write, which takes milliseconds, so an answer
+  /// that has not come in this long means the owner is stuck on a step that never returns. The caller then gets a typed
+  /// "the owner did not answer" instead of waiting forever. It is long enough to cover a command queued behind a slow disk
+  /// and short enough that an agent's tool call is not left hanging. Scaled for the machine.
+  let ownerReply = forMachine (TimeSpan.FromSeconds(30.0))
+
   // -- Cohort landing gate --
   /// How long the trunk follower waits for a session that works in the trunk checkout to settle after the checkout moved to a
   /// landed commit, and how long the cohort dogfood journey waits for a landing to reach a landed sha. The landing gate's own
@@ -865,12 +873,6 @@ module Timeouts =
   /// How long shutdown waits for an in-flight periodic manifest save to return,
   /// so a late save cannot overwrite the shutdown manifest's stopped stamps.
   let cacheSaveTimerStop = forMachine (TimeSpan.FromSeconds(5.0))
-  /// How often the daemon asks the session manager to refresh every session's
-  /// status, so SSE subscribers see warmup progress (Starting to Ready). A poll
-  /// that should be an event: the session manager already knows when a status
-  /// changes. 10s because a steady-state refresh is cheap but a 2s cadence
-  /// dominated the dashboard's render budget.
-  let sessionStatusPoll = TimeSpan.FromSeconds(10.0)
   /// How long the worker's dev reload SSE stream (the one browser tabs connect
   /// to for hot reload notifications) waits for an event before it writes a
   /// heartbeat comment and waits again. No recorded reason for 15s.

@@ -53,6 +53,10 @@ module TestTimeouts =
   /// How long a test's pretend sandbox call may hold the thread pool's limits before the guard lets them go on its own. The test
   /// waits for the guard to say it did (an event), so the value only has to be small; it is never a deadline on anything.
   let abandonedHoldCeiling = ms 50.
+  /// The reply ceiling a test gives a state owner whose reply it withholds on purpose (ActorReplyContractTests). For that
+  /// owner the ceiling has to EXPIRE, so it is short; the production value is `Timeouts.ownerReply`. A test that expects an
+  /// answer from a healthy or throwing owner never waits this out: the answer is the event it waits on.
+  let ownerReplyWithheld = ms 100.
   /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
   /// reporting, a long poll answering) but goes through the thread pool and can be starved. 30 s because the gate
   /// runs beside other work on a shared machine (a load average of 40 to 70 was seen), where a starved pool made

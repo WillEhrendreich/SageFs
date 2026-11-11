@@ -223,10 +223,10 @@ module CohortOwner =
     post (
       Command.Apply(
         cmd,
-        function
-        | Ok _ -> ()
-        | Error err ->
-          logger.LogInfo(sprintf "[cohort-owner] landing completion %A refused (stale or out-of-order): %A" cmd err)
+        ResilientActor.replyOnce (function
+          | Ok _ -> ()
+          | Error err ->
+            logger.LogInfo(sprintf "[cohort-owner] landing completion %A refused (stale or out-of-order): %A" cmd err))
       )
     )
 
@@ -330,6 +330,14 @@ module CohortOwner =
         try performer.Notify who event
         with ex -> logger.LogWarning(sprintf "[cohort-owner] Notify performer threw: %s" ex.Message)
 
+  /// What the loop does for the caller of a message whose step threw (`ResilientActor.wrapLoopAnswering`'s `onFault`): the
+  /// command was not applied, and the caller is told so with a typed refusal instead of waiting on a reply the failed step
+  /// took with it.
+  let internal answerFault (message: Command) (ex: exn) : unit =
+    match message with
+    | Command.Apply(_, reply) -> reply (Error(CohortError.OwnerStepFailed ex.Message))
+    | Command.Flush reply -> reply.Reply ()
+
   let internal handle
     (logger: Utils.ILogger)
     (scope: CohortScope)
@@ -353,8 +361,13 @@ module CohortOwner =
         match decide now bytes owner.Cohort cmd with
         | Ok(newState, events, effects) ->
           let seq = owner.NextSeq
+          // The frame is projected BEFORE the append. `getSessionTestOutcomes` is the shell's own lookup and can throw;
+          // if it threw after the append, the ledger would hold an entry the owner never advanced past, and the next
+          // command would append the same `Seq` again. Everything after the append is publication, which cannot
+          // un-record the entry.
+          let frame = frameOf getSessionTestOutcomes { Seq = seq; State = newState }
           ledger.Append { Seq = seq; Clock = now; Entropy = bytes; Command = cmd; Events = events }
-          publish (frameOf getSessionTestOutcomes { Seq = seq; State = newState })
+          publish frame
           // `CohortFrame` (Cohort.fs's `project`) does not carry
           // `Landings`/`Queue`/`IntegrationHead` — it projects only
           // members/claims/the test matrix. Landing progress therefore has
@@ -371,7 +384,13 @@ module CohortOwner =
           // never the one before it.
           match events with
           | [] -> ()
-          | _ -> publishEvents events
+          | _ ->
+            // A subscriber that throws must not stop the owner from advancing past an entry that is already on the
+            // ledger, nor leave the caller without its answer.
+            let! published = async { publishEvents events } |> Async.Catch
+            match published with
+            | Choice1Of2 () -> ()
+            | Choice2Of2 subscriberEx -> logger.LogWarning(sprintf "[cohort-owner] an event subscriber threw: %s" subscriberEx.Message)
           notify logger reply (Ok(events, effects))
           dispatchLandingEffects logger scope performer post effects
           return { Cohort = newState; NextSeq = seq + 1L<ledgerSeq> }
@@ -389,6 +408,7 @@ module CohortOwner =
     (
       cohortScope: CohortScope,
       mailbox: MailboxProcessor<Command>,
+      replyCeiling: TimeSpan,
       readFrame: unit -> CohortFrame<MemberId>,
       readCohortState: unit -> CohortState<MemberId>,
       events: IEvent<CohortEvent<MemberId> list>
@@ -399,14 +419,21 @@ module CohortOwner =
     /// the cohort it named and refuses, by name, if that is not this one.
     member _.Scope : CohortScope = cohortScope
 
-    /// Apply a command; completes once it is on the ledger (or refused).
+    /// Apply a command; completes once it is on the ledger (or refused). Always completes: a step that throws answers
+    /// `OwnerStepFailed`, and an owner that does not answer within the reply ceiling (`Timeouts.ownerReply`) answers
+    /// `OwnerUnresponsive`, so a tool waiting on a cohort never hangs.
     member _.Commit(cmd: CohortCommand<MemberId>) : Task<Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>>> =
-      mailbox.PostAndAsyncReply(fun ch -> Command.Apply(cmd, ch.Reply)) |> Async.StartAsTask
+      async {
+        match! ResilientActor.awaitReply mailbox replyCeiling (fun ch -> Command.Apply(cmd, ResilientActor.replyOnce ch.Reply)) with
+        | Some answer -> return answer
+        | None -> return Error(CohortError.OwnerUnresponsive replyCeiling)
+      }
+      |> Async.StartAsTask
 
     /// Queue a command without waiting. `onApplied` runs on the owner once it
     /// is applied (or refused).
     member _.Post(cmd: CohortCommand<MemberId>, onApplied: Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>> -> unit) : unit =
-      mailbox.Post(Command.Apply(cmd, onApplied))
+      mailbox.Post(Command.Apply(cmd, ResilientActor.replyOnce onApplied))
 
     /// The cohort's current read model. Wait-free (D4): dereferences the
     /// published frame pointer directly and never posts to the mailbox.
@@ -433,7 +460,7 @@ module CohortOwner =
 
     /// Completes once every command queued before it has been applied.
     member _.Flush() : Task =
-      mailbox.PostAndAsyncReply Command.Flush |> Async.StartAsTask :> Task
+      ResilientActor.awaitFlush (sprintf "the cohort owner for scope %s" (Scope.label cohortScope)) mailbox replyCeiling Command.Flush
 
     interface IDisposable with
       member _.Dispose() = (mailbox :> IDisposable).Dispose()
@@ -486,7 +513,8 @@ module CohortOwner =
   /// lambda, not before it, because `handle` needs `inbox.Post` itself as
   /// its completion-posting callback (item 14b) — `inbox` only exists once
   /// the mailbox's own body is running.
-  let private startCore
+  let internal startCoreWithCeiling
+    (replyCeiling: TimeSpan)
     (logger: Utils.ILogger)
     (scope: CohortScope)
     (ledger: LedgerPort<MemberId>)
@@ -518,7 +546,7 @@ module CohortOwner =
     let mailbox =
       MailboxProcessor.Start(fun inbox ->
         let step =
-          ResilientActor.wrapLoop logger "cohort-owner"
+          ResilientActor.wrapLoopAnswering logger "cohort-owner" answerFault
             (handle logger scope ledger clock entropy getSessionTestOutcomes publish publishState cohortEvents.Trigger performer inbox.Post)
         let rec loop owner = async {
           let! command = inbox.Receive()
@@ -526,7 +554,7 @@ module CohortOwner =
           return! loop next
         }
         loop { Cohort = head.State; NextSeq = initialNextSeq })
-    new Handle(scope, mailbox, (fun () -> frameRef.Value), (fun () -> stateRef.Value), cohortEvents.Publish)
+    new Handle(scope, mailbox, replyCeiling, (fun () -> frameRef.Value), (fun () -> stateRef.Value), cohortEvents.Publish)
 
   /// Start the owner for one cohort's ledger. `clock`/`entropy` are injected
   /// (production defaults: `DateTime.UtcNow` and `productionEntropy`) so
@@ -554,7 +582,7 @@ module CohortOwner =
     (entropy: unit -> byte[])
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
     : Handle =
-    startCore logger scope ledger clock entropy getSessionTestOutcomes LandingPerformer.stub
+    startCoreWithCeiling Timeouts.ownerReply logger scope ledger clock entropy getSessionTestOutcomes LandingPerformer.stub
 
   /// Same as `start`, plus an injected `LandingPerformer` that actually runs
   /// landing effects — this is the keystone item 14b adds: without a real
@@ -571,7 +599,7 @@ module CohortOwner =
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
     (performer: LandingPerformer<MemberId>)
     : Handle =
-    startCore logger scope ledger clock entropy getSessionTestOutcomes performer
+    startCoreWithCeiling Timeouts.ownerReply logger scope ledger clock entropy getSessionTestOutcomes performer
 
   /// Roast-6 #7a: the daemon-held content-addressed test-result cache for
   /// landing verification (§5.4) used to be a bare `ref`, read-modify-written
@@ -609,6 +637,9 @@ module CohortOwner =
         (tests: TestId list)
         (runMisses: TestId list -> Async<Result<TestId list, string>>)
         : Task<Result<TestId list, string>> =
+        // No reply ceiling, on purpose: the reply comes after `runMisses`, which is the landing's test run, and a run
+        // that is making progress has no deadline (it is bounded by the run's own stall window, never by a clock). A
+        // step that THROWS is answered by `answerFault`, so the wait always ends.
         mailbox.PostAndAsyncReply(fun reply -> Command.Verify(inputHashOf, sessionId, tests, runMisses, reply))
         |> Async.StartAsTask
 
@@ -619,6 +650,24 @@ module CohortOwner =
         member _.DisposeAsync() =
           (mailbox :> IDisposable).Dispose()
           ValueTask.CompletedTask
+
+    /// What the loop does for the caller of a `Verify` whose step threw outside the handler's own `try`: it gets
+    /// the same typed `Error` a failed `runMisses` gets, never a wait with no end.
+    let internal answerFault (message: Command) (ex: exn) : unit =
+      match message with
+      | Command.Verify(_, _, _, _, reply) -> reply.Reply(Error(sprintf "landing cache owner step failed: %s" ex.Message))
+
+    let internal startWithHandler (logger: Utils.ILogger) (handle: TestResultCache -> Command -> Async<TestResultCache>) : Handle =
+      let mailbox =
+        MailboxProcessor<Command>.Start(fun inbox ->
+          let step = ResilientActor.wrapLoopAnswering logger "landing-cache-owner" answerFault handle
+          let rec loop cache = async {
+            let! command = inbox.Receive()
+            let! next = step cache command
+            return! loop next
+          }
+          loop TestResultCache.empty)
+      new Handle(mailbox)
 
     /// Start a fresh, empty landing-cache owner. The cache is in-memory
     /// only — unchanged durability from the `ref` it replaces: losing it on
@@ -641,13 +690,4 @@ module CohortOwner =
               reply.Reply(Error(sprintf "landing cache verify threw: %s" ex.Message))
               return cache
         }
-      let mailbox =
-        MailboxProcessor<Command>.Start(fun inbox ->
-          let step = ResilientActor.wrapLoop logger "landing-cache-owner" handle
-          let rec loop cache = async {
-            let! command = inbox.Receive()
-            let! next = step cache command
-            return! loop next
-          }
-          loop TestResultCache.empty)
-      new Handle(mailbox)
+      startWithHandler logger handle

@@ -205,6 +205,7 @@
         <Compile Include="WarmupOutcomeIntegrationTests.fs" />
         <Compile Include="WorkerHealthProbeTests.fs" />
         <Compile Include="ResilientActorTests.fs" />
+        <Compile Include="ActorReplyContractTests.fs" />
         <Compile Include="WatchdogTests.fs" />
         <Compile Include="FileWatcherTests.fs" />
         <Compile Include="SafeDirectoryWalkTests.fs" />
@@ -251,6 +252,7 @@
         <Compile Include="McpHardResetStaleSourceTests.fs" />
         <Compile Include="HostCoreAdoptionReloadTests.fs" />
         <Compile Include="DashboardEscapingTests.fs" />
+        <Compile Include="SessionStatusClassTests.fs" />
         <Compile Include="SessionCardActionsTests.fs" />
         <Compile Include="DashboardViewingTests.fs" />
         <Compile Include="DashboardTeardownViewTests.fs" />
@@ -389,6 +391,7 @@
         <Compile Include="LiveTestingShardsTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
+        <Compile Include="DevReloadSeverityTests.fs" />
         <Compile Include="DevReloadLastOutcomeTests.fs" />
         <Compile Include="WorkerHttpTransportTests.fs" />
         <Compile Include="WorkerWireRoundTripTests.fs" />
@@ -529,6 +532,7 @@
          <Compile Include="AvailableProjectsDirectoryTests.fs" />
          <Compile Include="ToolSessionHandleTests.fs" />
          <Compile Include="ErrorCategoryTests.fs" />
+         <Compile Include="SageFsErrorSeamTests.fs" />
          <Compile Include="CaptureTeeStreamTests.fs" />
          <Compile Include="RunnerLoggingTests.fs" />
          <Compile Include="SageFsErrorJsonShapeTests.fs" />
@@ -571,6 +575,7 @@
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
          <Compile Include="SessionManagerStopOffMailboxTests.fs" />
          <Compile Include="SessionManagerRemovedTests.fs" />
+         <Compile Include="SessionSnapshotChangeTests.fs" />
          <Compile Include="WorkerReaperTests.fs" />
          <Compile Include="SessionActivityTouchTests.fs" />
          <Compile Include="AutoCompletionAndEventsTests.fs" />
@@ -585,6 +590,7 @@
         <Compile Include="RunSourceWireTests.fs" />
         <Compile Include="LayoutAndInputTests.fs" />
         <Compile Include="PureModulesComprehensiveTests.fs" />
+        <Compile Include="OrphanSourceTests.fs" />
         <Compile Include="CoverageInstrumenterTests.fs" />
         <Compile Include="EvalDiffTests.fs" />
         <Compile Include="CellDependencyGraphTests.fs" />
@@ -888,6 +894,8 @@
         <Compile Include="ExpensiveWorkLeaseTests.fs" />
         <Compile Include="LeaseSimTests.fs" />
         <Compile Include="McpFanoutTests.fs" />
+        <Compile Include="McpWarmupMessageTests.fs" />
+        <Compile Include="McpEchoOutcomeTests.fs" />
         <Compile Include="FootprintPressureTests.fs" />
         <Compile Include="McpConnectionSimTests.fs" />
         <Compile Include="SseReplaySimTests.fs" />
@@ -897,6 +905,7 @@
         <Compile Include="ChangeCoalescerTests.fs" />
         <Compile Include="FileAnnotationsRouteViewsTests.fs" />
         <Compile Include="SessionListEventsTests.fs" />
+        <Compile Include="DaemonProxyRouteTests.fs" />
         <Compile Include="FileAnnotationsBasisTests.fs" />
         <Compile Include="ModelChangePushTests.fs" />
         <Compile Include="CapabilitySimTests.fs" />
