@@ -96,7 +96,7 @@ let clearClaimTests =
       let orphanFence = departed.Claims.[claimId].Fence
       let alone = next epoch (next epoch departed (CohortCommand.Depart(carol, machine))) (CohortCommand.RenewLease(alice, machine))
       decide epoch entropy alone (CohortCommand.ReassignClaim(alice, claimId, bob, machine))
-      |> Expect.equal "reassigning needs a present member, and bob and carol are gone" (Error(CohortError.MemberNotPresent bob))
+      |> Expect.equal "reassigning needs a present member, and bob and carol are gone" (Error(CohortError.MemberNotPresent(bob, MemberAbsence.DepartedAt epoch)))
       let after, events = ok epoch alone (CohortCommand.ClearClaim(alice, claimId, orphanFence, machine))
       after.Claims.[claimId].State |> Expect.equal "the claim is released" (ClaimState.Released(alice, epoch))
       match events with

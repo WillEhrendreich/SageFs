@@ -963,3 +963,46 @@ let stream5Tests =
           failtestf "expected one background RunAffectedTests effect, got %A" other
     }
   ]
+
+[<Tests>]
+let buildInputTests =
+  testList "Live testing on a changed build input" [
+    test "WHY — BuildInputChanged — a changed project file in a session's directory rebuilds that session and runs its whole suite, because a package or property change can reach any test" {
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      let tcB1 = mkTestCase "Beta.Tests.one" TestFramework.Expecto TestCategory.Unit
+      let tcB2 = mkTestCase "Beta.Tests.two" TestFramework.Expecto TestCategory.Unit
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+        |> withLiveTesting
+        |> fun m ->
+          { m with
+              PerSessionLiveTesting =
+                Map.ofList [
+                  bSid,
+                  { LiveTestCycleState.empty with
+                      TestState =
+                        { LiveTestState.empty with
+                            Activation = LiveTestingActivation.Active
+                            DiscoveredTests = [| tcB1; tcB2 |]
+                            SessionDiscovery = Map.ofList [ bSid, DiscoveryProgress.Completed ] } }
+                ] }
+      let selection =
+        SageFs.Features.ProjectFileChange.Selection.WholeSuite
+          [ SageFs.Features.ProjectFileChange.Change.PackageChanged ("MyProj.fsproj", [ "Expecto" ]) ]
+      let model', effects =
+        SageFsUpdate.update (SageFsMsg.BuildInputChanged ("/projects/beta/MyProj.fsproj", selection)) model
+      match effects with
+      | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (_, req)) ] ->
+        req.Tests |> Array.map (fun t -> t.Id) |> Set.ofArray
+        |> Expect.equal "every test of the session" (set [ tcB1.Id; tcB2.Id ])
+        req.SessionId |> Expect.equal "the session owning the file" (Some bSid)
+      | other -> failtestf "expected one rebuild for session B, got %A" other
+      (Map.find bSid model'.PerSessionLiveTesting).TestState.AffectedTests
+      |> Expect.equal "its tests are stale until the rebuild's run reports" (set [ tcB1.Id; tcB2.Id ])
+      model'.LiveTesting.PendingRebuild |> Expect.isNone "session A is untouched"
+    }
+  ]

@@ -1416,19 +1416,9 @@ type LiveTestWatcherManager
       // timer can never be GC'd out from under a live daemon (see memory:
       // daemon timer GC bug — a timer with no other root gets collected and
       // silently stops firing).
-      // Value is an IDisposable, not a bare FileSystemWatcher: each claimed
-      // directory is watched by `SageFs.FileWatcher.startPrunedWatcher` — one
-      // recursive `FileSystemWatcher` per directory, with bin/obj/.git/
-      // node_modules/.runs/artifacts and nested checkouts filtered out of
-      // its events (not walked separately: a single recursive watch can't
-      // skip a subtree). One recursive watch over a whole checkout is
-      // exactly how one daemon was once measured holding 148,077 inotify
-      // watches (a quarter of the `max_user_watches` system limit) after
-      // every session watching it had already stopped — watches are cheap
-      // here (524,288 of them, ~15% used by a repo the size of the F#
-      // compiler's), so that cost is accepted on purpose; see
-      // startPrunedWatcher's own doc comment for the instance-budget
-      // reasoning this design is actually built around.
+      // Value is the IDisposable `FileWatcher.startPrunedWatcher` returns: one recursive watch per claimed directory,
+      // with bin/obj/.git/node_modules/.runs/artifacts and nested checkouts filtered out of its events. Its doc comment
+      // has the inotify budget this is built around (one daemon once held 148,077 watches after its sessions stopped).
       let watchers = System.Collections.Generic.Dictionary<string, System.IDisposable>()
 
       let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =
@@ -1442,9 +1432,7 @@ type LiveTestWatcherManager
         let inNestedCheckout =
           directories |> List.exists (fun root -> SageFs.FileWatcher.isInNestedCheckout root path SageFs.FileWatcher.hasCheckoutMarker)
         let drop =
-          SageFs.FileWatcher.dropReason
-            { Directories = directories; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = debounceMs }
-            path
+          LiveTestBuildInput.dropReason { Directories = directories; Extensions = []; ExcludePatterns = []; DebounceMs = debounceMs } path
           |> Option.orElse (if inNestedCheckout then Some SageFs.FileWatcher.WatchDrop.NestedCheckout else None)
         // Every event ends in exactly one line, so a save that never reaches a test run says where it
         // stopped. Silence here means the operating system never raised the event.
@@ -1453,6 +1441,9 @@ type LiveTestWatcherManager
           Log.info "[watcher] %s changed, queued for live testing" path
           inbox.Post (Core (LiveTestWatcherCore.FileSaved path))
         | Some reason -> Log.info "[watcher] %s changed, dropped: %s" path (SageFs.FileWatcher.WatchDrop.toString reason)
+
+      // What each build input said when last read, so a change is diffed against it. Owned by this loop alone.
+      let buildInputs = LiveTestBuildInput.Store()
 
       let startWatcher (dir: string) =
         match watchers.ContainsKey dir with
@@ -1467,11 +1458,12 @@ type LiveTestWatcherManager
           let disposable =
             SageFs.FileWatcher.startPrunedWatcher
               dir
-              [ ".fs"; ".fsx" ]
+              []
               DevReload.DevReloadConfig.defaults.FileWatcherBufferSizeBytes
               handler
               onOverflow
           watchers.[dir] <- disposable
+          buildInputs.Seed dir
           Log.info "[watcher] Registered file watcher for %s" dir
 
       let stopWatcher (dir: string) =
@@ -1499,9 +1491,14 @@ type LiveTestWatcherManager
         // is attributed only to the sessions that actually claim the dir.
         let dropped (reason: SageFs.FileWatcher.WatchDrop) =
           Log.info "[watcher] %s dropped at read: %s" path (SageFs.FileWatcher.WatchDrop.toString reason)
-        match LiveTestWatcherCore.isUnderWatchedDir state.Watched path with
-        | false -> dropped SageFs.FileWatcher.WatchDrop.OutsideWatchedDirectory
-        | true ->
+        match LiveTestWatcherCore.isUnderWatchedDir state.Watched path, LiveTestBuildInput.classify path with
+        | false, _ -> dropped SageFs.FileWatcher.WatchDrop.OutsideWatchedDirectory
+        | true, LiveTestBuildInput.WatchedFile.Ignored reason -> dropped reason
+        | true, LiveTestBuildInput.WatchedFile.BuildInput kind ->
+          match buildInputs.Decide(state.Watched, path, kind) with
+          | LiveTestBuildInput.Action.Unchanged -> Log.info "[watcher] %s changed, but states what it stated before" path
+          | LiveTestBuildInput.Action.Run selection -> dispatch (SageFsMsg.BuildInputChanged(path, selection))
+        | true, LiveTestBuildInput.WatchedFile.Source ->
           try
             let fi = System.IO.FileInfo(path)
             match fi.Exists with

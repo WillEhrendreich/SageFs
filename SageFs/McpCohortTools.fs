@@ -224,6 +224,13 @@ module McpCohortTools =
         let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r, sessionOpt, cohortScope))
         return
           result
+          // The core names the member; only the shell knows the agentName this call passed, which is what a sub-agent
+          // recognises as its own.
+          |> Result.mapError (fun err ->
+            match err with
+            | SageFsError.CohortRefused(CohortFailureKind.DuplicateJoin, reason, suggestion) ->
+              SageFsError.CohortRefused(CohortFailureKind.DuplicateJoin, sprintf "%s This call passed agentName '%s'." reason agentName, suggestion)
+            | other -> other)
           |> Result.map (fun (events, _) ->
             let becameConductor = events |> List.exists (function Cohort.CohortEvent.ConductorBound _ -> true | _ -> false)
             let sessionNote =
@@ -255,8 +262,33 @@ module McpCohortTools =
   let leaveCohort (ctx: McpContext) (agentName: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let who = memberIdFor agentName
+      // Read before the departure, so the answer can name the scope of each claim it orphans and the seat it empties.
+      let before = SageFs.McpTools.cohortOwnerFor ctx workingDirectory |> Option.map (fun owner -> owner.ReadCohortState())
       let! result = commitCohort ctx (Cohort.CohortCommand.Depart(who, scopeOf workingDirectory))
-      return result |> Result.map (fun _ -> sprintf "%s left the cohort." (MemberTable.MemberId.display who))
+      return
+        result
+        |> Result.map (fun (events, _) ->
+          let overScope (cid: Cohort.ClaimId) =
+            before
+            |> Option.bind (fun state -> Map.tryFind cid state.Claims)
+            |> Option.map (fun claim -> sprintf " over %s" (CohortErrorMapping.claimScopeText claim.Scope))
+            |> Option.defaultValue ""
+          let orphaned =
+            events |> List.choose (function Cohort.CohortEvent.ClaimOrphaned(Cohort.ClaimId cid, _, _) -> Some(sprintf "claim %s%s" cid (overScope (Cohort.ClaimId cid))) | _ -> None)
+          let orphanNote =
+            match orphaned with
+            | [] -> ""
+            | claims ->
+              sprintf
+                " It orphaned %s: the conductor hands an orphaned claim on with reassign_claim or clears it with release_claim."
+                (String.concat ", " claims)
+          let seatNote =
+            match before |> Option.map (fun state -> state.Conductor) with
+            | Some(Cohort.ConductorBinding.Bound c) when c = who ->
+              " The conductor seat is empty now: a person fills it (seat_conductor, or 'sagefs cohort seat' on the daemon's machine)."
+            | Some _
+            | None -> ""
+          sprintf "%s left the cohort.%s%s" (MemberTable.MemberId.display who) orphanNote seatNote)
     }
 
   /// The claim `who` holds over exactly `scope`, if any: what a repeat `acquire_claim` renewed.

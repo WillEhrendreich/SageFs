@@ -72,3 +72,66 @@ let tests =
       target |> Expect.equal "the atomic save is reported" "Hello.fs"
     }
   ]
+
+/// Watch a fresh directory holding App.fsproj (compiling A.fs and B.fs), run `save` on it until the watcher dispatches a
+/// build-input change, and return that change within `TestTimeouts.briefPatience`.
+let private buildInputChangeAfter (save: string -> unit) = task {
+  let dir = Directory.CreateTempSubdirectory "sagefs-watch-input-"
+  let project = Path.Combine(dir.FullName, "App.fsproj")
+  File.WriteAllText(project, """<Project><PropertyGroup><X>1</X></PropertyGroup><ItemGroup><Compile Include="A.fs" /><Compile Include="B.fs" /></ItemGroup></Project>""")
+  let changed = TaskCompletionSource<string * Features.ProjectFileChange.Selection>(TaskCreationOptions.RunContinuationsAsynchronously)
+  let dispatch (msg: SageFs.SageFsMsg) =
+    match msg with
+    | SageFs.SageFsMsg.BuildInputChanged (path, selection) -> changed.TrySetResult((path, selection)) |> ignore
+    | _ -> ()
+  use manager = new LiveTestWatcherManager(dispatch, (fun _ _ -> ()), None)
+  try
+    manager.AddDirectory(dir.FullName, sid)
+    manager.WatchedDirectories |> ignore
+    let started = Diagnostics.Stopwatch.StartNew()
+    let mutable outcome = None
+    while outcome.IsNone && started.Elapsed < TestTimeouts.briefPatience do
+      save project
+      let! winner = Task.WhenAny(changed.Task :> Task, Task.Delay TestTimeouts.repeatActionEvery)
+      match obj.ReferenceEquals(winner, changed.Task) with
+      | true -> outcome <- Some changed.Task.Result
+      | false -> ()
+    return outcome
+  finally
+    manager.RemoveDirectory(dir.FullName, sid)
+    dir.Delete true
+}
+
+[<Tests>]
+let buildInputTests =
+  testList "Live-test watcher build inputs" [
+    testTask "WHY — LiveTestWatcherManager — a property change in a watched project file reaches live testing as a whole-suite run, because the watcher used to see .fs and .fsx only" {
+      let! outcome =
+        buildInputChangeAfter (fun project ->
+          File.WriteAllText(project, """<Project><PropertyGroup><X>2</X></PropertyGroup><ItemGroup><Compile Include="A.fs" /><Compile Include="B.fs" /></ItemGroup></Project>"""))
+      match outcome with
+      | Some (path: string, Features.ProjectFileChange.Selection.WholeSuite _) ->
+        Path.GetFileName path |> Expect.equal "the project file" "App.fsproj"
+      | other -> failtestf "expected a whole-suite run for App.fsproj, got %A" other
+    }
+
+    testTask "WHY — LiveTestWatcherManager — a compile-list edit to a watched project file narrows to the files at and after the edit, diffed against the text the watcher read when it started" {
+      let! outcome =
+        buildInputChangeAfter (fun project ->
+          File.WriteAllText(project, """<Project><PropertyGroup><X>1</X></PropertyGroup><ItemGroup><Compile Include="A.fs" /><Compile Include="New.fs" /><Compile Include="B.fs" /></ItemGroup></Project>"""))
+      match outcome with
+      | Some (_, selection) ->
+        selection |> Expect.equal "New.fs and the file after it" (Features.ProjectFileChange.Selection.NarrowToFiles [ "New.fs"; "B.fs" ])
+      | None -> failtest "the compile-list edit never reached live testing"
+    }
+
+    testTask "WHY — LiveTestWatcherManager — a changed data file in the project's folder reaches live testing as a whole-suite run" {
+      let! outcome =
+        buildInputChangeAfter (fun project ->
+          File.WriteAllText(Path.Combine(Path.GetDirectoryName project, "orders.json"), sprintf "{ \"stamp\": \"%s\" }" (Guid.NewGuid().ToString())))
+      match outcome with
+      | Some (path: string, Features.ProjectFileChange.Selection.WholeSuite _) ->
+        Path.GetFileName path |> Expect.equal "the data file" "orders.json"
+      | other -> failtestf "expected a whole-suite run for orders.json, got %A" other
+    }
+  ]

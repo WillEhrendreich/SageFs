@@ -18,6 +18,7 @@ open SageFs.WorkflowTypes
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 open SageFs.Server.NewSessionDialog
+open SageFs.Server.DashboardSinks
 
 /// How long after the last keystroke the directory box asks the daemon for suggestions, in the text form
 /// Datastar's `debounce` modifier takes: short enough to feel live, long enough that one word typed is one
@@ -36,7 +37,7 @@ let openEffectExpr : string =
   sprintf "%s ? (el.open || el.showModal()) : (!el.open || el.close())" (signalRef Signals.NewSessionOpen)
 
 /// Closing by a button: the signal goes false (the effect closes the dialog) and the server is told.
-let closeAndTellExpr : string = sprintf "%s; %s" closeExpr (Ds.post NewSessionNames.CloseRoute)
+let closeAndTellExpr : string = sprintf "%s; %s" closeExpr (Sink.post NewSessionNames.CloseRoute)
 
 /// The native close event is raised by Esc and by `close()` alike. When the signal is already false a control
 /// closed it and said what it needed to (Create is mid-request, and must not be undone by a late Close), so
@@ -72,13 +73,13 @@ let head : XmlNode =
         testid NewSessionNames.CloseTestId
         Attr.create "aria-label" "Close the new session dialog"
         Attr.create "title" "Close (Esc)"
-        Ds.onClick closeAndTellExpr ]
+        Sink.onClick closeAndTellExpr ]
       [ Text.raw "✕" ]
   ]
 
 let directoryField : XmlNode =
   Elem.div [ Attr.class' "nsd-field" ] [
-    Elem.label [ Attr.create "for" NewSessionNames.DirectoryInputId ] [ Text.raw "Working directory" ]
+    Elem.label [ Sink.attr "for" (UserText.ofString NewSessionNames.DirectoryInputId) ] [ Text.raw "Working directory" ]
     Elem.div [ Attr.class' "nsd-dir" ] [
       Elem.input
         [ Attr.id NewSessionNames.DirectoryInputId
@@ -87,18 +88,18 @@ let directoryField : XmlNode =
           Attr.create "autofocus" "autofocus"
           Attr.create "autocomplete" "off"
           Attr.create "spellcheck" "false"
-          Attr.create "list" DomIds.DirSuggestions
-          Attr.create "placeholder" workingDirPlaceholder
+          Sink.attr "list" (UserText.ofString DomIds.DirSuggestions)
+          Sink.attr "placeholder" (UserText.ofString workingDirPlaceholder)
           Ds.bind Signals.NewSessionDir
-          Ds.onEvent (sprintf "input.debounce_%s" SuggestDebounce, Ds.post "/dashboard/dir-suggest")
-          Ds.onEvent ("change", Ds.post NewSessionNames.DiscoverRoute)
-          Ds.onEvent ("keydown", sprintf "if(evt.key==='Enter'){evt.preventDefault();%s}" (Ds.post NewSessionNames.DiscoverRoute)) ]
+          Sink.onEvent (sprintf "input.debounce_%s" SuggestDebounce, Ds.post "/dashboard/dir-suggest")
+          Sink.onEvent ("change", Sink.post NewSessionNames.DiscoverRoute)
+          Sink.onEvent ("keydown", sprintf "if(evt.key==='Enter'){evt.preventDefault();%s}" (Sink.post NewSessionNames.DiscoverRoute)) ]
       Elem.button
         [ Attr.type' "button"
           Attr.class' "eval-btn nsd-find"
           Attr.create "aria-label" "Find projects in this directory"
           Attr.create "title" "Find projects in this directory"
-          Ds.onClick (Ds.post NewSessionNames.DiscoverRoute) ]
+          Sink.onClick (Sink.post NewSessionNames.DiscoverRoute) ]
         [ Text.raw "Find" ]
     ]
     renderDirSuggestions []
@@ -132,8 +133,8 @@ let overlapRow (overlap: Overlap) : XmlNode =
       [ Attr.type' "button"
         Attr.class' "eval-btn"
         testid NewSessionNames.SwitchTestId
-        Attr.create "aria-label" (attrEnc (sprintf "Switch to session %s instead of creating another" sid))
-        Ds.onClick (sprintf "%s; %s" closeExpr (Ds.post (sprintf "/dashboard/session/switch/%s" sid))) ]
+        Sink.attr "aria-label" (UserText.ofString (sprintf "Switch to session %s instead of creating another" sid))
+        Sink.onClick (sprintf "%s; %s" closeExpr (Sink.post (sprintf "/dashboard/session/switch/%s" sid))) ]
       [ Text.raw "Switch to it" ]
   ]
 
@@ -169,8 +170,8 @@ type Availability =
 let radio (signal: string) (value: string) (availability: Availability) : XmlNode =
   Elem.input
     [ yield Attr.type' "radio"
-      yield Attr.create "name" signal
-      yield Attr.create "value" (attrEnc value)
+      yield Sink.attr "name" (UserText.ofString signal)
+      yield Sink.attr "value" (UserText.ofString value)
       yield Ds.bind signal
       match availability with
       | Availability.Disabled -> yield Attr.create "disabled" "disabled"
@@ -180,7 +181,7 @@ let candidateRow (candidate: Candidate) : XmlNode =
   Elem.label [ Attr.class' "nsd-row"; testid NewSessionNames.CandidateTestId ] [
     Elem.input
       [ Attr.type' "checkbox"
-        Attr.create "value" (attrEnc candidate.Path)
+        Sink.attr "value" (UserText.ofString candidate.Path)
         Ds.bind NewSessionNames.ProjectsSignal ]
     Elem.span [ Attr.class' "nsd-row-text" ] [
       Elem.span [ Attr.class' "nsd-path" ] [ textEnc candidate.Path ]
@@ -256,21 +257,21 @@ let footer (createLabel: string) (disabledExpr: string) : XmlNode =
     Elem.span
       [ Attr.class' "nsd-meta nsd-hint"
         Attr.create "role" "status"
-        Ds.show pickNeededExpr ]
+        Sink.show pickNeededExpr ]
       [ Text.raw "Tick a project, or choose Bare, to create." ]
     Elem.button
       [ Attr.type' "button"
         Attr.class' "eval-btn nsd-secondary"
         testid NewSessionNames.CancelTestId
-        Ds.onClick closeAndTellExpr ]
+        Sink.onClick closeAndTellExpr ]
       [ Text.raw "Cancel" ]
     Elem.button
       [ Attr.type' "button"
         Attr.class' "eval-btn nsd-primary"
         testid NewSessionNames.CreateTestId
-        Attr.create "aria-label" (attrEnc createLabel)
+        Sink.attr "aria-label" (UserText.ofString createLabel)
         Ds.attr' ("disabled", disabledExpr)
-        Ds.onClick (sprintf "%s; %s" closeExpr (Ds.post NewSessionNames.CreateRoute)) ]
+        Sink.onClick (sprintf "%s; %s" closeExpr (Sink.post NewSessionNames.CreateRoute)) ]
       [ textEnc createLabel ]
   ]
 
@@ -287,11 +288,11 @@ let frame (state: NewSessionDialog) (body: XmlNode list) (foot: XmlNode list) : 
     [ Attr.id NewSessionNames.DialogId
       Attr.class' "nsd"
       testid NewSessionNames.DialogTestId
-      Attr.create "data-state" (NewSessionDialog.stateKey state)
-      Attr.create "aria-labelledby" NewSessionNames.TitleId
+      Sink.attr "data-state" (UserText.ofString (NewSessionDialog.stateKey state))
+      Sink.attr "aria-labelledby" (UserText.ofString NewSessionNames.TitleId)
       Ds.preserveAttr "open"
       Ds.effect openEffectExpr
-      Ds.onEvent ("close", onCloseExpr) ]
+      Sink.onEvent ("close", onCloseExpr) ]
     [ yield head
       match body with
       | [] -> ()

@@ -73,6 +73,7 @@ module BuildDiagnostic =
 type CohortFailureKind =
   | DuplicateJoin
   | MemberNotPresent
+  | ConductorHoldsClaims
   | ClaimConflict
   | NotClaimHolder
   | UnknownClaim
@@ -101,6 +102,8 @@ type CohortFailureKind =
   | WrongCohortScope
   | OwnerStepFailed
   | OwnerUnresponsive
+  | PrunedClaim
+  | PrunedLanding
 
 module CohortFailureKind =
   /// The kind of a cohort refusal. One exhaustive match, so a new `CohortError` case cannot compile without a kind.
@@ -108,6 +111,7 @@ module CohortFailureKind =
     match err with
     | Cohort.CohortError.DuplicateJoin _ -> CohortFailureKind.DuplicateJoin
     | Cohort.CohortError.MemberNotPresent _ -> CohortFailureKind.MemberNotPresent
+    | Cohort.CohortError.ConductorHoldsClaims _ -> CohortFailureKind.ConductorHoldsClaims
     | Cohort.CohortError.ClaimConflict _ -> CohortFailureKind.ClaimConflict
     | Cohort.CohortError.NotClaimHolder _ -> CohortFailureKind.NotClaimHolder
     | Cohort.CohortError.UnknownClaim _ -> CohortFailureKind.UnknownClaim
@@ -136,12 +140,15 @@ module CohortFailureKind =
     | Cohort.CohortError.WrongCohortScope _ -> CohortFailureKind.WrongCohortScope
     | Cohort.CohortError.OwnerStepFailed _ -> CohortFailureKind.OwnerStepFailed
     | Cohort.CohortError.OwnerUnresponsive _ -> CohortFailureKind.OwnerUnresponsive
+    | Cohort.CohortError.PrunedClaim _ -> CohortFailureKind.PrunedClaim
+    | Cohort.CohortError.PrunedLanding _ -> CohortFailureKind.PrunedLanding
 
   /// The kind's name on the wire (`fields.kind`).
   let label (kind: CohortFailureKind) : string =
     match kind with
     | CohortFailureKind.DuplicateJoin -> "DuplicateJoin"
     | CohortFailureKind.MemberNotPresent -> "MemberNotPresent"
+    | CohortFailureKind.ConductorHoldsClaims -> "ConductorHoldsClaims"
     | CohortFailureKind.ClaimConflict -> "ClaimConflict"
     | CohortFailureKind.NotClaimHolder -> "NotClaimHolder"
     | CohortFailureKind.UnknownClaim -> "UnknownClaim"
@@ -170,6 +177,8 @@ module CohortFailureKind =
     | CohortFailureKind.WrongCohortScope -> "WrongCohortScope"
     | CohortFailureKind.OwnerStepFailed -> "OwnerStepFailed"
     | CohortFailureKind.OwnerUnresponsive -> "OwnerUnresponsive"
+    | CohortFailureKind.PrunedClaim -> "PrunedClaim"
+    | CohortFailureKind.PrunedLanding -> "PrunedLanding"
 
 /// Unified error type for the entire SageFs system.
 /// Every Result<..., SageFsError> across all layers uses this single DU.

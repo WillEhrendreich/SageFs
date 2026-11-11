@@ -110,13 +110,17 @@ let cohortVacancyTests =
     test "a departed conductor's claim-orphaning, seat departure and vacancy are ONE step, with the reason recorded" {
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
       let s2 = next epoch s1 (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine))
-      let s3, events, _ = ok epoch s2 (CohortCommand.Depart(alice, CohortScope.Machine))
+      // The conductor may not LEAVE holding a claim (`ConductorHoldsClaims`), so the departure that still takes a claim
+      // with it is a lapsed lease.
+      let lapsed = epoch + Cohort.leaseWindow
+      let s3, events, _ = ok lapsed s2 (CohortCommand.Tick CohortScope.Machine)
 
       events
       |> List.exists (function CohortEvent.MemberDeparted(m, _) -> m = alice | _ -> false)
       |> Expect.isTrue "the departure is still recorded"
       s3.Claims |> Map.toList |> List.forall (fun (_, c) -> match c.State with ClaimState.Orphaned _ -> true | _ -> false)
       |> Expect.isTrue "the departing conductor's claim is orphaned in the same step"
+      s3.Conductor |> Expect.equal "the seat empties in that step, and says why" (ConductorBinding.Vacant(alice, lapsed, VacancyReason.LeaseLapsed))
     }
 
     test "the typed refusal for a vacant seat is ConductorVacant, NOT the generic NotConductor" {
@@ -193,7 +197,9 @@ let cohortVacancyTests =
       let steps =
         let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
         let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine))
-        let s3 = next epoch s2 (CohortCommand.AcquireClaim(bob, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine))
+        // alice's claim, so bob leaves the seat empty-handed (a conductor holding a claim may not leave) and alice
+        // leaves as an ordinary member with hers.
+        let s3 = next epoch s2 (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine))
         let s4 = next epoch s3 (CohortCommand.DelegateConductor(alice, bob, CohortScope.Machine))
         let s5 = next epoch s4 (CohortCommand.Depart(bob, CohortScope.Machine))
         next epoch s5 (CohortCommand.Depart(alice, CohortScope.Machine))

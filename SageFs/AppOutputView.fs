@@ -22,6 +22,7 @@ open SageFs
 open SageFs.Server.DashboardFragments
 open SageFs.Server.DockPanes
 open SageFs.Server.AppOutputPane
+open SageFs.Server.DashboardSinks
 
 /// The app-output pane's own element ids. Separate from `DockIds` (which names the live-bindings pane)
 /// because the morph matches client-owned attributes by id, and two panes in one dock must never share one.
@@ -39,7 +40,7 @@ module AppOutputIds =
 /// One line of app output. The class comes from `AppOutputLine.cssClass`, so the name a line is coloured by
 /// is decided in one place and the CSS cannot drift from the decision about which stream it came from.
 let private renderLine (line: AppOutputLine) : XmlNode =
-  Elem.div [ Attr.class' (sprintf "app-output-line %s" (AppOutputLine.cssClass line)); Attr.create "data-stream" (match line.Stream with OutputStream.Stdout -> "stdout" | OutputStream.Stderr -> "stderr") ] [
+  Elem.div [ Attr.class' (sprintf "app-output-line %s" (AppOutputLine.cssClass line)); Sink.attr "data-stream" (UserText.ofString (match line.Stream with OutputStream.Stdout -> "stdout" | OutputStream.Stderr -> "stderr")) ] [
     textEnc line.Text
   ]
 
@@ -70,12 +71,12 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       // its own label; the accessible name stays the full sentence.
       Attr.class' ("session-btn session-btn-labeled" + (if isOn then " session-btn-on" else ""))
       Attr.type' "button"
-      Attr.create "aria-label" label
-      Attr.create "aria-pressed" (if isOn then "true" else "false")
+      Sink.attr "aria-label" (UserText.ofString label)
+      Sink.attr "aria-pressed" (UserText.ofString (if isOn then "true" else "false"))
       testid testId
       // The value rides the URL. `@post`'s second argument is fetch options, so a `{value: ...}` there is dropped before it reaches
       // the handler, which reads `Request.Query["value"]`: every toggle then read false and every filter fell back to "both".
-      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/%s?value=%b')" target (not isOn))
+      Sink.onEvent ("click", sprintf "@post('/dashboard/app-output/%s?value=%b')" target (not isOn))
     ] [ textEnc (if isOn then onLabel else offLabel) ]
 
   let streamChoice (value: string) (label: string) (wanted: OutputStreamFilter) =
@@ -84,10 +85,10 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       // Words again, so label-sized again (see the toggle above).
       Attr.class' ("session-btn session-btn-labeled" + (if chosen then " session-btn-on" else ""))
       Attr.type' "button"
-      Attr.create "aria-label" (sprintf "Show %s" label)
-      Attr.create "aria-pressed" (if chosen then "true" else "false")
+      Sink.attr "aria-label" (UserText.ofString (sprintf "Show %s" label))
+      Sink.attr "aria-pressed" (UserText.ofString (if chosen then "true" else "false"))
       testid (sprintf "app-output-stream-%s" value)
-      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/stream?value=%s')" value)
+      Sink.onEvent ("click", sprintf "@post('/dashboard/app-output/stream?value=%s')" value)
     ] [
       // The chosen stream carries a mark as well as a fill, so the choice never rests on colour alone.
       match chosen with
@@ -105,7 +106,7 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       Attr.type' "text"
       Attr.create "placeholder" "filter lines"
       Attr.create "aria-label" "Filter the app output lines"
-      Attr.create "value" pane.Search
+      Sink.attr "value" (UserText.ofString pane.Search)
       testid "app-output-search"
       Ds.onEvent ("input", "@post('/dashboard/app-output/search?value=' + encodeURIComponent(event.target.value))")
     ]

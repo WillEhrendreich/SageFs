@@ -124,20 +124,21 @@ let dashboardEscapingHotReloadTests =
         renderHotReloadPanel "abcd1234"
           [ {| path = "src/A.fs"; watched = true |}; {| path = "src/Sub/B.fs"; watched = false |} ] 1
         |> renderNode
+        |> WebUtility.HtmlDecode
       html
-      |> Expect.stringContains "watch-all endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/watch-all')")
+      |> Expect.stringContains "watch-all endpoint unchanged" "@post('/api/sessions/abcd1234/hotreload/watch-all')"
       html
-      |> Expect.stringContains "unwatch-all endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/unwatch-all')")
+      |> Expect.stringContains "unwatch-all endpoint unchanged" "@post('/api/sessions/abcd1234/hotreload/unwatch-all')"
       html
-      |> Expect.stringContains "toggle endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/toggle')")
+      |> Expect.stringContains "toggle endpoint unchanged" "@post('/api/sessions/abcd1234/hotreload/toggle')"
       html
-      |> Expect.stringContains "watch-directory endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/watch-directory')")
+      |> Expect.stringContains "watch-directory endpoint unchanged" "@post('/api/sessions/abcd1234/hotreload/watch-directory')"
       html
       |> Expect.stringContains "per-file toggle still stages the path field the worker parses"
-           (htmlEscape "$path = 'src/A.fs';")
+           "$path = 'src/A.fs';"
       html
       |> Expect.stringContains "per-directory toggle still stages the directory field the worker parses"
-           (htmlEscape "$directory = 'src/Sub/';")
+           "$directory = 'src/Sub/';"
 
     testProperty "renderHotReloadPanel never emits a hostile file path raw" <| fun (prefix: string) (pick: int) ->
       let h = hostile prefix pick

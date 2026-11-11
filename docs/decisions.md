@@ -1968,7 +1968,7 @@ through `SageFs/DashboardSinks.fs`, which takes outside text as `UserText`: `Sin
 string literal for building an expression, `Sink.post` does the same for a `@post` URL, and `Sink.onEvent`,
 `Sink.onClick`, `Sink.show`, `Sink.classWhen` and `Sink.attrExpr` attribute-encode the whole expression. Text is never
 spliced between quotes in a `sprintf` format by hand. A theme name is checked against `ThemePresets.all` before it is
-saved or drawn (`DashboardTypes.knownThemeName`), and an unknown one gets a 400.
+saved or drawn (`ThemePresets.known`), and an unknown one gets a 400.
 
 How it is held. `DashboardSinkTests` renders the real renderers (the cohort Seat and Replace buttons, the settings panel,
 the coverage treemap, the completion list, the app output search, the shell, the theme picker) with hostile strings and

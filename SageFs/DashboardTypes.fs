@@ -16,6 +16,7 @@ open SageFs.Server.DashboardPanelContext
 open Falco.Markup
 open Falco.Datastar
 open StarFederation.Datastar.FSharp
+open SageFs.Server.DashboardSinks
 
 // ---------------------------------------------------------------------------
 // Session-scoped HTTP routing
@@ -1169,11 +1170,11 @@ module RebuildRemedy =
     Elem.button
       [ Attr.class' cssClass
         Attr.type' "button"
-        Attr.create "data-testid" testId
+        Sink.attr "data-testid" (UserText.ofString testId)
         Attr.create "aria-label" "Rebuild and reload: rebuild the project and restart this session, so everything the files hold is live. Values you set in the session go back to the file's."
         Ds.indicator Signals.ActionLoading
         Ds.attr' ("disabled", "$actionLoading")
-        Ds.onClick (Ds.post route) ]
+        Sink.onClick (Sink.post route) ]
       [ Elem.span [ Ds.show "$actionLoading" ] [ Text.enc (Glyphs.lead Glyph.Busy) ]
         Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "↻ " ]
         Text.raw words ]
@@ -1790,9 +1791,9 @@ module PanelVisibility =
           Attr.create "data-testid" "panel-hidden-action"
           Ds.indicator Signals.PanelActionLoading
           Ds.attr' ("disabled", "$" + Signals.PanelActionLoading)
-          Ds.onClick (Ds.post route) ]
-        [ Elem.span [ Ds.show ("$" + Signals.PanelActionLoading) ] [ Text.enc "Working…" ]
-          Elem.span [ Ds.show ("!$" + Signals.PanelActionLoading) ] [ Text.enc label ] ]
+          Sink.onClick (Sink.post route) ]
+        [ Elem.span [ Sink.show ("$" + Signals.PanelActionLoading) ] [ Text.enc "Working…" ]
+          Elem.span [ Sink.show ("!$" + Signals.PanelActionLoading) ] [ Text.enc label ] ]
 
   /// A next step that names a control that already exists on the page is text, inside the opened sentence.
   let nextStepNote (next: NextStep) : Falco.Markup.XmlNode =
@@ -1996,7 +1997,7 @@ let saveThemes (sageFsDir: string) (themes: Collections.Concurrent.ConcurrentDic
     File.WriteAllText(path, json)
   with ex -> Log.warn "Failed to save themes to %s: %s\n%s" sageFsDir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
-/// Load theme preferences from ~/.SageFs/themes.json
+/// Load theme preferences from ~/.SageFs/themes.json. An entry whose theme is not a preset is dropped with a warning.
 let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary<string, string> =
   let result = Collections.Concurrent.ConcurrentDictionary<string, string>()
   try
@@ -2007,7 +2008,9 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
       match Json.deserialize<Collections.Generic.Dictionary<string, string>> Json.standard json with
       | Ok dict ->
         for kv in dict do
-          result.[kv.Key] <- kv.Value
+          match ThemePresets.known kv.Value with
+          | Ok preset -> result.[kv.Key] <- preset
+          | Error unknown -> Log.warn "Themes file %s: dropped the entry for %s. %s" path kv.Key (ThemePresets.describeUnknown unknown)
       | Error error -> Log.warn "Themes file %s is not a readable theme map, using none: %s" path (JsonError.describe error)
     | false -> ()
   with ex -> Log.warn "Failed to load themes from %s: %s\n%s" sageFsDir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")

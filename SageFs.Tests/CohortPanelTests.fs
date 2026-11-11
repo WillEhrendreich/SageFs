@@ -114,9 +114,12 @@ let cohortPanelTests =
       let m = MemberId.Minted "agent-1"
       let frame =
         frameAfter
-          [ CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
+          // bob conducts and leaves last, empty-handed: a conductor holding a claim may not leave.
+          [ CohortCommand.Join(bob, JoinableRole.Implementer, None, machine)
+            CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
             CohortCommand.AcquireClaim(m, ClaimScope.File "src/F1.fs", "editing", machine)
-            CohortCommand.Depart(m, machine) ]
+            CohortCommand.Depart(m, machine)
+            CohortCommand.Depart(bob, machine) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "the claim is still counted" "Claims (1)"
       html |> Expect.stringContains "and is labelled orphaned, not dropped" "orphaned"
@@ -129,24 +132,30 @@ let cohortPanelTests =
       let members = [ for i in 1 .. 43 -> MemberId.Minted (sprintf "agent-%d" i) ]
       let frame =
         frameAfter
-          [ for m in members -> CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
+          // bob conducts and leaves last, empty-handed: a conductor holding a claim may not leave.
+          [ yield CohortCommand.Join(bob, JoinableRole.Implementer, None, machine)
+            for m in members -> CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
             for i, m in List.indexed members -> CohortCommand.AcquireClaim(m, ClaimScope.File (sprintf "src/F%d.fs" i), "editing", machine)
-            for m in members -> CohortCommand.Depart(m, machine) ]
+            for m in members -> CohortCommand.Depart(m, machine)
+            yield CohortCommand.Depart(bob, machine) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "the heading still reports the TRUE total" "Claims (43)"
       let cap = Features.CohortBoundedView.rowCap
       (html.Split("fence ").Length - 1)
       |> Expect.equal "only `rowCap` claim rows are drawn" cap
       html |> Expect.stringContains "the overflow line says how many were hidden and why" (sprintf "+%d more claims (%d orphaned)" (43 - cap) (43 - cap))
-      html |> Expect.stringContains "members are bounded the same way" (sprintf "+%d more members (%d departed)" (43 - cap) (43 - cap))
+      html |> Expect.stringContains "members are bounded the same way" (sprintf "+%d more members (%d departed)" (44 - cap) (44 - cap))
 
     testCase "WHY — get_cohort_status text is bounded the same way, with the true totals and a '+N more' line" <| fun _ ->
       let members = [ for i in 1 .. 43 -> MemberId.Minted (sprintf "agent-%d" i) ]
       let frame =
         frameAfter
-          [ for m in members -> CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
+          // bob conducts and leaves last, empty-handed: a conductor holding a claim may not leave.
+          [ yield CohortCommand.Join(bob, JoinableRole.Implementer, None, machine)
+            for m in members -> CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
             for i, m in List.indexed members -> CohortCommand.AcquireClaim(m, ClaimScope.File (sprintf "src/F%d.fs" i), "editing", machine)
-            for m in members -> CohortCommand.Depart(m, machine) ]
+            for m in members -> CohortCommand.Depart(m, machine)
+            yield CohortCommand.Depart(bob, machine) ]
       let text = Features.CohortStatusText.render frame
       let cap = Features.CohortBoundedView.rowCap
       text |> Expect.stringContains "the header keeps the true claim total" "Claims (43):"

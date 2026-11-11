@@ -5,6 +5,7 @@ open Falco.Datastar
 open StarFederation.Datastar.FSharp
 open SageFs
 open SageFs.Server.DashboardTypes
+open SageFs.Server.DashboardSinks
 
 /// The dashboard Settings panel (unified-settings-design.md Phase B), rendered
 /// server-authoritatively from the resolved config catalog — the Tao of
@@ -186,18 +187,18 @@ module SettingsPanel =
         | Some _ ->
           Elem.button
             [ Attr.class' "settings-btn settings-btn-clear"
-              Ds.onClick (Ds.post (sprintf "/dashboard/settings/clear/%s" sigName)) ]
+              Sink.onClick (Sink.post (sprintf "/dashboard/settings/clear/%s" sigName)) ]
             [ Text.raw "Reset" ]
       Elem.div [ Attr.class' "settings-edit" ] [
         Elem.input [
           Attr.type' "text"; Attr.class' "settings-input"
-          Ds.signal (sigName, current)
+          Sink.signal sigName (UserText.ofString current)
           Ds.bind sigName ]
         Elem.button
           [ Attr.class' "settings-btn"
             Ds.indicator Signals.SettingsSaving
             Ds.attr' ("disabled", "$settingsSaving")
-            Ds.onClick (Ds.post (sprintf "/dashboard/settings/edit/%s" sigName)) ]
+            Sink.onClick (Sink.post (sprintf "/dashboard/settings/edit/%s" sigName)) ]
           [ Text.raw "Save" ]
         resetButton
       ]
@@ -226,7 +227,7 @@ module SettingsPanel =
         Elem.div [ Attr.class' "settings-desc" ] [ Text.enc d.Description ]
         Elem.div [ Attr.class' "settings-effect" ] [ Text.enc (effectLine d.Applicability) ] ]
     Elem.div
-      [ Attr.class' "settings-row"; Attr.create "data-setting-key" d.Key ]
+      [ Attr.class' "settings-row"; Sink.attr "data-setting-key" (UserText.ofString d.Key) ]
       (head @ valueAndEdit @ (row.Notes |> List.map noteLine))
 
   /// The last-edit banner. `Quiet` renders nothing.
@@ -278,8 +279,8 @@ module SettingsPanel =
     Elem.div
       [ Attr.id PanelDomId; Attr.class' "panel settings-panel"
         Ds.signal (Signals.SettingsSaving, false)
-        Ds.signal (Signals.SettingsScope, ScopeGlobal)
-        Ds.signal (Signals.SettingsRepoDir, repoDir) ]
+        Sink.signal Signals.SettingsScope (UserText.ofString ScopeGlobal)
+        Sink.signal Signals.SettingsRepoDir (UserText.ofString repoDir) ]
       [ Elem.h2 [] [ Text.raw "Settings" ]
         scopeSelector repo
         noticeBanner notice

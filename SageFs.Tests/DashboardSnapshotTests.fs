@@ -1037,8 +1037,8 @@ let testFilterTests = testList "Test filter bar" [
     test "Skipped maps to 'skipped'" {
       (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Skipped) |> Expect.equal "Skipped" "skipped"
     }
-    test "Other maps to 'other'" {
-      (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Other) |> Expect.equal "Other" "other"
+    test "Quarantined maps to 'quarantined'" {
+      (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Quarantined) |> Expect.equal "Quarantined" "quarantined"
     }
   ]
 

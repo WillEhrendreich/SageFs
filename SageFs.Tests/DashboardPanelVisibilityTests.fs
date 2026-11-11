@@ -471,9 +471,12 @@ let dashboardPanelVisibilityTests =
 
     testList "a cohort holding only history" [
       let orphaned =
-        [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+        // lead conducts and leaves last, empty-handed: a conductor holding a claim may not leave.
+        [ CohortCommand.Join(MemberId.Minted "lead", JoinableRole.Implementer, None, CohortScope.Machine)
+          CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
           CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine)
-          CohortCommand.Depart(alice, CohortScope.Machine) ]
+          CohortCommand.Depart(alice, CohortScope.Machine)
+          CohortCommand.Depart(MemberId.Minted "lead", CohortScope.Machine) ]
 
       testCase "a claim whose holder left is history another agent can trip on" <| fun _ ->
         frameAfter orphaned

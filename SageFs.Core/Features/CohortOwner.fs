@@ -330,6 +330,28 @@ module CohortOwner =
         try performer.Notify who event
         with ex -> logger.LogWarning(sprintf "[cohort-owner] Notify performer threw: %s" ex.Message)
 
+  /// A refusal about something the state no longer holds, told from the ledger. `Retention.sweep` drops a settled landing,
+  /// an old claim and a purged member from the state, so `decide` can only say "unknown" or "never joined" about them; the
+  /// ledger still records when each went (`LandingPruned`, `ClaimPruned`, `MemberPurged`), and the caller is told that.
+  /// Any other refusal comes back as it was. `entries` is read only for those three refusals.
+  let explainFromLedger (entries: unit -> LedgerEntry<'m> list) (err: CohortError<'m>) : CohortError<'m> =
+    let lastEvent (pick: CohortEvent<'m> -> 'a option) =
+      entries () |> List.collect (fun entry -> entry.Events) |> List.choose pick |> List.tryLast
+    match err with
+    | CohortError.UnknownLanding id ->
+      lastEvent (function CohortEvent.LandingPruned(pruned, at) when pruned = id -> Some at | _ -> None)
+      |> Option.map (fun at -> CohortError.PrunedLanding(id, at))
+      |> Option.defaultValue err
+    | CohortError.UnknownClaim id ->
+      lastEvent (function CohortEvent.ClaimPruned(pruned, reason) when pruned = id -> Some reason | _ -> None)
+      |> Option.map (fun reason -> CohortError.PrunedClaim(id, reason))
+      |> Option.defaultValue err
+    | CohortError.MemberNotPresent(who, MemberAbsence.NeverJoined) ->
+      lastEvent (function CohortEvent.MemberPurged(purged, since) when purged = who -> Some since | _ -> None)
+      |> Option.map (fun since -> CohortError.MemberNotPresent(who, MemberAbsence.DepartedAt since))
+      |> Option.defaultValue err
+    | other -> other
+
   /// What the loop does for the caller of a message whose step threw (`ResilientActor.wrapLoopAnswering`'s `onFault`): the
   /// command was not applied, and the caller is told so with a typed refusal instead of waiting on a reply the failed step
   /// took with it.
@@ -395,7 +417,9 @@ module CohortOwner =
           dispatchLandingEffects logger scope performer post effects
           return { Cohort = newState; NextSeq = seq + 1L<ledgerSeq> }
         | Error err ->
-          notify logger reply (Error err)
+          // The ledger is read only for a refusal about something pruned. A read that throws is the loop's `answerFault`:
+          // the caller is answered `OwnerStepFailed`.
+          notify logger reply (Error(explainFromLedger (fun () -> ledger.ReadAll scope) err))
           return owner
       | Command.Flush reply ->
         reply.Reply ()

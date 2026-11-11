@@ -62,6 +62,7 @@ module Linearizability =
   type private ErrorKind =
     | DuplicateJoin
     | MemberNotPresent
+    | ConductorHoldsClaims
     | ClaimConflict
     | NotClaimHolder
     | UnknownClaim
@@ -109,16 +110,20 @@ module Linearizability =
     match err with
     | CohortError.DuplicateJoin _ -> ErrorKind.DuplicateJoin
     | CohortError.MemberNotPresent _ -> ErrorKind.MemberNotPresent
+    | CohortError.ConductorHoldsClaims _ -> ErrorKind.ConductorHoldsClaims
     | CohortError.ClaimConflict _ -> ErrorKind.ClaimConflict
     | CohortError.NotClaimHolder _ -> ErrorKind.NotClaimHolder
-    | CohortError.UnknownClaim _ -> ErrorKind.UnknownClaim
+    // A pruned id is the same refusal as an unknown one; only the shell can tell them apart, from its ledger.
+    | CohortError.UnknownClaim _
+    | CohortError.PrunedClaim _ -> ErrorKind.UnknownClaim
     | CohortError.ClaimNotOrphaned _ -> ErrorKind.ClaimNotOrphaned
     | CohortError.ClearRefused _ -> ErrorKind.ClearRefused
     | CohortError.DuplicateClaimId _ -> ErrorKind.DuplicateClaimId
     | CohortError.StaleClaimFence _ -> ErrorKind.StaleClaimFence
     | CohortError.InvalidPurpose _ -> ErrorKind.InvalidPurpose
     | CohortError.InvalidStatement _ -> ErrorKind.InvalidStatement
-    | CohortError.UnknownLanding _ -> ErrorKind.UnknownLanding
+    | CohortError.UnknownLanding _
+    | CohortError.PrunedLanding _ -> ErrorKind.UnknownLanding
     | CohortError.DuplicateLandingId _ -> ErrorKind.DuplicateLandingId
     | CohortError.NotLandingRequester _ -> ErrorKind.NotLandingRequester
     | CohortError.LandingNotAtFrontOfQueue _ -> ErrorKind.LandingNotAtFrontOfQueue

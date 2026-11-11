@@ -126,6 +126,8 @@ let cohortLanesTests =
       testCase "an orphaned claim closes as a Failed span" <| fun _ ->
         let ledger =
           ledgerFrom [
+            // bob conducts, so alice leaves as a member (a conductor holding a claim may not leave).
+            atSec 0, CohortCommand.Join(bob, JoinableRole.Implementer, None, machine)
             atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
             atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
             atSec 9, CohortCommand.Depart(alice, machine)

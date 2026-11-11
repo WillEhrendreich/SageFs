@@ -191,6 +191,9 @@ type SageFsMsg =
   | BufferContentChanged of targetSession: string option * filePath: string * content: string
   /// Reaches each session owning the file that has live testing on (`LiveTestFileRouting.route`).
   | FileContentChanged of filePath: string * content: string
+  /// A build input changed under a watched directory (a project file, props, targets, a lock file, a data file):
+  /// each session owning it that has live testing on rebuilds and runs the selection (`LiveTestBuildInput.decide`).
+  | BuildInputChanged of filePath: string * selection: Features.ProjectFileChange.Selection
   | FcsTypeCheckCompleted of string option * Features.LiveTesting.AnalysisIdentity option * Features.LiveTesting.FcsTypeCheckResult
   | RestoreTestCache of Features.LiveTesting.LiveTestState
   | MarkAllTestsStale
@@ -2135,6 +2138,37 @@ module SageFsUpdate =
           (fun (accModel, accEffects) receiver ->
             let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some (SessionId.value receiver)) accModel
             let model', effects = editCycleAt target save accModel
+            model', accEffects @ effects)
+          (model, [])
+
+    | SageFsMsg.BuildInputChanged (filePath, selection) ->
+      // The session is rebuilt and the selected tests run against what it built. The selected tests go stale at once,
+      // so the status says what the rebuild is about to check.
+      let rebuildAndRun (target: SageFsModel.LiveTestingTarget) (current: SageFsModel) =
+        let cycle = SageFsModel.cycleFor target current
+        let covered =
+          LiveTestBuildInput.coveredFilesOf [] (cycle.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq) cycle.TestState.TestCoverageBitmaps
+        let tests = LiveTestBuildInput.testsFor selection covered cycle.TestState.DiscoveredTests
+        let effects, cycle' = Features.LiveTesting.LiveTestCycleState.onBuildInputChanged filePath tests cycle
+        let ids = tests |> Array.map (fun test -> test.Id) |> Set.ofArray
+        let marked = refreshStatusesForChangedIds cycle' ids (fun state -> { state with AffectedTests = Set.union state.AffectedTests ids })
+        let cancelled =
+          match effects with
+          | [] -> []
+          | _ -> pendingRebuildCancellationEffects cycle
+        setLiveTestingState target marked current, cancelled @ (effects |> List.map SageFsEffect.TestCycle)
+      Utils.Log.info "[watcher] %s changed: %s" filePath (Features.ProjectFileChange.describeSelection selection)
+      match LiveTestFileRouting.route (sessionActivation model) (liveTestRoots model) filePath with
+      | LiveTestFileRouting.FileRoute.SessionLess ->
+        match model.LiveTesting.TestState.Activation with
+        | Features.LiveTesting.LiveTestingActivation.Active -> rebuildAndRun SageFsModel.LiveTestingTarget.Primary model
+        | Features.LiveTesting.LiveTestingActivation.Inactive -> model, []
+      | LiveTestFileRouting.FileRoute.ToSessions receivers ->
+        receivers
+        |> List.fold
+          (fun (accModel, accEffects) receiver ->
+            let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some (SessionId.value receiver)) accModel
+            let model', effects = rebuildAndRun target accModel
             model', accEffects @ effects)
           (model, [])
 

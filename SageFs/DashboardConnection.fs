@@ -38,6 +38,7 @@ open Falco.Markup
 open Falco.Datastar
 open SageFs
 open SageFs.Server.DashboardTypes
+open SageFs.Server.DashboardSinks
 
 /// Server-patched, absolute-clock heartbeat: a CHANGE TOKEN, never compared with the browser's clock.
 [<Literal>]
@@ -159,9 +160,9 @@ let connectionCheckExpr () =
 /// nothing patches, and the daemon's, which every heartbeat patches, so the two differ only once the daemon is another
 /// build.
 let monitorAttributes (version: string) : XmlAttribute list =
-  [ Ds.signal (HeartbeatSignal, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-    Ds.signal (ShellVersionSignal, version)
-    Ds.signal (DaemonVersionSignal, version)
+  [ Sink.signalNumber HeartbeatSignal (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+    Sink.signal ShellVersionSignal (UserText.ofString version)
+    Sink.signal DaemonVersionSignal (UserText.ofString version)
     Ds.signal (LastSeenSignal, 0L)
     Ds.signal (LastBeatSignal, 0L)
     Ds.signal (LastTickSignal, 0L)
@@ -180,7 +181,7 @@ let hardBanner () : XmlNode =
       // Assertive: the daemon went away, and a screen reader is otherwise never told.
       Attr.create "role" "alert"
       Attr.style "display:none"
-      Ds.show (sprintf "!$%s" Signals.Connected) ]
+      Sink.show (sprintf "!$%s" Signals.Connected) ]
     [ Text.enc (Glyphs.lead Glyph.Fail + "Daemon not running — start SageFs to continue") ]
 
 /// The daemon answers, and the live stream is catching up. Says what is known, and claims nothing more.
@@ -191,5 +192,5 @@ let softBanner () : XmlNode =
       // Polite: updates are paused but the daemon answers, which is worth saying and not worth interrupting for.
       Attr.create "role" "status"
       Attr.style "display:none"
-      Ds.show (sprintf "$%s && $%s" LateSignal Signals.Connected) ]
+      Sink.show (sprintf "$%s && $%s" LateSignal Signals.Connected) ]
     [ Text.enc (Glyphs.lead Glyph.Busy + "Live updates paused — the daemon answers, this page is reconnecting") ]

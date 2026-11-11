@@ -100,6 +100,11 @@ let membershipTests =
       |> Expect.contains "a departed conductor keeping the seat must violate the bound-implies-present rule"
                     "BOUND-IS-PRESENT"
 
+    testCase "FAULTS — a conductor that leaves holding claims VIOLATES CONDUCTOR-DEPARTS-EMPTY-HANDED, so the departure guard has teeth" <| fun _ ->
+      let r = CohortVacancySpec.departFaultsWithClaims ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "leaving with a held claim orphans it as the seat empties" "CONDUCTOR-DEPARTS-EMPTY-HANDED"
+
     testCase "FAULTS — a seating that skips the presence check VIOLATES BOUND-IS-PRESENT and SEATING-NAMES-A-PRESENT-MEMBER, so SeatConductor's rules have teeth" <| fun _ ->
       let r = CohortVacancySpec.seatFaultsAbsent ()
       r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"

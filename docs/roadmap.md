@@ -11,7 +11,7 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 8, Later 19, Exploring 20. Already built: 64.
+On the page today: Now 0, Next 8, Later 20, Exploring 20. Already built: 64.
 
 ## Next (8)
 
@@ -43,7 +43,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - [ ] **A head-to-head benchmark for REPL servers.** I want to be able to say where SageFs is ahead of another REPL server and where it is behind, with numbers I can defend. The harness drives each server over stdio on the same small project: time to ready, first and follow-up eval, rebuild and continue, a hang, a stack overflow, a failed build, tool-list tokens, and steps from nothing to a first eval. It runs only on a quiet machine, refuses to record a number without the machine, load and versions, and publishes a dated page that credits each tool's author and links each loss to its plan. FsiMcp is the first comparison, and the one to run is its latest release, v0.4.3 of 2026-11-08 with eight tools, which `dnx FsiMcp --yes` fetches without an install; the 0.3.0 figures are a release behind. Running someone else's package needs my go and a sandbox, so the plan says how, and no timing is written until then. ([repl-loop-benchmarks.md](repl-loop-benchmarks.md), [repl-benchmark-against-other-tools.md](plans/repl-benchmark-against-other-tools.md))
 
-## Later (19)
+## Later (20)
 
 _I want it and I roughly know how. Months to a year, and the order will move._
 
@@ -82,6 +82,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 - [ ] **A .NET Framework host for Framework projects.** SageFs refuses a project whose only target is .NET Framework, because its FSI host is a modern .NET process that cannot load Framework assemblies. The host is already built by the project's own SDK behind a process boundary, so a Framework variant is another build of an existing artifact. It would run on Windows only. I want the session to run on the Framework CLR, since driving fsianycpu.exe gives a bare REPL with no hot reload, live testing or coverage. Requested in issue #135. ([ecosystem-compatibility.md](ecosystem-compatibility.md), [how-isolation-works.md](how-isolation-works.md), [dotnet-framework-host.md](plans/dotnet-framework-host.md))
 - [ ] **The getter sandbox beyond Linux x86-64.** Clicking a getter in the live-bindings pane runs it under a syscall filter that stops network use and file writes, on Linux x86-64 only. Elsewhere the getter runs under its deadline alone, and the pane says so. ([decisions.md](decisions.md), [getter-sandbox-beyond-linux.md](plans/getter-sandbox-beyond-linux.md))
 - [ ] **A token for every daemon call.** The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity. ([mcp-tools.md](mcp-tools.md), [a-token-for-every-daemon-call.md](plans/a-token-for-every-daemon-call.md))
+- [ ] **A Content-Security-Policy on the dashboard.** Every computed value now reaches the dashboard's attributes and Datastar expressions through one set of encoding sinks, and a test keeps it that way. A policy would be a second wall behind that, stopping an injected script element or inline handler. The page still carries four inline scripts, so I'd move them into a served file first and then send the header. ([decisions.md](decisions.md), [dashboard-csp.md](plans/dashboard-csp.md))
 - [ ] **Admit heavy work by measured cost.** Heavy work already takes a lease, and the daemon sheds under memory pressure with a retry hint. It doesn't yet know what a rebuild of your project usually costs, so it reacts instead of predicting. I'd record peak memory and duration per kind of work and admit against the headroom. ([admit-heavy-work-by-measured-cost.md](plans/admit-heavy-work-by-measured-cost.md))
 
 ## Exploring (20)

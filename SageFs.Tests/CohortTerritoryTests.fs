@@ -68,7 +68,9 @@ let cohortTerritoryTests =
       testCase "an Orphaned claim projects with HolderIndex = -1 (neutral, not dropped)" <| fun _ ->
         let frame =
           frameAfter
-            [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            // bob conducts, so alice leaves as a member (a conductor holding a claim may not leave).
+            [ CohortCommand.Join(bob, JoinableRole.Implementer, None, machine)
+              CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
               CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
               CohortCommand.Depart(alice, machine) ]
         let tiles = ofFrame frame

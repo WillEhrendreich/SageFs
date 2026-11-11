@@ -15,6 +15,7 @@ open SageFs.ErrorMessages
 open SageFs.Server.DashboardPanelContext
 open SageFs.Server.DashboardTypes
 open SageFs.Server.TeardownRegistry
+open SageFs.Server.DashboardSinks
 
 /// Use renderNode + sseStringElements instead of sseHtmlElements
 /// (which prepends DOCTYPE to every fragment, causing Datastar to choke).
@@ -28,21 +29,8 @@ let ssePatchNode (ctx: HttpContext) (node: XmlNode) =
 /// values. Everything else (·, é, emoji) passes through unchanged. (Falco's
 /// `Text.enc`/WebUtility.HtmlEncode also entity-encodes every char >= U+00A0,
 /// which rewrites benign user-visible text into `&#183;`/`&#128994;` for no
-/// security gain.)
-let htmlEscape (s: string) : string =
-  match String.IsNullOrEmpty s || s.IndexOfAny([| '&'; '<'; '>'; '"'; '\'' |]) < 0 with
-  | true -> (match isNull s with | true -> "" | false -> s)
-  | false ->
-    let sb = Text.StringBuilder(s.Length + 16)
-    for c in s do
-      match c with
-      | '&' -> sb.Append("&amp;") |> ignore
-      | '<' -> sb.Append("&lt;") |> ignore
-      | '>' -> sb.Append("&gt;") |> ignore
-      | '"' -> sb.Append("&quot;") |> ignore
-      | '\'' -> sb.Append("&#39;") |> ignore
-      | c -> sb.Append(c) |> ignore
-    sb.ToString()
+/// security gain.) The encoding lives in `DashboardSinks.Encode.html`, which the attribute sinks share.
+let htmlEscape (s: string) : string = DashboardSinks.Encode.html s
 
 /// Text node for any runtime string (session ids, dirs, project names,
 /// messages, eval output). The ONE place a computed string reaches
@@ -69,12 +57,13 @@ let pageHeadMetas : XmlNode list =
 /// Encode a runtime string for use as an attribute VALUE. Falco.Markup emits
 /// attribute values verbatim inside double quotes, so a `"` in a working
 /// directory, title, or path would otherwise break out of the attribute.
+/// For the attribute helpers Falco names (`Attr.title`, `Attr.value`, `Attr.href`); `Attr.create` goes through `Sink.attr`.
 let attrEnc (s: string) : string = htmlEscape s
 
 /// Stable automation hook for demo/E2E tooling. `name` is always a literal
 /// from the fixed kebab-case vocabulary the demos tooling mirrors — never a
 /// computed string — so a renamed control breaks a contract test, not a demo.
-let testid (name: string) = Attr.create "data-testid" name
+let testid (name: string) = Sink.attr "data-testid" (UserText.ofString name)
 
 /// What the main area says about a session that faulted: why, and what to do about it. The reason and the way out used to
 /// be on a sidebar card only, so the place the person was reading said just "Faulted". Nothing for any other session.
@@ -118,7 +107,6 @@ let renderKeyboardHelp () =
 /// Render the completion dropdown as server-side HTML for Datastar morph.
 /// Each item has data-on-click that calls the client-side insertion utility.
 let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list) (cursorPos: int) =
-  let escJs (s: string) = s.Replace("\\", "\\\\").Replace("'", "\\'")
   match items with
   | [] ->
     Elem.div
@@ -133,7 +121,7 @@ let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list
         Elem.div
           [ Attr.class' "comp-item"
             Attr.style (sprintf "padding:2px 6px;cursor:pointer;%s" (match i with | 0 -> "background:var(--bg-selection)" | _ -> ""))
-            Ds.onEvent ("click", sprintf "window._insertComp('%s',%d)" (escJs item.ReplacementText) cursorPos) ]
+            Sink.onEvent ("click", sprintf "window._insertComp(%s,%d)" (Sink.jsArg (UserText.ofString item.ReplacementText)) cursorPos) ]
           [ textEnc item.DisplayText
             Elem.span [ Attr.style "opacity:0.5;font-size:0.857em;margin-left:4px;" ] [
               textEnc (sprintf "(%s)" (Features.AutoCompletion.CompletionKind.label item.Kind))
@@ -165,7 +153,7 @@ let renderThemePicker (selectedTheme: string) =
       // Seed the theme signal with the actual current theme so data-bind shows
       // it — otherwise the shell's empty "" default clobbers the server-rendered
       // <option selected>, and the picker never reflects the live theme.
-      Ds.signal (Signals.Theme, selectedTheme)
+      Sink.signal Signals.Theme (UserText.ofString selectedTheme)
       Ds.bind Signals.Theme
       // Send the freshly-selected value (not the signal, which is updated
       // async by data-bind) by reading the select element at event time.
@@ -173,7 +161,7 @@ let renderThemePicker (selectedTheme: string) =
       Ds.onEvent ("change", "var t=event.target.value; @post('/dashboard/set-theme', {theme: t})") ]
     (ThemePresets.all |> List.map (fun (name, _) ->
       Elem.option
-        ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
+        ([ Attr.value (attrEnc name) ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
         [ textEnc ("Theme: " + name) ]))
 
 /// Render the workflow picker as a `<select id="workflow-switcher">` — the
@@ -195,7 +183,7 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
       [ Attr.id DomIds.WorkflowSwitcher
         Attr.class' "badge workflow-select"
         Attr.style "font-size:0.857rem;margin-left:6px;"
-        Attr.create "aria-label" (attrEnc (sprintf "Workflow: %s — choose a workflow to switch (restarts the session)" currentLabel))
+        Sink.attr "aria-label" (UserText.ofString (sprintf "Workflow: %s — choose a workflow to switch (restarts the session)" currentLabel))
         Ds.indicator Signals.WorkflowSwitchLoading
         Ds.attr' ("disabled", sprintf "$%s" Signals.WorkflowSwitchLoading)
         Ds.signal (Signals.WorkflowTarget, "")
@@ -209,7 +197,7 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
         // Setting `$workflowTarget` puts it in @post's default payload (the
         // current signal set), the same way the cursor tracker's
         // `$cursorPos = ...` already works.
-        Ds.onEvent ("change", sprintf "$%s = event.target.value; @post('/dashboard/switch-workflow')" Signals.WorkflowTarget) ]
+        Sink.onEvent ("change", sprintf "$%s = event.target.value; @post('/dashboard/switch-workflow')" Signals.WorkflowTarget) ]
       (WorkflowSwitch.options |> List.map (fun w ->
         let lbl = WorkflowTypes.SessionWorkflow.label w
         Elem.option
@@ -225,7 +213,7 @@ let renderWorkflowSwitcherPending (targetLabel: string) : XmlNode =
     [ Attr.id DomIds.WorkflowSwitcher
       Attr.class' "badge"
       Attr.style "font-size:0.857rem;margin-left:6px;"
-      Attr.create "aria-label" (attrEnc (sprintf "Switching workflow to %s…" targetLabel))
+      Sink.attr "aria-label" (UserText.ofString (sprintf "Switching workflow to %s…" targetLabel))
       Attr.create "role" "status" ]
     [ textEnc (sprintf "%s %s…" (Glyphs.text Glyph.Busy) targetLabel) ]
 
@@ -258,7 +246,7 @@ let renderSessionStatus (sessionState: SessionState) (sessionId: string) (workin
   // The class comes from the display status every other surface uses, so an evaluating session is green here as it is in the
   // sidebar, and a session that has not started is not drawn as a failure.
   let statusClass = sessionState |> SessionDisplayStatus.ofSessionState |> SessionDisplayStatus.cssClass
-  Elem.div [ Attr.id DomIds.SessionStatus; Attr.create "data-working-dir" (attrEnc workingDir) ] [
+  Elem.div [ Attr.id DomIds.SessionStatus; Sink.attr "data-working-dir" (UserText.ofString workingDir) ] [
     yield Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ textEnc (SessionState.label sessionState) ]
     yield! workflowNode
     yield Elem.br []
@@ -527,9 +515,9 @@ let renderAutoOpenToggleIcon (enabled: bool) =
       "Warmup auto-open is OFF — namespaces/modules are NOT opened automatically during warmup. Click to enable (rewrites .SageFs/config.fsx back to AutoOpenNamespaces = true)."
   Elem.button
     [ Attr.class' "session-btn session-btn-autoopen"
-      Attr.create "aria-label"tooltip
-      Attr.create "title" (attrEnc tooltip)
-      Ds.onClick (Ds.post endpoint) ]
+      Sink.attr "aria-label"(UserText.ofString tooltip)
+      Sink.attr "title" (UserText.ofString tooltip)
+      Sink.onClick (Sink.post endpoint) ]
     [ textEnc glyph
       buttonWord (match enabled with | true -> "Auto-open: on" | false -> "Auto-open: off") ]
 
@@ -550,7 +538,7 @@ let renderAutoOpenToggleButton (enabled: bool) (style: string) =
       Attr.style style
       Ds.indicator Signals.ConfigLoading
       Ds.attr' ("disabled", "$configLoading")
-      Ds.onClick (Ds.post endpoint) ]
+      Sink.onClick (Sink.post endpoint) ]
     [ Elem.span [ Ds.show "$configLoading" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
       Elem.span [ Ds.show "!$configLoading" ] [ textEnc (Glyphs.lead Glyph.Settings) ]
       label ]
@@ -580,7 +568,7 @@ let renderSessionHealthLine (health: SessionHealth) =
         Attr.class' "session-health-line meta"
         Attr.style (sprintf "font-weight: bold; color: %s; padding: 2px 12px; overflow-wrap: anywhere;" color)
         Attr.create "role" "status"
-        Attr.create "aria-label" (attrEnc line) ]
+        Sink.attr "aria-label" (UserText.ofString line) ]
       [ textEnc line ]
 
 /// How long ago something happened is the browser's to count, not the server's.
@@ -760,7 +748,7 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
       Elem.span
         [ Attr.class' "daemon-component-failure"
           Attr.style "margin-left: 0.5rem;"
-          Attr.create "title" failure.Hint
+          Sink.attr "title" (UserText.ofString failure.Hint)
           Attr.create "aria-label" "A component the daemon depends on has failed" ]
         [ textEnc (sprintf "%s %s: %s" (Glyphs.text Glyph.Warn) failure.Component failure.Reason) ]
     // Evidence captured (or not) for a worker_rss Broken verdict this run —
@@ -850,14 +838,14 @@ let renderEvalStats (stats: EvalStatsView) =
     textEnc (evaluationsText stats.Count)
     Elem.button
       [ Attr.class' "perf-toggle-btn"
-        Attr.create "aria-label" timingButtonName
+        Sink.attr "aria-label" (UserText.ofString timingButtonName)
         Attr.create "aria-expanded" "false"
         Ds.attr' ("aria-expanded", sprintf "$%s ? 'true' : 'false'" Signals.PerfStatsOpen)
         Ds.preserveAttr "aria-expanded"
-        Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
+        Sink.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
       // A word: the chart glyph drew as a row of empty boxes in the page's font, and three reviewers took it for a missing character.
       [ textEnc "timing" ]
-    Elem.span [ Attr.class' "eval-perf-detail meta"; Ds.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
+    Elem.span [ Attr.class' "eval-perf-detail meta"; Sink.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
       textEnc (sprintf " · avg %.0fms · min %.0fms · max %.0fms" stats.AvgMs stats.MinMs stats.MaxMs)
       match stats.Sparkline with
       | "" -> ()
@@ -1042,11 +1030,11 @@ let private renderFoldableOutputLines (lines: OutputLine list) : XmlNode list =
 /// on the one element that actually scrolls.
 let renderOutputForSession (sessionId: string) (evalsFinished: int) (lines: OutputLine list) (placeholder: string) =
   Elem.div
-    [ Attr.id DomIds.OutputPanel; testid "session-output"; Attr.create "data-session-id" (attrEnc sessionId)
-      Ds.signal (Signals.OutputFeedSession, sessionId)
-      Ds.signal (Signals.OutputFeedEvals, evalsFinished)
-      Ds.signal (Signals.OutputFeedRev, OutputFollow.contentRev lines)
-      Ds.onEvent ("scroll", OutputFollow.scrollExpr)
+    [ Attr.id DomIds.OutputPanel; testid "session-output"; Sink.attr "data-session-id" (UserText.ofString sessionId)
+      Sink.signal Signals.OutputFeedSession (UserText.ofString sessionId)
+      Sink.signalNumber Signals.OutputFeedEvals (int64 evalsFinished)
+      Sink.signalNumber Signals.OutputFeedRev (int64 (OutputFollow.contentRev lines))
+      Sink.onEvent ("scroll", OutputFollow.scrollExpr)
       Ds.onInit OutputFollow.resizeFollowExpr
       Ds.effect OutputFollow.followEffectExpr ] [
     Elem.div
@@ -1054,7 +1042,7 @@ let renderOutputForSession (sessionId: string) (evalsFinished: int) (lines: Outp
         Attr.style "padding: 2px 0 6px; color: var(--fg-yellow); font-weight: bold;"
         Attr.create "role" "status"
         Attr.create "aria-label" "Evaluation in progress"
-        Ds.show (sprintf "$%s" Signals.ActionLoading) ]
+        Sink.show (sprintf "$%s" Signals.ActionLoading) ]
       [ textEnc (Glyphs.lead Glyph.Busy + "Evaluating…") ]
     match lines.IsEmpty with
     | true ->
@@ -1076,10 +1064,10 @@ let renderOutputNewEvalsPill () =
       Attr.type' "button"
       Attr.class' "output-new-evals"
       Attr.style "display:none"
-      Attr.create "aria-label" OutputFollow.JumpLabel
-      Ds.show OutputFollow.pillShowExpr
+      Sink.attr "aria-label" (UserText.ofString OutputFollow.JumpLabel)
+      Sink.show OutputFollow.pillShowExpr
       Ds.text OutputFollow.pillLabelExpr
-      Ds.onClick OutputFollow.jumpExpr ]
+      Sink.onClick OutputFollow.jumpExpr ]
     []
 
 /// How the "Resume Previous" list is ordered. A closed set of choices becomes
@@ -1285,7 +1273,7 @@ let private renderPreviousSessionSortSelect (selected: PreviousSessionSort) =
         Attr.class' "theme-select"
         Attr.create "aria-label" "Sort the Resume Previous list"
         Attr.create "title" "Sort the Resume Previous list"
-        Ds.signal (Signals.PreviousSort, PreviousSessionSort.toKey selected)
+        Sink.signal Signals.PreviousSort (UserText.ofString (PreviousSessionSort.toKey selected))
         Ds.bind Signals.PreviousSort
         // Read the freshly-selected value directly (not the signal, which
         // data-bind updates asynchronously) — same reasoning as
@@ -1329,7 +1317,7 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
             Attr.create "aria-label" "Quick Start — create a new session in a temporary directory"
             Ds.indicator Signals.TempLoading
             Ds.onClick (Ds.post "/dashboard/session/create-temp")
-            Ds.onEvent ("keydown", sprintf "if(event.key==='Enter'||event.key===' '){event.preventDefault();%s}" (Ds.post "/dashboard/session/create-temp")) ]
+            Sink.onEvent ("keydown", sprintf "if(event.key==='Enter'||event.key===' '){event.preventDefault();%s}" (Ds.post "/dashboard/session/create-temp")) ]
           [ Elem.h3 [] [
               Elem.span [ Ds.show "$tempLoading" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
               Elem.span [ Ds.show "!$tempLoading" ] [ textEnc (Glyphs.lead Glyph.Go) ]
@@ -1344,7 +1332,7 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
               [ Attr.class' "eval-input"
                 Attr.style "min-height: auto; height: 2rem;"
                 Ds.bind Signals.NewSessionDir
-                Attr.create "placeholder" workingDirPlaceholder ]
+                Sink.attr "placeholder" (UserText.ofString workingDirPlaceholder) ]
             Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
               Elem.button
                 [ Attr.class' "eval-btn"
@@ -1414,9 +1402,9 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
             let headline = previousSessionHeadline s
             Elem.button
               [ Attr.class' "picker-session-row"
-                Attr.create "aria-label" (attrEnc (sprintf "Resume session: %s (id %s)" headline s.Id))
-                Attr.create "title" (attrEnc (sprintf "Resume session: %s (id %s)" headline s.Id))
-                Ds.onClick (Ds.post (sprintf "/dashboard/session/resume/%s" s.Id)) ]
+                Sink.attr "aria-label" (UserText.ofString (sprintf "Resume session: %s (id %s)" headline s.Id))
+                Sink.attr "title" (UserText.ofString (sprintf "Resume session: %s (id %s)" headline s.Id))
+                Sink.onClick (Sink.post (sprintf "/dashboard/session/resume/%s" s.Id)) ]
               [ Elem.div [ Attr.style "flex: 1; min-width: 0; text-align: left;" ] [
                   Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem;" ] [
                     Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc headline ]
@@ -1425,7 +1413,7 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
                   | true ->
                     Elem.div
                       [ Attr.style "font-size: 0.857rem; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                        Attr.create "aria-label"(attrEnc s.WorkingDir) ]
+                        Sink.attr "aria-label"(UserText.ofString s.WorkingDir) ]
                       [ textEnc (Glyphs.lead Glyph.Folder); textEnc s.WorkingDir ]
                   | false -> ()
                   match s.Projects.IsEmpty with
@@ -1491,7 +1479,7 @@ let treemapStatusToFilterValue (status: Features.LiveTesting.TreemapStatus) =
   | Features.LiveTesting.TreemapStatus.Failed -> "failed"
   | Features.LiveTesting.TreemapStatus.Running -> "running"
   | Features.LiveTesting.TreemapStatus.Skipped -> "skipped"
-  | Features.LiveTesting.TreemapStatus.Other -> "other"
+  | Features.LiveTesting.TreemapStatus.Quarantined -> "quarantined"
 
 /// Render a filter toggle bar for test status filtering.
 /// Uses Datastar signals: clicking a button sets $testFilter, Ds.show on entries filters display.
@@ -1500,22 +1488,26 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
     entries |> Array.filter (fun e -> e.Status = status) |> Array.length
   let passedCount = countByStatus Features.LiveTesting.TreemapStatus.Passed
   let failedCount = countByStatus Features.LiveTesting.TreemapStatus.Failed
-  let runningCount = countByStatus Features.LiveTesting.TreemapStatus.Running
-  let skippedCount = countByStatus Features.LiveTesting.TreemapStatus.Skipped
   let filterBtn (label: string) (value: string) (count: int) (color: string) =
     Elem.button
       [ Attr.class' "test-filter-btn"
-        Ds.onEvent ("click", sprintf "$testFilter = '%s'" value)
-        Ds.show (sprintf "$testFilter !== '%s'" value)
+        Sink.onEvent ("click", sprintf "$testFilter = '%s'" value)
+        Sink.show (sprintf "$testFilter !== '%s'" value)
         Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.857rem;border-radius:0;cursor:pointer;margin-right:2px;" color color) ]
       [ textEnc (sprintf "%s %d" label count) ]
   let activeBtn (label: string) (value: string) (count: int) (color: string) =
     Elem.button
       [ Attr.class' "test-filter-btn test-filter-active"
         Ds.onEvent ("click", "$testFilter = 'all'")
-        Ds.show (sprintf "$testFilter === '%s'" value)
+        Sink.show (sprintf "$testFilter === '%s'" value)
         Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.857rem;border-radius:0;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
       [ textEnc (sprintf "%s %d ✕" label count) ]
+  // Running, skipped and quarantined show only when a test is in that state.
+  let whenAny (label: string) (status: Features.LiveTesting.TreemapStatus) (color: string) =
+    let value, count = treemapStatusToFilterValue status, countByStatus status
+    match count > 0 with
+    | true -> [ filterBtn label value count color; activeBtn label value count color ]
+    | false -> []
   Elem.div
     [ Attr.class' "test-filter-bar"
       Attr.style "display:flex;align-items:center;gap:2px;margin-bottom:4px;flex-wrap:wrap;" ]
@@ -1526,16 +1518,9 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
       yield activeBtn "✓" "passed" passedCount "var(--fg-green,#27ae60)"
       yield filterBtn "✗" "failed" failedCount "var(--fg-red,#e74c3c)"
       yield activeBtn "✗" "failed" failedCount "var(--fg-red,#e74c3c)"
-      match runningCount > 0 with
-      | true ->
-        yield filterBtn "⟳" "running" runningCount "var(--fg-blue,#3498db)"
-        yield activeBtn "⟳" "running" runningCount "var(--fg-blue,#3498db)"
-      | false -> ()
-      match skippedCount > 0 with
-      | true ->
-        yield filterBtn "⊘" "skipped" skippedCount "var(--fg-yellow,#f39c12)"
-        yield activeBtn "⊘" "skipped" skippedCount "var(--fg-yellow,#f39c12)"
-      | false -> () ]
+      yield! whenAny "⟳" Features.LiveTesting.TreemapStatus.Running "var(--fg-blue,#3498db)"
+      yield! whenAny "⊘" Features.LiveTesting.TreemapStatus.Skipped "var(--fg-yellow,#f39c12)"
+      yield! whenAny "Quarantined" Features.LiveTesting.TreemapStatus.Quarantined "var(--fg-magenta,#9b59b6)" ]
 
 // ── Test Status Grid (one legible cell per test) ───────────────────
 
@@ -1552,7 +1537,7 @@ let private testStatusCellColor (status: Features.LiveTesting.TreemapStatus) =
   | Features.LiveTesting.TreemapStatus.Failed -> "var(--fg-red,#e74c3c)"
   | Features.LiveTesting.TreemapStatus.Running -> "var(--fg-blue,#3498db)"
   | Features.LiveTesting.TreemapStatus.Skipped -> "var(--fg-yellow,#f39c12)"
-  | Features.LiveTesting.TreemapStatus.Other -> "var(--bg-focus,#2a2a2a)"
+  | Features.LiveTesting.TreemapStatus.Quarantined -> "var(--fg-magenta,#9b59b6)"
 
 /// Human duration for a cell's tooltip. An untimed test (Running/Skipped, which
 /// `TestTreemap.fromStatusEntries` records as `Timeouts.notRun`) reads "not run"
@@ -1591,15 +1576,16 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
       [ yield! grid.Cells |> Array.map (fun c ->
           let bgColor = testStatusCellColor c.Entry.Status
           let durationLabel = testStatusCellDuration c.Entry.DurationMs
-          let title = sprintf "%s — %s" c.Entry.DisplayName durationLabel
+          // The state in words as well as colour: the filter value is that word.
           let statusFilter = treemapStatusToFilterValue c.Entry.Status
+          let title = sprintf "%s — %s, %s" c.Entry.DisplayName statusFilter durationLabel
           let left = float c.Column * cell
           let top = float c.Row * cell
           Elem.div
             [ Attr.style (sprintf "position:absolute;left:%.2fpx;top:%.2fpx;width:%.2fpx;height:%.2fpx;background:%s;border-radius:1px;overflow:hidden;box-sizing:border-box;"
                 left top cell cell bgColor)
-              Attr.create "aria-label"(attrEnc title)
-              Ds.show (sprintf "$testFilter === 'all' || $testFilter === '%s'" statusFilter) ]
+              Sink.attr "aria-label"(UserText.ofString title)
+              Sink.show (sprintf "$testFilter === 'all' || $testFilter === '%s'" statusFilter) ]
             [ match showLabel with
               | true ->
                 Elem.div [ Attr.style "font-size:0.857rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ] [
@@ -1633,9 +1619,8 @@ let private coverageStatusLabel (status: Features.Treemap.CoverageStatus) =
   | Features.Treemap.CoverageStatus.Uncovered -> "none"
 
 /// A single-quoted JS string literal for splicing a node id into a Datastar
-/// expression (`Ds.onEvent`/`Ds.show` bodies are raw JS, not attribute text).
-let jsStringLiteral (s: string) =
-  "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'"
+/// expression. The expression still goes through a `Sink` that attribute-encodes it.
+let jsStringLiteral (s: string) = Sink.jsArg (UserText.ofString s)
 
 let private coveragePercent (probeCount: int) (coveredCount: int) =
   match probeCount with
@@ -1676,7 +1661,7 @@ let rec private renderCoverageLevels
     | Some pid ->
       Elem.div
         [ Attr.style "cursor:pointer;font-size:0.857rem;color:var(--fg-blue);margin-bottom:2px;user-select:none;"
-          Ds.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral pid)) ]
+          Sink.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral pid)) ]
         [ Text.raw "← back" ]
   let body =
     match node.Children with
@@ -1709,15 +1694,15 @@ let rec private renderCoverageLevels
                   (sprintf
                     "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;cursor:pointer;"
                     r.X r.Y r.W r.H color)
-                Attr.create "aria-label"(attrEnc title)
-                Ds.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral child.Id)) ]
+                Sink.attr "aria-label"(UserText.ofString title)
+                Sink.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral child.Id)) ]
               [ match showLabel with
                 | true ->
                   Elem.div
                     [ Attr.style "font-size:0.857rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ]
                     [ textEnc child.Name ]
                 | false -> () ]) ]
-  let levelDiv = Elem.div [ Ds.show showExpr ] [ backLink; body ]
+  let levelDiv = Elem.div [ Sink.show showExpr ] [ backLink; body ]
   let childLevels =
     node.Children |> List.collect (renderCoverageLevels drillSignal width height (Some node.Id))
   levelDiv :: childLevels
@@ -1764,7 +1749,7 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
             | Some v ->
               Elem.span
                 [ Attr.style "color:var(--fg-green,#98c379);font-size:0.857rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
-                  Attr.create "aria-label"(attrEnc v) ]
+                  Sink.attr "aria-label"(UserText.ofString v) ]
                 [ textEnc (sprintf "= %s" v) ]
             | None -> ()
             match b.ReferencedIn.Length with
@@ -1870,8 +1855,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             Attr.class' (sprintf "session-row %s%s" cls guidanceCls)
             Attr.style "padding: 10px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
             testid "session-card"
-            Attr.create "data-session-id" sid
-            Attr.create "aria-current" (match isViewing with | true -> "true" | false -> "false")
+            Sink.attr "data-session-id" (UserText.ofString sid)
+            Sink.attr "aria-current" (UserText.ofString (match isViewing with | true -> "true" | false -> "false"))
             // Switching is signal-driven: the POST carries this page's clientId
             // signal, so the backend retargets THIS tab's stream and patches
             // $viewingSessionId (GET /dashboard has no session parameter). One
@@ -1880,7 +1865,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             match isViewing with
             | true -> ()
             | false ->
-              Ds.onClick (sprintf "evt.target.closest('button, a') || %s" (Ds.post (sprintf "/dashboard/session/switch/%s" sid))) ]
+              Sink.onClick (sprintf "evt.target.closest('button, a') || %s" (Sink.post (sprintf "/dashboard/session/switch/%s" sid))) ]
           [
             Elem.div [ Attr.class' "session-card-body" ] [
               // Row 1: session ID + status + selected indicator
@@ -1908,8 +1893,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.span
                     [ Attr.class' "status badge session-health-badge"
                       Attr.style (sprintf "background: transparent; color: %s; border: 1px solid %s;" color color)
-                      Attr.create "aria-label"
-                        (attrEnc (SessionHealth.describeForAgent s.Health |> Option.defaultValue (SessionHealth.label s.Health))) ]
+                      Sink.attr "aria-label"
+                        (UserText.ofString (SessionHealth.describeForAgent s.Health |> Option.defaultValue (SessionHealth.label s.Health))) ]
                     [ textEnc (sprintf "%s %s" glyph (SessionHealth.label s.Health)) ]
                 match isViewing with
                 | true ->
@@ -1986,7 +1971,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     [ Attr.class' (sprintf "session-card-source session-card-source-%s" toneName)
                       testid "session-card-source"
                       Attr.create "role" "status"
-                      Attr.create "data-readiness" (attrEnc (Readiness.label readiness)) ]
+                      Sink.attr "data-readiness" (UserText.ofString (Readiness.label readiness)) ]
                     [ Elem.div [ Attr.class' "session-card-source-headline" ] [ textEnc headline ]
                       match offersRebuild with
                       | true -> RebuildRemedy.button RemedyPlace.OnCard
@@ -2069,7 +2054,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.span [ Attr.style "display:inline-flex;align-items:center;gap:2px;" ] [
                     Elem.span
                       [ Attr.style (sprintf "display:inline-block;width:48px;height:8px;border-radius:0;background:linear-gradient(to right,%s);" gradientStops)
-                        Attr.create "aria-label"title ]
+                        Sink.attr "aria-label"(UserText.ofString title) ]
                       []
                     Elem.span
                       [ Attr.style "font-size:0.857rem;color:var(--fg-dim);" ]
@@ -2114,7 +2099,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                           match badge.CssClass.Contains "badge-agent-stale" with
                           | true -> sprintf "%s is an agent connected to this session and has not acted for a while" badge.Name
                           | false -> sprintf "%s is an agent connected to this session" badge.Name))
-                        Attr.create "aria-label"(attrEnc (
+                        Sink.attr "aria-label"(UserText.ofString (
                           match badge.DetailLabel.Length > 0 with
                           | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
                           | false -> badge.Name)) ]
@@ -2168,9 +2153,9 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.div
                     [ Attr.class' "session-dir"
                       Attr.style "font-size: 0.857rem; color: var(--fg-dim);"
-                      Attr.create "aria-label"(attrEnc s.WorkingDir)
+                      Sink.attr "aria-label"(UserText.ofString s.WorkingDir)
                       // The full path, for a card that wraps it.
-                      Attr.create "title" (attrEnc s.WorkingDir) ]
+                      Sink.attr "title" (UserText.ofString s.WorkingDir) ]
                     [ textEnc (Glyphs.lead Glyph.Folder)
                       // A break opportunity after each separator, so a narrow card wraps the path between its parts and never in
                       // the middle of a word ("fixture" / "s").
@@ -2208,9 +2193,9 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                        // Recreating the session is destructive (the REPL's bindings go
                        // with the old worker), so it is an explicit button, never an
                        // on-change surprise.
-                       Ds.onEvent
+                       Sink.onEvent
                          ("change",
-                          sprintf "document.getElementById('%s').removeAttribute('disabled')" (sprintf "project-apply-%s" sid)) ]
+                          sprintf "document.getElementById(%s).removeAttribute('disabled')" (Sink.jsArg (UserText.ofString (sprintf "project-apply-%s" sid)))) ]
                      (choices
                       |> List.map (fun (value, text, isSelected) ->
                         Elem.option
@@ -2225,11 +2210,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                        Attr.disabled
                        Attr.create "aria-label" "Load the selected project — restarts this session, losing its REPL bindings"
                        Attr.create "title" "Load the selected project — restarts this session, losing its REPL bindings"
-                       Ds.onEvent
+                       Sink.onEvent
                          ("click",
                           sprintf
-                            "@post('/dashboard/session/set-project/%s?project=' + encodeURIComponent(document.getElementById('%s').value))"
-                            sid selectId) ]
+                            "@post(%s + encodeURIComponent(document.getElementById(%s).value))"
+                            (Sink.jsArg (UserText.ofString (sprintf "/dashboard/session/set-project/%s?project=" (Uri.EscapeDataString sid))))
+                            (Sink.jsArg (UserText.ofString selectId))) ]
                      [ Text.raw "⏎" ]
                  ]
             Elem.div [ Attr.class' "session-card-actions" ] [
@@ -2243,7 +2229,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   [ Attr.class' "session-btn"
                     Attr.create "aria-label""Switch — show this session's output here"
                     Attr.create "title" "Switch — show this session's output here"
-                    Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" sid)) ]
+                    Sink.onClick (Sink.post (sprintf "/dashboard/session/switch/%s" sid)) ]
                   [ Text.raw "⇄"; buttonWord "Switch" ]
               | true -> ()
               // Run App — for sessions that own an executable project. Every app
@@ -2267,31 +2253,31 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.href (attrEnc url)
                       Attr.target "_blank"
                       Attr.rel "noopener"
-                      Attr.create "aria-label"(attrEnc (sprintf "Open %s — save a source file to hot reload it" url))
-                      Attr.create "title" (attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
+                      Sink.attr "aria-label"(UserText.ofString (sprintf "Open %s — save a source file to hot reload it" url))
+                      Sink.attr "title" (UserText.ofString (sprintf "Open %s — save a source file to hot reload it" url)) ]
                     [ textEnc (Glyphs.text Glyph.Open); buttonWord "Open app" ]
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
                     testid "stop-app"
-                    Attr.create "aria-label"(attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
-                    Attr.create "title" (attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
-                    Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
+                    Sink.attr "aria-label"(UserText.ofString (sprintf "Stop App — %s" (AppRun.describeState s.App)))
+                    Sink.attr "title" (UserText.ofString (sprintf "Stop App — %s" (AppRun.describeState s.App)))
+                    Sink.onClick (Sink.post (sprintf "/dashboard/stop-app/%s" sid)) ]
                   [ Text.raw "■"; buttonWord "Stop app" ]
               | _, AppRun.AppRunState.Starting _ ->
                 Elem.button
                   [ Attr.class' "session-btn"
                     Attr.disabled
-                    Attr.create "aria-label"(attrEnc (AppRun.describeState s.App))
-                    Attr.create "title" (attrEnc (AppRun.describeState s.App)) ]
+                    Sink.attr "aria-label"(UserText.ofString (AppRun.describeState s.App))
+                    Sink.attr "title" (UserText.ofString (AppRun.describeState s.App)) ]
                   [ textEnc (Glyphs.text Glyph.Busy); buttonWord "Starting" ]
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
                     testid "run-app"
-                    Attr.create "aria-label"(attrEnc (runTitle (AppRun.projectName project.Path)))
-                    Attr.create "title" (attrEnc (runTitle (AppRun.projectName project.Path)))
-                    Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
+                    Sink.attr "aria-label"(UserText.ofString (runTitle (AppRun.projectName project.Path)))
+                    Sink.attr "title" (UserText.ofString (runTitle (AppRun.projectName project.Path)))
+                    Sink.onClick (Sink.post (sprintf "/dashboard/run-app/%s" sid)) ]
                   [ Text.raw "▶"; buttonWord "Run app" ]
               | projects, _ ->
                 // Several executables: a dropdown to choose which to run
@@ -2324,20 +2310,25 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       testid "run-app"
                       Attr.create "aria-label""Run the selected project with hot reload"
                       Attr.create "title" "Run the selected project with hot reload"
-                      Ds.onEvent ("click", sprintf "@post('/dashboard/run-app/%s/' + encodeURIComponent(document.getElementById('%s').value))" sid selectId) ]
+                      Sink.onEvent
+                        ("click",
+                         sprintf
+                           "@post(%s + encodeURIComponent(document.getElementById(%s).value))"
+                           (Sink.jsArg (UserText.ofString (sprintf "/dashboard/run-app/%s/" (Uri.EscapeDataString sid))))
+                           (Sink.jsArg (UserText.ofString selectId))) ]
                     [ Text.raw "▶"; buttonWord "Run app" ]
                 ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
-                  Attr.create "aria-label" (TeardownButton.name TeardownButton.Stop)
-                  Attr.create "title" (TeardownButton.name TeardownButton.Stop)
-                  Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" sid)) ]
+                  Sink.attr "aria-label" (UserText.ofString (TeardownButton.name TeardownButton.Stop))
+                  Sink.attr "title" (UserText.ofString (TeardownButton.name TeardownButton.Stop))
+                  Sink.onClick (Sink.post (sprintf "/dashboard/session/stop/%s" sid)) ]
                 [ Text.raw "■"; buttonWord (TeardownButton.word TeardownButton.Stop) ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
-                  Attr.create "aria-label" (TeardownButton.name TeardownButton.Close)
-                  Attr.create "title" (TeardownButton.name TeardownButton.Close)
-                  Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
+                  Sink.attr "aria-label" (UserText.ofString (TeardownButton.name TeardownButton.Close))
+                  Sink.attr "title" (UserText.ofString (TeardownButton.name TeardownButton.Close))
+                  Sink.onClick (Sink.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
                 [ Text.raw "⌫"; buttonWord (TeardownButton.word TeardownButton.Close) ]
               // Purge is the irreversible teardown level — it deletes binaries
               // AND the manifest entry, not just the running session — and it
@@ -2348,9 +2339,14 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               // severity the label already claims.
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
-                  Attr.create "aria-label" (TeardownButton.name TeardownButton.Delete)
-                  Attr.create "title" (TeardownButton.name TeardownButton.Delete)
-                  Ds.onEvent ("click", sprintf "if(confirm('Delete session %s? This deletes its saved binaries and manifest entry. This cannot be undone.')){%s}" sid (Ds.post (sprintf "/dashboard/session/purge/%s" sid))) ]
+                  Sink.attr "aria-label" (UserText.ofString (TeardownButton.name TeardownButton.Delete))
+                  Sink.attr "title" (UserText.ofString (TeardownButton.name TeardownButton.Delete))
+                  Sink.onEvent
+                    ("click",
+                     sprintf
+                       "if(confirm(%s)){%s}"
+                       (Sink.jsArg (UserText.ofString (sprintf "Delete session %s? This deletes its saved binaries and manifest entry. This cannot be undone." sid)))
+                       (Sink.post (sprintf "/dashboard/session/purge/%s" sid))) ]
                 [ textEnc (Glyphs.text Glyph.Remove); buttonWord (TeardownButton.word TeardownButton.Delete) ]
             ]
             // What the three that take a session down do, in words on the card: three reviewers saw Stop, Dispose and Purge side by
@@ -2526,7 +2522,7 @@ let renderSessionsStripMarker (view: SessionInView) : XmlNode =
         [ Attr.class' (sprintf "status sessions-stale-marker %s" (ToneStyle.cssClass (Readiness.tone readiness)))
           testid "sessions-stale-marker"
           Attr.create "role" "status"
-          Attr.create "title" (attrEnc (sprintf "%s: open the session card for details" phrase)) ]
+          Sink.attr "title" (UserText.ofString (sprintf "%s: open the session card for details" phrase)) ]
         [ textEnc (Readiness.label readiness) ]
 
 /// Render the full dynamic content of the dashboard as a single <div id="main">.
@@ -2558,7 +2554,7 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
         [ textEnc label ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] []
-  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId) ] [
+  Elem.div [ Attr.id DomIds.Main; Sink.attr "data-viewing-session-id" (UserText.ofString snap.SessionId) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
     // App header — tabline style like sagetech.dev
@@ -2646,7 +2642,7 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
     // chain. The working dir is not repeated here; it lives on the sidebar card.
     match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
     | Some p50, Some p99 ->
-      Elem.div [ Attr.class' "session-context"; Ds.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
+      Elem.div [ Attr.class' "session-context"; Sink.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
         Elem.span [ Attr.class' "session-context-latency"; testid "eval-to-pixel-latency" ] [
           textEnc (sprintf "px p50 %.1fms p99 %.1fms" p50 p99)
         ]
@@ -2700,14 +2696,14 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
           Attr.class' "resize-handle dock-resize"
           Attr.id DomIds.DockResize
           Ds.onEvent ("pointerdown", "event.preventDefault(); $dockResizing = true; event.target.setPointerCapture(event.pointerId)")
-          Ds.onEvent (
+          Sink.onEvent (
             "pointermove",
             sprintf
               "if(!$%s)return; var h=Math.max(80,Math.min(Math.round(innerHeight*0.8),innerHeight-event.clientY)); $%s=h+'px'"
               Signals.DockResizing
               Signals.DockHeight
           )
-          Ds.onEvent (
+          Sink.onEvent (
             "pointerup",
             sprintf
               "if(!$%s)return; $%s=false; try{localStorage.setItem('sagefs.dockHeight',$%s)}catch(e){}"
@@ -2715,7 +2711,7 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
               Signals.DockResizing
               Signals.DockHeight
           )
-          Ds.onEvent (
+          Sink.onEvent (
             "dblclick",
             sprintf "$%s='%s'; try{localStorage.removeItem('sagefs.dockHeight')}catch(e){}" Signals.DockHeight Signals.DockHeightDefault
           )
@@ -2743,7 +2739,7 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
               Attr.create "aria-label" "New session: find projects and start one"
               Attr.create "aria-haspopup" "dialog"
               Attr.create "title" "New session"
-              Ds.onClick (sprintf "$%s = true; %s" Signals.NewSessionOpen (Ds.post NewSessionDialog.NewSessionNames.DiscoverRoute)) ]
+              Sink.onClick (sprintf "$%s = true; %s" Signals.NewSessionOpen (Sink.post NewSessionDialog.NewSessionNames.DiscoverRoute)) ]
             [ Text.raw "+ New" ]
           Elem.button
             [ Attr.class' "sidebar-header-btn"
@@ -2859,14 +2855,14 @@ let renderHotReloadPanelFull
     sprintf "/api/sessions/%s/hotreload/%s" (Uri.EscapeDataString sessionId) action
   // `assign` stages a value into the signal the worker's JSON body reader
   // expects (e.g. `$path = '...'; `), or "" for the no-body bulk actions.
-  // The whole expression is attribute-encoded: a `"` in a path must break
-  // out of neither the JS string (jsStringLiteral) nor the HTML attribute.
+  // The path is a JS literal (jsStringLiteral) and `Sink.onClick` attribute-encodes the whole expression, so a `"` in a
+  // path breaks out of neither the JS string nor the HTML attribute.
   let hotReloadClick (assign: string) (action: string) =
-    attrEnc (assign + Ds.post (hotReloadEndpoint action))
+    assign + Sink.post (hotReloadEndpoint action)
   let indicatorAttrs (signal: string) =
     [ Ds.indicator signal; Ds.attr' ("disabled", sprintf "$%s" signal) ]
   let loadingSpan (signal: string) =
-    Elem.span [ Ds.show (sprintf "$%s" signal) ] [ textEnc (Glyphs.lead Glyph.Busy) ]
+    Elem.span [ Sink.show (sprintf "$%s" signal) ] [ textEnc (Glyphs.lead Glyph.Busy) ]
   let hotReloadResetLoading = "hotReloadResetLoading"
   let keptNotice =
     match kept with
@@ -2887,9 +2883,9 @@ let renderHotReloadPanelFull
                     Elem.button
                       ([ Attr.class' "eval-btn"
                          Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
-                         Attr.create "aria-label" (attrEnc (sprintf "Reset %s: run its new initializer %s" k.Binding k.NewInitializer)) ]
+                         Sink.attr "aria-label" (UserText.ofString (sprintf "Reset %s: run its new initializer %s" k.Binding k.NewInitializer)) ]
                        @ indicatorAttrs hotReloadResetLoading
-                       @ [ Ds.onClick (hotReloadClick (sprintf "$binding = %s; " (jsStringLiteral k.Binding)) "reset-state") ])
+                       @ [ Sink.onClick (hotReloadClick (sprintf "$binding = %s; " (jsStringLiteral k.Binding)) "reset-state") ])
                       [ loadingSpan hotReloadResetLoading; Text.raw "Reset" ] ]) ] ]
   let hotReloadModeLoading = "hotReloadModeLoading"
   let modeButtons (current: SageFs.Middleware.ValueReads.ReflectionReadMode) =
@@ -2905,11 +2901,11 @@ let renderHotReloadPanelFull
             Elem.button
               ([ Attr.class' "eval-btn"
                  Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
-                 Attr.create "aria-pressed" pressed
+                 Sink.attr "aria-pressed" (UserText.ofString pressed)
                  Attr.title (attrEnc (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode))
-                 Attr.create "aria-label" (attrEnc (sprintf "Reflection reads: %s. %s" name (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode))) ]
+                 Sink.attr "aria-label" (UserText.ofString (sprintf "Reflection reads: %s. %s" name (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode))) ]
                @ indicatorAttrs hotReloadModeLoading
-               @ [ Ds.onClick (hotReloadClick (sprintf "$mode = %s; " (jsStringLiteral name)) "reflection-mode") ])
+               @ [ Sink.onClick (hotReloadClick (sprintf "$mode = %s; " (jsStringLiteral name)) "reflection-mode") ])
               [ loadingSpan hotReloadModeLoading
                 textEnc label ] ]
   let reflectionSection =
@@ -2991,14 +2987,14 @@ let renderHotReloadPanelFull
              Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
              Attr.create "aria-label" "Watch All — hot-reload every discovered source file" ]
            @ indicatorAttrs hotReloadWatchAllLoading
-           @ [ Ds.onClick (hotReloadClick "" "watch-all") ])
+           @ [ Sink.onClick (hotReloadClick "" "watch-all") ])
           [ loadingSpan hotReloadWatchAllLoading; Text.raw "Watch All" ]
         Elem.button
           ([ Attr.class' "eval-btn"
              Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
              Attr.create "aria-label" "Unwatch All — stop hot-reloading every discovered source file" ]
            @ indicatorAttrs hotReloadUnwatchAllLoading
-           @ [ Ds.onClick (hotReloadClick "" "unwatch-all") ])
+           @ [ Sink.onClick (hotReloadClick "" "unwatch-all") ])
           [ loadingSpan hotReloadUnwatchAllLoading; Text.raw "Unwatch All" ]
       ]
     signalDetails Signals.HotReloadFilesOpen [] [
@@ -3022,9 +3018,9 @@ let renderHotReloadPanelFull
             Elem.div
               [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.857rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
                 Ds.indicator hotReloadDirLoading
-                Ds.onClick dirClick ]
+                Sink.onClick dirClick ]
               [ loadingSpan hotReloadDirLoading
-                Elem.span [ Attr.style (sprintf "color: %s;" dirColor); Ds.show (sprintf "!$%s" hotReloadDirLoading) ] [ textEnc dirIcon ]
+                Elem.span [ Attr.style (sprintf "color: %s;" dirColor); Sink.show (sprintf "!$%s" hotReloadDirLoading) ] [ textEnc dirIcon ]
                 textEnc (Glyphs.lead Glyph.Folder)
                 textEnc (sprintf "%s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
             yield! dirFiles |> List.map (fun f ->
@@ -3039,9 +3035,9 @@ let renderHotReloadPanelFull
               Elem.div
                 [ Attr.style "cursor: pointer; padding: 1px 4px; display: flex; align-items: center; gap: 4px;"
                   Ds.indicator hotReloadFileLoading
-                  Ds.onClick fileClick ]
+                  Sink.onClick fileClick ]
                 [ loadingSpan hotReloadFileLoading
-                  Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.857rem;" color); Ds.show (sprintf "!$%s" hotReloadFileLoading) ] [ textEnc icon ]
+                  Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.857rem;" color); Sink.show (sprintf "!$%s" hotReloadFileLoading) ] [ textEnc icon ]
                   Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ textEnc fileName ] ]
             )
           ])
@@ -3133,7 +3129,7 @@ let private renderObservedFrictionSection (signals: SageFs.Features.ObservedFric
     | items ->
       Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; color: var(--fg-dim);" ] [
         for d in items do
-          Elem.li [ Attr.create "data-signal-id" (attrEnc (SageFs.Features.ObservedFrictionTypes.FrictionSignal.id d.Signal)) ] [
+          Elem.li [ Sink.attr "data-signal-id" (UserText.ofString (SageFs.Features.ObservedFrictionTypes.FrictionSignal.id d.Signal)) ] [
             textEnc (observedSignalSummary d.Signal)
             confidenceBadge d.Confidence
           ]
@@ -3193,8 +3189,8 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
                ]
                Elem.textarea
                  [ Attr.class' "eval-input friction-edit"
-                   Attr.create "data-tool" (attrEnc f.Tool)
-                   Attr.create "data-kind" (attrEnc f.Kind)
+                   Sink.attr "data-tool" (UserText.ofString f.Tool)
+                   Sink.attr "data-kind" (UserText.ofString f.Kind)
                    Attr.style "min-height: 3rem; height: auto; font-size: 0.857rem;" ]
                   [ textEnc f.Reason ]
            ])
@@ -3385,19 +3381,21 @@ let rec renderCohortPanelCore
               | SageFs.Cohort.SeatState.Present, (MemberTable.MemberId.Capability _) -> ()
               | SageFs.Cohort.SeatState.Present, who ->
                 let name = MemberTable.MemberId.display who
-                // The name sits inside a JavaScript string in the click handler: a quote or backslash in it must not end that string.
-                let inScript = name.Replace("\\", "\\\\").Replace("'", "\\'")
+                // The name is any agent_name an MCP caller passed. The question is one JS literal and the sink encodes the
+                // whole expression, so no character in the name ends the string or the attribute.
+                let question =
+                  sprintf "Seat %s as the conductor of this cohort? The conductor mints member tokens, configures the integration and reassigns claims." name
                 Elem.button
                   [ Attr.class' "eval-btn"
                     Attr.style "font-size: 0.857rem; flex: 0 1 auto; overflow-wrap: anywhere;"
                     testid "cohort-seat"
-                    Attr.create "data-member" name
-                    Ds.onEvent
+                    Sink.attr "data-member" (UserText.ofString name)
+                    Sink.onEvent
                       ("click",
                        sprintf
-                         "if(confirm('Seat %s as the conductor of this cohort? The conductor mints member tokens, configures the integration and reassigns claims.')){%s}"
-                         inScript
-                         (Ds.post (sprintf "%s?member=%s&nonce=%s" DashboardRoutes.CohortSeat (System.Uri.EscapeDataString name) (System.Uri.EscapeDataString (seatTicket name))))) ]
+                         "if(confirm(%s)){%s}"
+                         (Sink.jsArg (UserText.ofString question))
+                         (Sink.post (sprintf "%s?member=%s&nonce=%s" DashboardRoutes.CohortSeat (System.Uri.EscapeDataString name) (System.Uri.EscapeDataString (seatTicket name))))) ]
                   [ textEnc (sprintf "Seat %s" name) ]
               | SageFs.Cohort.SeatState.Departed _, _ -> ()
           ]
@@ -3411,30 +3409,29 @@ let rec renderCohortPanelCore
             // Its ticket is issued for the pair, so the click replaces exactly the holder this page shows, and the cohort
             // checks the seat is still that holder's when the command commits. The click asks first, naming the holder.
             let silentText = Features.CohortStatusText.HolderSilence.text now silence
-            let inHolderScript = holderId.Replace("\\", "\\\\").Replace("'", "\\'")
             Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
               for i in 0 .. frame.MemberIds.Length - 1 do
                 match frame.MemberSeat.[i], frame.MemberIds.[i] with
                 | SageFs.Cohort.SeatState.Present, (MemberTable.MemberId.Capability _) -> ()
                 | SageFs.Cohort.SeatState.Present, who when who <> holder ->
                   let name = MemberTable.MemberId.display who
-                  let inScript = name.Replace("\\", "\\\\").Replace("'", "\\'")
                   let ticket = seatTicket (SeatNonces.replaceSubject { HolderName = holderId; TargetName = name })
+                  let question =
+                    sprintf
+                      "Replace conductor %s (%s) with %s? The conductor mints member tokens, configures the integration and reassigns claims. %s stays a member and keeps its claims."
+                      holderId silentText name holderId
                   Elem.button
                     [ Attr.class' "eval-btn"
                       Attr.style "font-size: 0.857rem; flex: 0 1 auto; overflow-wrap: anywhere;"
                       testid "cohort-replace"
-                      Attr.create "data-member" name
-                      Attr.create "data-holder" holderId
-                      Ds.onEvent
+                      Sink.attr "data-member" (UserText.ofString name)
+                      Sink.attr "data-holder" (UserText.ofString holderId)
+                      Sink.onEvent
                         ("click",
                          sprintf
-                           "if(confirm('Replace conductor %s (%s) with %s? The conductor mints member tokens, configures the integration and reassigns claims. %s stays a member and keeps its claims.')){%s}"
-                           inHolderScript
-                           (silentText.Replace("\\", "\\\\").Replace("'", "\\'"))
-                           inScript
-                           inHolderScript
-                           (Ds.post
+                           "if(confirm(%s)){%s}"
+                           (Sink.jsArg (UserText.ofString question))
+                           (Sink.post
                              (sprintf
                                "%s?member=%s&replace=%s&nonce=%s"
                                DashboardRoutes.CohortSeat
@@ -3575,7 +3572,7 @@ and private renderCohortMatrix (frame: SageFs.Cohort.CohortFrame<MemberTable.Mem
         textEnc (sprintf "Test matrix (%d tests x %d row%s)" testCount rowCount (if rowCount = 1 then "" else "s"))
       ]
       Elem.create "img" [
-        Attr.create "src" dataUri
+        Sink.attr "src" (UserText.ofString dataUri)
         Attr.create "alt" "Cohort test matrix — pass green, fail red, stale amber, not-run grey"
         Attr.style "image-rendering: pixelated; width: 100%; max-width: 420px; display: block; border: 1px solid var(--border, #444);"
       ] []
@@ -3789,17 +3786,17 @@ let renderCohortScrubControl (viewingSeq: int64<ledgerSeq> option) (latestSeq: i
         Elem.create "input" [
           Attr.create "type" "range"
           Attr.create "min" "0"
-          Attr.create "max" (string latestInt)
-          Attr.create "value" (string currentInt)
+          Sink.attr "max" (UserText.ofString (string latestInt))
+          Sink.attr "value" (UserText.ofString (string currentInt))
           Attr.style "flex: 1 1 100px; min-width: 60px;"
-          Ds.onEvent ("change", sprintf "var v=event.target.value; @post('%s', {%s: v})" scrubEndpoint Signals.CohortViewingSeq)
+          Sink.onEvent ("change", sprintf "var v=event.target.value; @post('%s', {%s: v})" scrubEndpoint Signals.CohortViewingSeq)
         ] []
         match viewingSeq with
         | Some _ ->
           Elem.button [
             Attr.class' "session-btn"
             Attr.create "title" "Back to live"
-            Ds.onEvent ("click", sprintf "@post('%s', {%s: ''})" scrubEndpoint Signals.CohortViewingSeq)
+            Sink.onEvent ("click", sprintf "@post('%s', {%s: ''})" scrubEndpoint Signals.CohortViewingSeq)
           ] [ textEnc (Glyphs.text Glyph.Skip) ]
         | None -> Elem.div [] []
         Elem.button [
@@ -3872,10 +3869,10 @@ let renderLiveTestingPanel (activity: Features.LiveTestActivity.LiveTestActivity
         [ Attr.class' "eval-btn"
           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
           testid "live-testing-toggle"
-          Attr.create "aria-label" (sprintf "%s — %s live testing" label (match activity with Features.LiveTestActivity.LiveTestActivity.Off -> "start" | _ -> "stop"))
+          Sink.attr "aria-label" (UserText.ofString (sprintf "%s — %s live testing" label (match activity with Features.LiveTestActivity.LiveTestActivity.Off -> "start" | _ -> "stop")))
           Ds.indicator Signals.LiveTestingLoading
           Ds.attr' ("disabled", "$liveTestingLoading")
-          Ds.onClick (Ds.post endpoint) ]
+          Sink.onClick (Sink.post endpoint) ]
         [ Elem.span [ Ds.show "$liveTestingLoading" ] [ textEnc (Glyphs.lead Glyph.Busy + pending) ]
           Elem.span [ Ds.show "!$liveTestingLoading" ] [ textEnc label ] ]
     ]
@@ -4129,9 +4126,9 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
 let private renderDiscoveredResultRow (glyph: string) (label: string) (selectPath: string) =
   Elem.button
     [ Attr.class' "discovered-project-row"
-      Attr.create "aria-label" (attrEnc (sprintf "Select %s — fills the Projects field" label))
-      Attr.create "title" (attrEnc (sprintf "Select %s" label))
-      Ds.onClick (Ds.post (sprintf "/dashboard/toggle-project?path=%s" (Uri.EscapeDataString selectPath))) ]
+      Sink.attr "aria-label" (UserText.ofString (sprintf "Select %s — fills the Projects field" label))
+      Sink.attr "title" (UserText.ofString (sprintf "Select %s" label))
+      Sink.onClick (Sink.post (sprintf "/dashboard/toggle-project?path=%s" (Uri.EscapeDataString selectPath))) ]
     // glyph is always one of two fixed literals from the call sites below,
     // but textEnc (not Text.raw) either way — the source-escaping policy
     // test requires every Text.raw argument to itself be a literal.
@@ -4308,7 +4305,7 @@ let private hygieneRiskId (risk: WorkspaceHygiene.Risk) : string =
 let private hygieneButton (id: string) (label: string) (action: string option) : XmlNode =
   let common = [ Attr.id id; Attr.class' "eval-btn"; Attr.style "font-size: 0.857rem; flex: 0 1 auto;" ]
   match action with
-  | Some post -> Elem.button (common @ [ Ds.onClick post ]) [ textEnc label ]
+  | Some post -> Elem.button (common @ [ Sink.onClick post ]) [ textEnc label ]
   | None -> Elem.button (common @ [ Attr.create "disabled" "disabled" ]) [ textEnc label ]
 
 let private hygieneRow (step: WorkspaceHygiene.Step) : XmlNode =
@@ -4425,7 +4422,7 @@ let renderHygienePanel (view: HygieneService.HygieneView) : XmlNode =
         hygieneButton
           DomIds.HygieneTidy
           (sprintf "Tidy %d safe item%s (%s)" n (match n with | 1 -> "" | _ -> "s") (WorkspaceHygieneRender.formatBytes summary.SafeBytes))
-          (Some(Ds.post (sprintf "/dashboard/hygiene/tidy/%s" planId)))
+          (Some(Sink.post (sprintf "/dashboard/hygiene/tidy/%s" planId)))
     panel title [
       // Work that exists nowhere else leads the card, in the words the `workspace:` line and `sagefs hygiene` use.
       match WorkspaceHygieneRender.heldLine summary with

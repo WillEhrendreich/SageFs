@@ -137,6 +137,19 @@ module ValidateSessionCreateRequestTests =
           |> Expect.stringContains "names the cost" "watch")
       }
 
+      test "WHY - a session created in the home directory says in its reply that it gets no file events, because the notice used to be computed and printed nowhere" {
+        withTempDir (fun home ->
+          let reply = "Session 'abcd1234' created."
+          let warned = SageFs.SessionPathValidation.SessionRootNotice.appendTo (SageFs.SessionPathValidation.noticeFor home home) reply
+          warned |> Expect.stringStarts "the reply itself comes first" reply
+          warned |> Expect.stringContains "names the directory" home
+          warned |> Expect.stringContains "says what the person loses" "no file events"
+          let project = Path.Combine(home, "proj")
+          Directory.CreateDirectory project |> ignore
+          SageFs.SessionPathValidation.SessionRootNotice.appendTo (SageFs.SessionPathValidation.noticeFor home project) reply
+          |> Expect.equal "a project directory gets the reply alone" reply)
+      }
+
       test "rejects a UNC-style working directory with UnsafeSessionPath" {
         match validateSessionCreateRequest @"\\attacker-host\share" [] with
         | Error (SageFsError.UnsafeSessionPath(_, reason)) ->
