@@ -43,7 +43,7 @@ module ModelChangeDelivery =
 /// They are derived from the registry the daemon already holds, so there is no second place that records
 /// a session starting or stopping. The registry keeps a stopped session listed for a while, so a stop is
 /// a status change as often as a removal; both are announced once.
-module SessionLifecycle =
+module SessionListEvents =
 
   let private isLive (session: SessionSnapshot) : bool =
     session.Status <> SessionDisplayStatus.Stopped
@@ -91,6 +91,6 @@ type SessionLifecycleWatch() =
 
   member _.Observe(registry: SessionRegistryView) : SseEvent list =
     lock gate (fun () ->
-      let now, events = SessionLifecycle.observe announced registry
+      let now, events = SessionListEvents.observe announced registry
       announced <- Some now
       events)

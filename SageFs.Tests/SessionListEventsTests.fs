@@ -1,4 +1,4 @@
-module SageFs.Tests.SessionLifecycleTests
+module SageFs.Tests.SessionListEventsTests
 
 // `SessionCreated`, `SessionStopped` and `SessionActivated` were declared, formatted and matched on in
 // five places, and nothing ever triggered them. A stop reached a client only as a model change, and a
@@ -40,8 +40,8 @@ let private running (id: SessionId) = snapshot id SessionDisplayStatus.Running
 let private stopped (id: SessionId) = snapshot id SessionDisplayStatus.Stopped
 
 let private observeTwice (first: SessionRegistryView) (second: SessionRegistryView) : SseEvent list =
-  let announced, _ = SessionLifecycle.observe None first
-  SessionLifecycle.observe (Some announced) second |> snd
+  let announced, _ = SessionListEvents.observe None first
+  SessionListEvents.observe (Some announced) second |> snd
 
 // ── Every registry a walk can pass through ──
 
@@ -138,7 +138,7 @@ let tests =
   testList "session lifecycle events" [
 
     test "the first look announces nothing: sessions already there are in the connect snapshot" {
-      let announced, events = SessionLifecycle.observe None (registry [ running a ] (ActiveSession.Viewing a))
+      let announced, events = SessionListEvents.observe None (registry [ running a ] (ActiveSession.Viewing a))
       events |> Expect.isEmpty "a baseline is not news"
       announced.Live |> Expect.equal "but it is remembered" (Set.ofList [ SessionId.value a ])
     }
@@ -156,11 +156,11 @@ let tests =
     test "a session that stays listed but becomes Stopped is announced as stopped, once" {
       let r1 = registry [ running a ] ActiveSession.AwaitingSession
       let r2 = registry [ stopped a ] ActiveSession.AwaitingSession
-      let announced1, _ = SessionLifecycle.observe None r1
-      let announced2, events2 = SessionLifecycle.observe (Some announced1) r2
+      let announced1, _ = SessionListEvents.observe None r1
+      let announced2, events2 = SessionListEvents.observe (Some announced1) r2
       events2 |> Expect.equal "stopped" [ SseEvent.SessionStopped (SessionId.value a) ]
-      SessionLifecycle.observe (Some announced2) r2 |> snd |> Expect.isEmpty "still stopped is not news"
-      SessionLifecycle.observe (Some announced2) (registry [] ActiveSession.AwaitingSession)
+      SessionListEvents.observe (Some announced2) r2 |> snd |> Expect.isEmpty "still stopped is not news"
+      SessionListEvents.observe (Some announced2) (registry [] ActiveSession.AwaitingSession)
       |> snd
       |> Expect.isEmpty "and neither is its removal, which was announced when it stopped"
     }
@@ -191,9 +191,9 @@ let tests =
       for first in everyRegistry do
         for second in everyRegistry do
           for third in everyRegistry do
-            let announced1, _ = SessionLifecycle.observe None first
-            let announced2, events2 = SessionLifecycle.observe (Some announced1) second
-            let _, events3 = SessionLifecycle.observe (Some announced2) third
+            let announced1, _ = SessionListEvents.observe None first
+            let announced2, events2 = SessionListEvents.observe (Some announced1) second
+            let _, events3 = SessionListEvents.observe (Some announced2) third
             let rebuilt = replay (liveIds first) (events2 @ events3)
             rebuilt
             |> Expect.equal (sprintf "after %A then %A then %A" (liveIds first) (liveIds second) (liveIds third)) (liveIds third)
@@ -221,8 +221,8 @@ let tests =
     test "WHY — the active session a client is told of is the registry's, whenever the registry has one" {
       for first in everyRegistry do
         for second in everyRegistry do
-          let announced1, _ = SessionLifecycle.observe None first
-          let announced2, _ = SessionLifecycle.observe (Some announced1) second
+          let announced1, _ = SessionListEvents.observe None first
+          let announced2, _ = SessionListEvents.observe (Some announced1) second
           announced2.Active |> Expect.equal "the registry's active session is the one remembered" second.ActiveSessionId
     }
   ]
