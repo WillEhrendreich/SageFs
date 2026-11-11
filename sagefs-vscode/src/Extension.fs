@@ -647,6 +647,16 @@ let browseForProject () =
 let openWorkspace () =
   Commands.executeCommand "vscode.openFolder" |> ignore
 
+/// "There is no project here", with the two ways out: browse to one, or open a folder that has one.
+let offerProject (message: string) : JS.Promise<unit> =
+  promise {
+    let! choice = Window.showErrorMessage message [| "Browse for Project"; "Open Workspace" |]
+    match choice with
+    | Some "Browse for Project" -> browseForProject () |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+    | Some "Open Workspace" -> openWorkspace ()
+    | _ -> ()
+  }
+
 /// The one command that fixes a missing CLI. Named once so the dialog, the
 /// install action and the clipboard action can never drift apart.
 let installCliCommand = "dotnet tool install --global SageFs"
@@ -1090,11 +1100,7 @@ let rec startDaemon () =
       match projPath with
       | None ->
         isStarting <- false
-        let! choice = Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [| "Browse for Project"; "Open Workspace" |]
-        match choice with
-        | Some "Browse for Project" -> browseForProject () |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
-        | Some "Open Workspace" -> openWorkspace ()
-        | _ -> ()
+        do! offerProject "No .fsproj or .sln found. Open an F# project first."
       | Some proj ->
         let out = getOutput ()
         out.show true
@@ -1406,6 +1412,19 @@ let evalCore (code: string) (filePath: string option) (evalMode: string option) 
       return EvalConnectionError (string err)
   }
 
+/// Show a notice and run the command of the button the person picks.
+let showNotice (n: EvalPreflightPure.Notice) : JS.Promise<unit> =
+  promise {
+    let! choice = Window.showWarningMessage n.Text (n.Actions |> List.map (fun a -> a.Label) |> List.toArray)
+    match choice |> Option.bind (fun label -> n.Actions |> List.tryFind (fun a -> a.Label = label)) with
+    | Some a -> Commands.executeCommand a.Command |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+    | None -> ()
+  }
+
+/// A warning that this window has no session, with Create Session and Switch Session on it.
+let warnNoSession (text: string) =
+  showNotice (EvalPreflightPure.noSessionNotice text) |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+
 /// `ensureRunning`, then make sure this window has a session to evaluate in. With none, the first
 /// Alt+Enter on a fresh install ended in an inline red "No active session selected" and nothing
 /// said what to do next. The step is `EvalPreflightPure.nextStep`; a missing session gets a
@@ -1427,10 +1446,7 @@ let ensureEvalReady () : JS.Promise<bool> =
         match EvalPreflightPure.notice step with
         | None -> return true
         | Some n ->
-          let! choice = Window.showWarningMessage n.Text (n.Actions |> List.map (fun a -> a.Label) |> List.toArray)
-          match choice |> Option.bind (fun label -> n.Actions |> List.tryFind (fun a -> a.Label = label)) with
-          | Some a -> Commands.executeCommand a.Command |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
-          | None -> ()
+          do! showNotice n
           return false
   }
 
@@ -1695,7 +1711,7 @@ let runAppCmd () =
     promise {
       match activeSessionId with
       | None ->
-        Window.showWarningMessage "No active SageFs session. Create or switch to one first." [||] |> ignore
+        warnNoSession "No active SageFs session. Create or switch to one first."
       | Some sid ->
         let! projOpt = Window.showInputBox "Project to run (leave blank for the default target)"
         let project =
@@ -1724,7 +1740,7 @@ let stopAppCmd () =
     promise {
       match activeSessionId with
       | None ->
-        Window.showWarningMessage "No active SageFs session." [||] |> ignore
+        warnNoSession "No active SageFs session."
       | Some sid ->
         let! outcome = Client.stopApp sid c
         updateAppStatusBar outcome
@@ -1798,12 +1814,7 @@ let createSessionCmd () =
     promise {
       let! projPath = findProject ()
       match projPath with
-      | None ->
-        let! choice = Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [| "Browse for Project"; "Open Workspace" |]
-        match choice with
-        | Some "Browse for Project" -> browseForProject () |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
-        | Some "Open Workspace" -> openWorkspace ()
-        | _ -> ()
+      | None -> do! offerProject "No .fsproj or .sln found. Open an F# project first."
       | Some proj ->
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         do! Window.withProgress ProgressLocation.Notification "SageFs: Creating session..." (fun _p _t ->
@@ -1837,12 +1848,7 @@ let createSessionCmd () =
 let configureWarmupAutoOpenCmd () =
   promise {
     match getWorkingDirectory () with
-    | None ->
-      let! choice = Window.showErrorMessage "Open an F# project or workspace first." [| "Browse for Project"; "Open Workspace" |]
-      match choice with
-      | Some "Browse for Project" -> browseForProject () |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
-      | Some "Open Workspace" -> openWorkspace ()
-      | _ -> ()
+    | None -> do! offerProject "Open an F# project or workspace first."
     | Some workDir ->
       let configDir = combineWindowsPath workDir ".SageFs"
       let configPath = combineWindowsPath configDir "config.fsx"
@@ -2130,8 +2136,7 @@ let switchProject () =
   promise {
     let! all = scanForProjects ()
     match all with
-    | [||] ->
-      Window.showWarningMessage "No .fsproj or .sln files found in workspace." [||] |> ignore
+    | [||] -> do! offerProject "No .fsproj or .sln files found in workspace."
     | _ ->
       let! picked = Window.showQuickPick all "Switch SageFs to a different project"
       match picked with
@@ -2896,8 +2901,7 @@ let activate (context: ExtensionContext) =
         promise {
           match! resolveCommandTarget c with
           | SessionScopePure.CommandTarget.Session sessionId -> do! TestDebugCommand.debugTests c sessionId testIds
-          | SessionScopePure.CommandTarget.NoSessionForThisWindow ->
-            Window.showWarningMessage noSessionForThisWindowMessage [||] |> ignore
+          | SessionScopePure.CommandTarget.NoSessionForThisWindow -> warnNoSession noSessionForThisWindowMessage
         })
       |> promiseIgnoreLog logToOutput)
   reg "sagefs.setRunPolicy" (fun _ ->
@@ -2946,8 +2950,7 @@ let activate (context: ExtensionContext) =
     withClient (fun c ->
       promise {
         match! resolveCommandTarget c with
-        | SessionScopePure.CommandTarget.NoSessionForThisWindow ->
-          Window.showWarningMessage noSessionForThisWindowMessage [||] |> ignore
+        | SessionScopePure.CommandTarget.NoSessionForThisWindow -> warnNoSession noSessionForThisWindowMessage
         | SessionScopePure.CommandTarget.Session sessionId ->
           let! overviewOpt = Client.getSymbolTests sessionId "" c
           match overviewOpt with

@@ -54,6 +54,21 @@ let tests =
         (notice step).Value.Actions.Head
         |> Expect.equal "create first" { Label = "Create Session"; Command = "sagefs.createSession" })
 
+    // WHY — roast-5 finding on notifications: "No active SageFs session. Create or switch to one first." and
+    // "This window has no SageFs session. Run SageFs: Create Session, or SageFs: Switch Session." named the
+    // fix and offered no button, while the same state in eval offered Create Session.
+    testCase "WHY - a no-session message from any command carries Create Session and Switch Session" <| fun _ ->
+      let n = noSessionNotice "No active SageFs session."
+      n.Text |> Expect.equal "the caller's words are kept" "No active SageFs session."
+      n.Actions |> List.map (fun a -> a.Command)
+      |> Expect.equal "both fixes" [ "sagefs.createSession"; "sagefs.switchSession" ]
+
+    testCase "WHY - no command shows a no-session warning with an empty button list" <| fun _ ->
+      let source = System.IO.File.ReadAllText(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "src", "Extension.fs"))
+      source.Split('\n')
+      |> Array.filter (fun line -> line.Contains "showWarningMessage" && line.Contains "[||]" && (line.Contains "No active SageFs session" || line.Contains "noSessionForThisWindowMessage"))
+      |> Expect.isEmpty "every no-session warning offers its fix"
+
     testCase "WHY - Proceed and StartDaemon carry no notice, because other code already speaks for them" <| fun _ ->
       notice EvalStep.Proceed |> Expect.isNone "proceed"
       notice EvalStep.StartDaemon |> Expect.isNone "start"

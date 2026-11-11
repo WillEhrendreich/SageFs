@@ -38,6 +38,12 @@ let nextStep (daemon: DaemonState) (sessions: SessionState) : EvalStep =
 
 let createAction = { Label = "Create Session"; Command = "sagefs.createSession" }
 
+/// A no-session message from a command other than eval, with the two buttons that fix it. The caller
+/// keeps its own words; the buttons are the same ones the eval notice offers.
+let noSessionNotice (text: string) : Notice =
+  { Text = text
+    Actions = [ createAction; { Label = "Switch Session"; Command = "sagefs.switchSession" } ] }
+
 /// The notice that replaces the dead end, for the steps that stop the eval.
 let notice (step: EvalStep) : Notice option =
   match step with
