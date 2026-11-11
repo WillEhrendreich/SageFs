@@ -172,6 +172,41 @@ let checkPortTests =
       let r = EnvCheck.checkPort "MCP port" port
       r.Label |> Expect.equal "label preserved" "MCP port"
     }
+
+    test "WHY — a port in use gets the one shared advice, which names only flags the binary accepts" {
+      withBoundPort (fun port ->
+        let r = EnvCheck.checkPort "test port" port
+        r.Hint |> Expect.equal "the shared sentence" (Some (SageFs.SageFsConfig.portInUseAdvice port))
+        let advice = SageFs.SageFsConfig.portInUseAdvice port
+        (advice.Contains "--dash-port") |> Expect.isFalse "--dash-port does not exist"
+        advice |> Expect.stringContains "names the environment variable for a daemon to keep" "SAGEFS_MCP_PORT="
+        advice |> Expect.stringContains "a throwaway port carries the --ttl the ownership gate asks for" "--mcp-port <port> --ttl 8h")
+    }
+
+    test "WHY — the throwaway command the advice names passes the ownership gate a bare --mcp-port is refused by" {
+      let throwaway = [ "--mcp-port"; "47700"; "--ttl"; "8h" ]
+      match SageFs.DaemonOwnership.Ownership.parse throwaway with
+      | Ok ownership ->
+        Program.decideCustomPortOwnership 37749 47700 ownership
+        |> Expect.equal "allowed" Program.CustomPortOwnershipDecision.Allowed
+      | Error errors -> failtestf "the advised flags do not parse: %A" errors
+    }
+
+    test "WHY — every daemon example in the help starts: a custom port always carries an owner or a ttl" {
+      for (words, _) in Program.helpExamples do
+        let args = Array.ofList words
+        match Program.CliCommand.parse args with
+        | Program.CliCommand.Daemon _ ->
+          match SageFs.DaemonOwnership.Ownership.parse words with
+          | Ok ownership ->
+            let port = SageFs.DaemonPort.resolveWith 37749 words
+            match Program.decideCustomPortOwnership 37749 port ownership with
+            | Program.CustomPortOwnershipDecision.Allowed -> ()
+            | Program.CustomPortOwnershipDecision.Refused why -> failtestf "the help example %A is refused: %s" words why
+          | Error errors -> failtestf "the help example %A has flags that do not parse: %A" words errors
+        | Program.CliCommand.UnknownCommand word -> failtestf "the help example %A names an unknown word %s" words word
+        | _ -> ()
+    }
   ]
 
 // ── checkDotnetSdk (fake `dotnet --list-sdks` output) ─────────────────────────
@@ -495,10 +530,10 @@ let sessionAuthorityTests =
         failtestf "expected Ambiguous, got %A" other
     }
 
-    test "checkSessionAuthority warns when daemon is absent" {
+    test "WHY — checkSessionAuthority with no daemon yet is a note, since `sagefs check` is step 1 and comes before the daemon" {
       let targetDir = sessionAuthorityTargetDir ()
       let result = EnvCheck.checkSessionAuthority targetDir None
-      result.Status |> Expect.equal "authority is not verified without a daemon" EnvCheck.Status.Warn
+      result.Status |> Expect.equal "a first run is not a warning" EnvCheck.Status.Info
       result.Detail |> Expect.stringContains "detail should say not checked" "Not checked"
       result.Hint |> Expect.isSome "should explain how to verify authority"
     }
@@ -578,6 +613,45 @@ let printTests =
       failures |> Expect.equal "all pass should still have zero failures" 0
       output.Contains("ready to run") |> Expect.isFalse "summary should not overclaim readiness"
       output |> Expect.stringContains "summary should describe requested checks" "All requested checks passed"
+    }
+  ]
+
+let private row label status : EnvCheck.CheckResult =
+  { Icon = ""; Label = label; Status = status; Detail = label + " detail"; Hint = None }
+
+[<Tests>]
+let firstRunTests =
+  testList "EnvCheck on a first run" [
+    test "WHY — a daemon already running is a note: the check cannot warn both before and after `sagefs` starts" {
+      let info : SageFs.DaemonInfo =
+        { Pid = 4242; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow; WorkingDirectory = "/tmp"
+          Version = "test"; ApiVersion = None; SessionCount = None; ComponentFailures = [] }
+      (EnvCheck.checkDaemonFromInfo (Some info)).Status |> Expect.equal "running is fine" EnvCheck.Status.Info
+      (EnvCheck.checkDaemonFromInfo None).Status |> Expect.equal "not running is fine" EnvCheck.Status.Pass
+    }
+    test "WHY — a missing agent skill is a note for a user with no agent, and a warning for a Claude Code user" {
+      let line = "The 'sagefs' agent skill is not installed."
+      (EnvCheck.agentSkillResult SageFs.SkillInstall.SkillStatus.NotInstalled line EnvCheck.AgentPresence.NoAgentFound).Status
+      |> Expect.equal "no agent, nothing to warn about" EnvCheck.Status.Info
+      (EnvCheck.agentSkillResult SageFs.SkillInstall.SkillStatus.NotInstalled line EnvCheck.AgentPresence.ClaudeCodeFound).Status
+      |> Expect.equal "Claude Code is there and has no skill" EnvCheck.Status.Warn
+      (EnvCheck.agentSkillResult (SageFs.SkillInstall.SkillStatus.Differs("1", [ "SKILL.md" ], [], [])) line EnvCheck.AgentPresence.NoAgentFound).Status
+      |> Expect.equal "an installed skill from another build is stale whoever runs it" EnvCheck.Status.Warn
+    }
+    test "WHY — the summary names the checks that warned, never a hard-coded guess at which" {
+      let lines = EnvCheck.summary [ row ".NET SDK" EnvCheck.Status.Pass; row "Agent skill" EnvCheck.Status.Warn ]
+      let text = String.concat "\n" lines
+      text |> Expect.stringContains "names the one that fired" "Agent skill"
+      (text.Contains "daemon/target authority") |> Expect.isFalse "the old fixed sentence named a check that did not fire"
+    }
+    test "the summary leads with the worst result: a failure outranks a warning" {
+      let text = EnvCheck.summary [ row "MCP port" EnvCheck.Status.Fail; row "Agent skill" EnvCheck.Status.Warn ] |> String.concat "\n"
+      text |> Expect.stringContains "the failure" "MCP port"
+      text |> Expect.stringContains "says it failed" "failed"
+    }
+    test "notes alone are a pass" {
+      let text = EnvCheck.summary [ row ".NET SDK" EnvCheck.Status.Pass; row "SageFs daemon" EnvCheck.Status.Info ] |> String.concat "\n"
+      text |> Expect.stringContains "passes" "All requested checks passed"
     }
   ]
 

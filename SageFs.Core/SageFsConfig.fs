@@ -236,6 +236,15 @@ let McpPortFromEnvOpt : int option =
     | true, v -> Some v
     | false, _ -> None
 
+/// What to do when the daemon's port is taken, said once for every surface that meets it: the daemon's own
+/// port-in-use log, `sagefs check`, and the CLI help. A bare `--mcp-port N` is refused unless it names an owner
+/// or a TTL (`Program.decideCustomPortOwnership`), so the throwaway form here carries `--ttl`, and a daemon to
+/// keep moves with `SAGEFS_MCP_PORT`, which becomes the configured port and is never gated.
+let portInUseAdvice (port: int) : string =
+  sprintf
+    "Port %d is already in use. If a SageFs daemon holds it, `sagefs status` shows it and `sagefs stop` stops it. To keep your daemon on another port, set SAGEFS_MCP_PORT=<port> before you start it (the dashboard takes the port after it); for a throwaway daemon, run `sagefs --mcp-port <port> --ttl 8h`."
+    port
+
 /// The MCP port, in the order the sources get to speak: the command line, then the
 /// environment, then the port the Settings panel persisted, then the default. The
 /// order is one pure function so the daemon and its clients cannot disagree about

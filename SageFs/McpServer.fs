@@ -5032,11 +5032,11 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       do! runUntilCancelled app stopping
     with
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
-      Log.error "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." cfg.Port
+      Log.error "%s" (SageFs.SageFsConfig.portInUseAdvice cfg.Port)
       SageFs.Features.ComponentWatch.reportFailure
         { Component = "mcp-server"
           Reason = sprintf "port %d already in use: %s" cfg.Port ex.Message
-          Hint = sprintf "Run 'sagefs status' to find the process holding port %d, or start this daemon with --mcp-port to pick a different one." cfg.Port }
+          Hint = SageFs.SageFsConfig.portInUseAdvice cfg.Port }
     | ex ->
       // This is the daemon's primary agent/editor interface dying while the
       // process itself keeps running (the dashboard is a separate

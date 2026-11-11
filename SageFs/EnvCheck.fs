@@ -12,8 +12,10 @@ open System.Xml.Linq
 open SageFs
 open SageFs.Server
 
+/// What one check found. `Info` is a note that needs nothing from the person (no daemon started yet, no agent to give a
+/// skill to); `Warn` names something to do; `Fail` stops SageFs from working.
 [<RequireQualifiedAccess>]
-type Status = | Pass | Warn | Fail
+type Status = | Pass | Info | Warn | Fail
 
 type SessionAuthoritySession = {
   Id: string
@@ -35,6 +37,7 @@ type CheckResult = {
 }
 
 let private pass label detail   = { Icon = "✓"; Label = label; Status = Status.Pass; Detail = detail; Hint = None }
+let private info label detail h = { Icon = "·"; Label = label; Status = Status.Info; Detail = detail; Hint = Some h }
 let private warn label detail h = { Icon = "⚠"; Label = label; Status = Status.Warn; Detail = detail; Hint = Some h }
 let private fail label detail h = { Icon = "✗"; Label = label; Status = Status.Fail; Detail = detail; Hint = Some h }
 
@@ -523,8 +526,7 @@ let checkPort (label: string) (port: int) =
   match isPortFree port with
   | true  -> pass label (sprintf "Port %d available" port)
   | false ->
-    fail label (sprintf "Port %d is already in use" port)
-          (sprintf "Another process is using port %d. Use --mcp-port (or --dash-port) to choose a different port, or stop the conflicting process." port)
+    fail label (sprintf "Port %d is already in use" port) (SageFsConfig.portInUseAdvice port)
 
 /// How a bound port relates to a locally-probed SageFs daemon. A port held by
 /// OUR OWN daemon (the one this check just probed on `mcpPort`) is the
@@ -558,18 +560,17 @@ let checkPortAgainstDaemon (label: string) (port: int) (daemonInfo: DaemonInfo o
   | PortOwner.OurDaemon pid ->
     pass label (sprintf "Port %d is held by the running SageFs daemon (PID %d) — expected, not a conflict" port pid)
   | PortOwner.Other ->
-    fail label (sprintf "Port %d is already in use" port)
-          (sprintf "Another process is using port %d. Use --mcp-port (or --dash-port) to choose a different port, or stop the conflicting process." port)
+    fail label (sprintf "Port %d is already in use" port) (SageFsConfig.portInUseAdvice port)
 
 /// Pure rendering of the "SageFs daemon" row from an already-probed result —
 /// shares the probe `runAll` already made for the port checks instead of
 /// probing a second time.
 let checkDaemonFromInfo (daemonInfo: DaemonInfo option) =
   match daemonInfo with
-  | Some info ->
-    warn "SageFs daemon"
-         (sprintf "Already running (PID %d, port %d, started %s)" info.Pid info.Port (info.StartedAt.ToString("HH:mm:ss")))
-         "A daemon is already running. The port checks above reflect this as expected, not a conflict. Run `sagefs stop` first if you want a fresh start."
+  | Some running ->
+    info "SageFs daemon"
+         (sprintf "Already running (PID %d, port %d, started %s)" running.Pid running.Port (running.StartedAt.ToString("HH:mm:ss")))
+         "The port checks above count this daemon as expected. Run `sagefs stop` first if you want a fresh start."
   | None ->
     pass "SageFs daemon" "No daemon running — ready to start"
 
@@ -591,9 +592,9 @@ let checkSessionAuthority (targetDir: string) (sessions: SessionAuthoritySession
   let label = "Target session authority"
   match sessions with
   | None ->
-    warn label
-      (sprintf "Not checked for %s — no daemon running" targetDir)
-      "Start SageFs, then rerun `sagefs check` to verify daemon session authority for this target."
+    info label
+      (sprintf "Not checked for %s: no daemon is running yet" targetDir)
+      "Start `sagefs`, then rerun `sagefs check` to see which session serves this folder."
   | Some daemonSessions ->
     match classifySessionAuthority targetDir daemonSessions with
     | NoMatchingSession ->
@@ -671,15 +672,38 @@ let checkMachineTier () : CheckResult =
 
 /// Whether the `sagefs` agent skill in the user's skills folder is the one this build ships (#161). A missing or older skill
 /// sends agents to the wrong instructions, so it is a warning that names the one command that fixes it, not a failure.
+/// Whether this machine has an agent that loads skills from the user's skills folder. Claude Code keeps `~/.claude`.
+[<RequireQualifiedAccess>]
+type AgentPresence =
+  | ClaudeCodeFound
+  | NoAgentFound
+
+/// The skill row, pure over what was found. A missing skill matters to a person whose agent loads skills; for anyone
+/// else (a Neovim or VS Code user with no agent) it is a note. A skill from another build is stale for anyone who has it.
+let agentSkillResult (status: SkillInstall.SkillStatus) (line: string) (agent: AgentPresence) : CheckResult =
+  let why = "The skill is what tells an agent to use the REPL as its inner loop. Other agents can read skills/sagefs/SKILL.md by path."
+  match status with
+  | SkillInstall.SkillStatus.UpToDate _ -> pass "Agent skill" line
+  | SkillInstall.SkillStatus.NotInstalled ->
+    (match agent with
+     | AgentPresence.NoAgentFound ->
+       info "Agent skill" "No agent skill installed, and no Claude Code (~/.claude) on this machine to use one."
+         "If you use an AI agent with SageFs, `sagefs install-skill` installs it."
+     | AgentPresence.ClaudeCodeFound -> warn "Agent skill" line why)
+  | SkillInstall.SkillStatus.NotThisSkill _
+  | SkillInstall.SkillStatus.Differs _ -> warn "Agent skill" line why
+
 let checkAgentSkill () : CheckResult =
   let shipped = SkillFiles.shipped ()
   let shippedVersion = SkillInstall.version shipped
-  let installed = SkillFiles.readInstalled (SkillFiles.skillDirectory (SkillFiles.defaultRoot ()))
+  let root = SkillFiles.defaultRoot ()
+  let installed = SkillFiles.readInstalled (SkillFiles.skillDirectory root)
   let status = SkillInstall.classify shipped installed
-  let line = SkillInstall.describe shippedVersion status
-  match status with
-  | SkillInstall.SkillStatus.UpToDate _ -> pass "Agent skill" line
-  | _ -> warn "Agent skill" line "The skill is what tells an agent to use the REPL as its inner loop. Other agents can read skills/sagefs/SKILL.md by path."
+  let agent =
+    match Directory.Exists(Path.GetDirectoryName root) with
+    | true -> AgentPresence.ClaudeCodeFound
+    | false -> AgentPresence.NoAgentFound
+  agentSkillResult status (SkillInstall.describe shippedVersion status) agent
 
 let runAll (dir: string) (mcpPort: int) (dashPort: int) =
   // One probe, shared by both port checks and the daemon row — a port held
@@ -697,6 +721,21 @@ let runAll (dir: string) (mcpPort: int) (dashPort: int) =
     checkDaemonFromInfo daemonInfo
     checkDaemonSessionAuthority dir mcpPort ]
 
+/// The summary lines, built from the worst result that fired and naming the checks that gave it.
+let summary (results: CheckResult list) : string list =
+  let labelsOf status =
+    results |> List.filter (fun r -> r.Status = status) |> List.map (fun r -> r.Label)
+  let named (labels: string list) = String.concat ", " labels
+  match labelsOf Status.Fail, labelsOf Status.Warn, labelsOf Status.Info with
+  | (_ :: _) as failed, _, _ ->
+    [ sprintf "✗  %d check(s) failed: %s. Fix those (each says how above) before running SageFs." failed.Length (named failed) ]
+  | [], ((_ :: _) as warned), _ ->
+    [ sprintf "⚠  %d warning(s): %s. Nothing failed, so SageFs can run; each warning says what to do above." warned.Length (named warned) ]
+  | [], [], [] -> [ "✓  All requested checks passed for the checked target." ]
+  | [], [], noted ->
+    [ "✓  All requested checks passed for the checked target."
+      sprintf "   Notes (nothing to fix): %s." (named noted) ]
+
 /// Print the check results to stdout. Returns the count of failures (for exit code).
 let print (results: CheckResult list) =
   let w = 60
@@ -709,15 +748,6 @@ let print (results: CheckResult list) =
     | Some h -> printfn "     └─ %s" h
     | None   -> ()
   printfn "  %s" (String.replicate w "─")
-  let failures = results |> List.filter (fun r -> r.Status = Status.Fail)
-  let warnings = results |> List.filter (fun r -> r.Status = Status.Warn)
-  match failures, warnings with
-  | [], [] ->
-    printfn "  ✓  All requested checks passed for the checked target."
-    printfn "     Local prerequisites look good, and daemon session authority is unambiguous and Ready."
-  | [], ws ->
-    printfn "  ⚠  %d warning(s) — local prerequisites may be fine, but review daemon/target authority details above." ws.Length
-  | fs, _ ->
-    printfn "  ✗  %d check(s) failed — fix the issues above before running SageFs." fs.Length
+  summary results |> List.iter (printfn "  %s")
   printfn ""
-  failures.Length
+  results |> List.filter (fun r -> r.Status = Status.Fail) |> List.length
