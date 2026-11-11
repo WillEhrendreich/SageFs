@@ -1871,3 +1871,104 @@ Evidence: `SageFs.Core/Cohort.fs` (`ClearClaim`, `ClaimStanding`, `releaseOrClea
 `docs/plans/lapsed-members-claims-can-be-cleared.md`.
 Reopen it if: a member that was working loses a claim to a clear (then the window, or what counts as presence, is wrong), or a
 person needs to clear with no conductor seated (then the dashboard route and a command with no `by` are the next piece).
+
+## DECISION (open, for Will): how long a quiet claim holder keeps its claim
+
+Not decided. Written down so the choice is made on purpose. Found by the cohort roast (2026-11-10, finding I1).
+
+What happens today. The conductor can clear a `Held` claim once its holder has gone `Timeouts.cohortHolderSilentAfter` without a lease
+renewal (`SageFs.Core/Timeouts.fs:796`, two reaper intervals, two minutes). The holder's own lease lasts `Timeouts.cohortLeaseWindow`
+(`Timeouts.fs:500`, thirty minutes). The reaper renews a member that evaluated or made a call within `Timeouts.agentActivityFresh` (two
+minutes, `Timeouts.fs:531`) or holds an open push stream (`SageFs/DaemonMode.fs`, `cohortReaperCallback`). An agent that runs a three-minute
+`dotnet build` in its own shell makes no call for three minutes, so for one minute of it the conductor's `release_claim` clears its claim and
+another member can take the scope. Nobody tells the holder: `CohortEffect.Notify` exists (`SageFs.Core/Cohort.fs:837`) and the owner
+performs it (`SageFs.Core/Features/CohortOwner.fs:329`), but no arm of `decide` produces one. The holder finds out from its next call,
+whose refusal points at the wrong next step (see below).
+
+The options.
+
+1. **Renew on any request from the member's connection, including the SSE heartbeat.** A bridge-connected agent keeps its stream open, and
+   that already renews the lease; a client that talks plain HTTP and holds no stream gets nothing. Cheap, and it only helps the clients that
+   already mostly work.
+2. **Raise the silence window** (for example to `agentActivityFresh` times five, ten minutes). A long build stops looking like a departure.
+   The cost is the case the clear exists for: a member that really left holds its scope shut for ten minutes instead of two.
+3. **Tell the holder before or when the claim goes.** `ClearClaim` emits `Notify(former, ClaimCleared ...)`, the shell delivers it as an
+   MCP notification on the holder's stream and as a line in its next tool answer, and the refusal a cleared holder meets names what happened
+   and how to get the scope back.
+
+My recommendation: 3 now, and 2 only if a real run shows a working member losing a claim. Option 3 changes no number and no window, so it
+does not reopen the decision `The conductor clears a lapsed member's claims with release_claim` above, and it is the only one that fixes
+the wrong advice. Option 1 is worth doing anyway for the stream case, and it does not need this decision.
+
+What a cleared holder should be told (this is text in `SageFs/CohortErrorMapping.fs`, the `StaleClaimFence` and `NotClaimHolder` arms). Today
+its late `release_claim` gets `StaleClaimFence` with "retry with the claim's current fence"; that retry gets `NotClaimHolder` with
+"acquire it"; that gets `ClaimConflict` naming the new holder. The words should say: the conductor cleared this claim after the holder
+was silent for N minutes; the scope is held by M now (or free); run `acquire_claim` again when it is free, and `get_cohort_status` shows who
+holds it. `StaleClaimFence` carries two fences and no claim state today (`Cohort.fs`, `CohortError.StaleClaimFence`), so the mapping has to
+read the claim from the state the tool already has, or the refusal gains the claim's current `ClaimState`.
+
+Reopen it if: a member loses a claim to a clear while it was working (then the window or what counts as presence is wrong), or the
+notification shows up in a client before the refusal text does (then the refusal can shrink).
+
+## What the model can read from its own environment, and who may call a worker (2026-11-11)
+
+Code an agent evaluates runs in the FSI host, as the user, and can read every environment variable the host has. Until
+this change the host had all of them: `sagefs mcp` reads `SAGEFS_OPERATOR_TOKEN` and `SAGEFS_MEMBER_TOKEN` and sends
+them as headers, and the daemon it started, the worker and the FSI host inherited both, so
+`System.Environment.GetEnvironmentVariable "SAGEFS_OPERATOR_TOKEN"` printed the operator credential into a tool result.
+
+The rule now: a credential stays in the process that sends it.
+
+- `ProcessEnvironment.credentialVariables` (`SAGEFS_OPERATOR_TOKEN`, `SAGEFS_MEMBER_TOKEN`, `SAGEFS_WORKER_SECRET`) are
+  on the poison list, so every spawn that goes through `ProcessEnvironment.applyTo` (the worker, the FSI host, a
+  session's `dotnet build`, `run_app`) starts without them. The bridge removes the two tokens from the daemon it starts
+  (`ProcessEnvironment.removeCredentials`); it keeps the rest of the person's environment, `DOTNET_ROOT` included.
+- `SAGEFS_FORWARD_PREFIXES` cannot bring them back: the poison list wins over forwarding.
+
+A worker listens on `127.0.0.1:<ephemeral>` and runs F# for whoever POSTs `/eval`, so anything that could reach
+loopback (a sandboxed agent with host networking, another user on the machine) could run code as the user without the
+daemon. Each worker now has its own credential:
+
+- The daemon draws 32 random bytes (base64url) for each worker it starts (`WorkerAuth.generate`, `WorkerSpawn`) and
+  hands them over in the worker's spawn environment as `SAGEFS_WORKER_SECRET`, an explicit override of the poison list.
+- The worker reads the secret once and removes it from its own environment (`WorkerAuth.readExpectedOnce`), so nothing
+  it runs or starts can read it, and the FSI host never had it.
+- Every route but one needs `Authorization: Bearer <secret>`. The decision is `WorkerAuth.decide`, a pure function with
+  a closed answer; the compare is constant-time; a refusal is a 401 that says what the route needs and that the
+  credential is the daemon's own. The exception is `GET /__sagefs__/reload` (`WorkerRoute.DevReloadStream`): the script
+  in the user's own app opens it with `EventSource`, which cannot send a header, so it stays behind the origin gate
+  alone and only streams reload notices.
+- The daemon keeps each worker's secret by process id from the spawn, and by port once the worker reports it
+  (`WorkerAuth.Registry`). Every daemon `HttpClient` that talks to a worker is built on `WorkerAuth.newHandler`, which
+  adds the header for a registered port and leaves every other request alone.
+- A worker started by hand, with no secret in its environment, answers as before. The daemon never starts one that way.
+
+What this does not cover: a process of the same user with no sandbox can read `operator.token` and `/proc`, and is
+inside the trust boundary by definition. The daemon's own listeners are still open to every local caller until the
+work in `docs/plans/a-token-for-every-daemon-call.md` lands.
+
+## Escaping rules for the dashboard (2026-11-11)
+
+Falco.Markup writes an attribute value as it is given, Falco.Datastar writes a string signal as `'value'` and an
+expression as it is given, and Datastar runs every `data-on:*`, `data-show`, `data-signals:*` and their kin with
+`Function(`. The dashboard origin may POST `/dashboard/eval`, so script in the page runs F# as the user. An agent name,
+a file path, a saved setting from a cloned repo, a completion and a search box all reach those places.
+
+The rules. Text goes in with `textEnc`. Anything computed that goes into an attribute or a Datastar expression goes
+through `SageFs/DashboardSinks.fs`, which takes outside text as `UserText`: `Sink.attr` attribute-encodes a value,
+`Sink.signal` JS-string-encodes and then attribute-encodes a signal's first value, `Sink.jsArg` turns text into one JS
+string literal for building an expression, `Sink.post` does the same for a `@post` URL, and `Sink.onEvent`,
+`Sink.onClick`, `Sink.show`, `Sink.classWhen` and `Sink.attrExpr` attribute-encode the whole expression. Text is never
+spliced between quotes in a `sprintf` format by hand. A theme name is checked against `ThemePresets.all` before it is
+saved or drawn (`DashboardTypes.knownThemeName`), and an unknown one gets a 400.
+
+How it is held. `DashboardSinkTests` renders the real renderers (the cohort Seat and Replace buttons, the settings panel,
+the coverage treemap, the completion list, the app output search, the shell, the theme picker) with hostile strings and
+checks that the markup has the same elements and attribute names, and every Datastar expression the same code with its
+literals blanked, as a rendering of plain text. Its source scan fails on any `Attr.create`, `Ds.signal`, `Ds.onEvent`,
+`Ds.onClick`, `Ds.show` or `Ds.post` with a computed argument outside `DashboardSinks.fs`; the budget is zero and a
+line that must stay says why with `// sink-literal:`. `DashboardSinkBrowserTests` runs three of the pages in headless
+Chromium and reads back the exact text each control ended with.
+
+What it does not cover: `Attr.id` and `Attr.class'` still take program-built ids (session ids, row keys), and there is
+no Content-Security-Policy; `docs/plans/dashboard-csp.md` says why and what it would take.
