@@ -1,6 +1,67 @@
 # Confirmation gates in every agent host
 
-Roadmap item: `confirmation-gates-in-every-agent-host` (Exploring, Agents). Plan written 2026-10-26 against master 59a8692c.
+Roadmap item: `confirmation-gates-in-every-agent-host` (Exploring, Agents). Plan written 2026-10-26 against master 59a8692c. Work order added 2026-11-11 against master 8975e898.
+
+## Work order
+
+This item shrank on 2026-11-07. The confirm tier is one tool, `manage_local_data`, and it is conductor-only. Everything in the original plan about six tools, session ownership and a `{ tool, sessionId, caller }` preview route describes code that no longer exists. The work order below is the re-scoped item. Its first step is a measurement that can end it.
+
+### 1. Outcome
+
+Today the daemon asks a person before `manage_local_data` runs, through MCP elicitation (`McpServer.fs:414-452`). A client that never advertised elicitation is `ClientCannotAsk` and the call runs with no prompt. After this item, on a host that can prompt from a hook (Claude Code `PreToolUse` with `permissionDecision: "ask"`, Cursor `beforeMCPExecution`, Copilot CLI `preToolUse`), the person is asked there instead, with the daemon's own loss sentence, and never asked twice. On a host with no way to ask, the docs say so by name.
+
+Outcome gate: for each installed host, a scripted non-interactive run that calls `mcp__sagefs__manage_local_data` against an isolated daemon, read from files after the process exits: the host's approval record or the hook's deny line is present, and the daemon's local stores are unchanged. A second run calling a non-tier tool asserts nothing was asked. Linux only. None of the hosts has been run yet, so every host cell is unproven.
+
+### 2. Where the code is today
+
+Verified by reading on 2026-11-11.
+
+- `ConfirmationPolicy.decide : ToolName -> Confirmation` (`SageFs.Core/ConfirmationPolicy.fs:25`), with `Confirmation = NotRequired | Required of loss` (`:18`). It reads only `Affordances.confirmationLosses` (`SageFs.Core/Affordances.fs:1321`), which holds one entry, `ToolName.ManageLocalData`. `singleSessionConfirmTools`, `SessionCreator` and `SessionActivity` are gone from the tree (grep).
+- `destructiveTools` (`Affordances.fs:1242`) is information only, published as `destructiveHint` on `tools/list`. The comment above `confirmationLosses` (`:1276-1320`) is the record of why each destructive tool is out of the tier.
+- The prompt path: `ConfirmationRefusal` (`SageFs/McpServer.fs:309`), `wayOut` (`:339`), `confirmationStep` (`:414`, `ClientCannotAsk` when `caps.Elicitation` is null at `:421`), `confirmWithin` (`:442`), called at `:486` with `SageFs.Timeouts.confirmationAnswer`. `unattendedRoute` no longer exists: the unattended path is `sagefs data clear` over the operator-only `POST /api/local-data/clear` (`SageFs/LocalDataCommand.fs`).
+- `SageFs.Simulation/ConfirmationGateSim.fs` (registered at `SageFs.Simulation.fsproj:186`) and `SageFs.Tests/ConfirmationGateSimTests.fs` (`SageFs.Tests.fsproj:356`) already fold creates, person-creates, stops, restarts and calls over the real `decide` and assert that only `manage_local_data` asks. `ConfirmationPolicyTests.fs` (`:108`) covers the pure function.
+- The hook project `tools/agent-hooks/` is Claude Code only and Bash only (`Hook.fs:122`). `HostAdapter` does not exist; `repl-guard-for-other-agents` (Not started) would add it.
+- Host facts in the table below are from docs read 2026-10-26, summarised by a small model. Not one has been confirmed by a run.
+- Operator routes and `EdgeAccess` exist (`SageFs.Core/EdgeCredential.fs:106`), so a new route can be operator-only from day one.
+
+### 3. Steps
+
+1. Measure (half a day, no product code). For each host installed here: start an isolated daemon with debug logging, connect the host, call `manage_local_data`, and read (a) whether the daemon saw `Elicitation` on the client's capabilities (add one debug log line at `McpServer.fs:421` if there is none; that is the only code this step may touch), (b) whether a prompt appeared, (c) whether the host prompts for MCP tools on its own (Claude Code asks before an MCP tool call unless the tool is on its allow list). Write a four-column table into "Measure first": host, advertises elicitation, host-native MCP prompt, hook can ask. If every installed host either elicits or prompts natively, go to the DECISION and recommend Stopped.
+2. DECISION (Will): with one conductor-only tool in the tier, is a per-host shell worth building? Options: (a) `Stopped: the server prompt and the hosts' own MCP tool prompts cover the one tool` and the item stays on the roadmap with that sentence; (b) build the shell as a 30-line extension of the repl-guard hook once `HostAdapter` lands; (c) build it now inside `Hook.fs` for Claude Code only. Recommendation: (a) unless step 1 finds an installed host with no prompt of any kind, then (b), because the capture harness that item builds is the same one this item needs.
+3. If (b) or (c). RED, pure. `SageFs.Tests/HostPromptTests.fs`, list `HostPrompt`: "WHY - every tool in confirmationLosses is HostMustAsk for a host that cannot elicit and ServerWillAsk for one that can; every other tool is NotInTier", a property over `ToolName.all` and both `HostCanElicit` values. Register in `SageFs.Tests.fsproj` next to `ConfirmationPolicyTests.fs` (line 108). Commit red.
+4. GREEN, pure. `SageFs.Core/HostPrompt.fs` with `HostCanElicit`, `PromptDuty` (drop `HostMustAskUnlessOwn`: no own-session exemption exists), `duty`. It depends on `Affordances` only, so it can be linked into the hook project. Add after `ConfirmationPolicy.fs` (`SageFs.Core.fsproj:505`).
+5. Edge. The shell reads the tier from the daemon so it never holds the name: `GET /api/confirmation/tier` answering `[{ tool, loss }]` from `confirmationLosses`, open access, in a new `confirmationEndpoints` list in `EndpointContracts.fs` (trailer `Plugin: n/a, a route for agent hooks`). The hook calls it with its 800 ms limit for a `mcp__sagefs__*` tool name only, and emits `ask` with the loss sentence when the tool is listed; daemon down means `ask`. Fixture tests from step 1's recorded stdin JSON.
+6. Edge. `sagefs hooks install --host claude --ask` prints a `permissions.ask` entry per tier tool; a test compares the output with `confirmationLosses` byte for byte.
+7. Docs: `docs/agents.md` gets the host table from step 1 and the sentence per host that cannot ask. `docs/mcp-tools.md:106-116` (the elicitation paragraphs) gets one line pointing at the hook.
+8. Extend `ConfirmationGateSim` with a `Hook` caller kind and the `HookHoldsItsOwnListTwin` (a shell with a hard-coded tool name misses a tool added to the tier). Outcome gate per host as an `Integration.hostList` case over the recorded fixtures; the real-host runs are by hand.
+
+### 4. How to check it
+
+- Inner loop: a session on `SageFs.Tests`; `send_fsharp_code` the `duty` property before writing the file.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Filtered: `... --summary --filter-test-list "HostPrompt"`; `--filter-test-list "ConfirmationGateSim"`.
+- Acceptance: unfiltered `--summary` (TRUST `Trusted`), then `--integration-host --summary`.
+- Hook: `dotnet fsi tools/agent-hooks/publish.fsx`, then pipe a recorded `PreToolUse` JSON for `mcp__sagefs__manage_local_data` into the binary with the daemon up and with it down.
+
+### 5. Traps in this repo
+
+- Budgets only go down. A tool added to `confirmationLosses` must also be in `destructiveTools` (`McpToolGateTests`).
+- `EndpointContracts.fs` is on the wire-surface list; the route commit carries a `Plugin:` trailer.
+- SAGE-005: the route handler and `duty` take `ToolName`, never a `string` tool name beside another string.
+- No timing-sensitive tests: the daemon-down case is a fake reader, never a timeout. The host's own hook timeout is a config value the installer writes, not something a test waits for.
+- Asking twice trains people to click through: a host that elicits or prompts natively must be `ServerWillAsk`, and step 1 decides that per host from a run, never from docs.
+- Commit `.fsproj` files whole.
+- Linux only.
+
+### 6. Size and order
+
+Step 1: half a day. Steps 3 to 8 if built: three to four days for Claude Code; one day per further host, each needing a real run. Step 1 and the DECISION first; nothing else starts before them. First commit: either the "Stopped" status line in "Resume here" with the measured table, or `test(host-prompt): RED every tier tool is HostMustAsk where the host cannot elicit` with `HostPromptTests.fs` and the fsproj line.
+
+### 7. Not now
+
+- Prompts for the 17 destructive tools outside the tier: Will chose on 2026-11-07 that they run unasked; a generated `permissions.ask` list for them is at most an opt-in flag.
+- Caller identity from a hook (own-session exemption): the exemption no longer exists in the policy, so there is nothing to carry.
+- SDK 2.x stateless mode for HTTP (`ask-before-a-destructive-tool-runs`): if elicitation stops working over Streamable HTTP, this item's shells become the only prompt, and the DECISION above should be revisited then.
 
 ## Resume here
 
@@ -22,8 +83,8 @@ In every host where a person can be asked, `stop_session`, `reset_fsi_session`, 
 
 ## What exists today
 
-- The server side is built. `Affordances.destructiveTools` (`SageFs.Core/Affordances.fs:1211`) is 18 tools published as MCP `destructiveHint: true` on `tools/list` (`applyDestructiveHints`, `McpServer.fs`). `Affordances.confirmationLosses` (`:1280`) is the six-tool confirm tier with the words for what each takes away, and `singleSessionConfirmTools` (`:1290`) is the five that act on one session. `SageFs.Core/ConfirmationPolicy.fs` is the pure `decide : ToolName -> TargetSession -> SessionCreator -> MemberId -> Confirmation` (`Required of ConfirmationReason | NotRequired of OwnSession`), fail closed.
-- The prompt path is `confirmationStep` and `confirmWithin` (`McpServer.fs:414`, `:445`): `NotInTier | ClientCannotAsk | Ask`. A client that never advertised elicitation is `ClientCannotAsk` and the call runs, because "the four gates ahead of this one already ran". `ConfirmationRefusal` has five typed cases (`Declined`, `Cancelled`, `AnsweredOther`, `NoAnswerInTime`, `CouldNotBeAsked`) and `wayOut` points at HTTP routes that do the job without asking (`unattendedRoute`).
+- The server side is built. `Affordances.destructiveTools` (`SageFs.Core/Affordances.fs:1242`, seen 2026-11-11) is 18 tools published as MCP `destructiveHint: true` on `tools/list` (`applyDestructiveHints`, `McpServer.fs`). `Affordances.confirmationLosses` (`:1321`) is the confirm tier, one tool since 2026-11-07, with the words for what it takes away. `SageFs.Core/ConfirmationPolicy.fs` is the pure `decide : ToolName -> Confirmation` (`Confirmation = NotRequired | Required of loss`, `:18-25`). The six-tool tier, `singleSessionConfirmTools` and the per-session `decide` this paragraph used to describe are gone.
+- The prompt path is `confirmationStep` and `confirmWithin` (`McpServer.fs:414`, `:442`): `NotInTier | ClientCannotAsk | Ask`. A client that never advertised elicitation is `ClientCannotAsk` and the call runs, because "the four gates ahead of this one already ran". `ConfirmationRefusal` (`:309`) has typed cases and `wayOut` (`:339`) names `sagefs data clear`, which goes over the operator-only `POST /api/local-data/clear`; `unattendedRoute` no longer exists.
 - So a host that does not elicit gets no prompt at all. The roadmap names that gap. I could not find, in the repo or the roadmap, which four hosts the item means. `docs/agents.md` names Claude Code, Codex, Copilot, Cursor and OpenCode.
 - The hook project `tools/agent-hooks/` has the pure/edge split (`ReplGuard.fs`, `Verdict.fs`, `Hook.fs`) and links a pure Core file by `<Compile Include=... Link=...>` (`HatchUse.fs`). `repl-guard-for-other-agents` (this group) plans a `HostAdapter` layer there.
 - Host facts, from each host's docs fetched 2026-10-26 (summarised by a small model, so confirm by running, which is Step 1):

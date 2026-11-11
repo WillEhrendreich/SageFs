@@ -1,6 +1,100 @@
 # A command palette and one timeline
 
-Roadmap item: `command-palette-and-one-timeline` (Exploring, Dashboard). Plan written 2026-10-26 against master 59a8692c.
+Roadmap item: `command-palette-and-one-timeline` (Exploring, Dashboard). Plan written 2026-10-26 against master 59a8692c. Work order added 2026-11-11 against master 8975e898.
+
+## Work order
+
+Two deliverables, one shared idea. The palette is the first half and ships alone. The timeline is the second half and is large; its work order starts at step 7.
+
+### 1. Outcome
+
+Palette: today every dashboard action is a button somewhere on the page or a key in `KeyBindings.all`, and there is no Ctrl+K. After the palette, Ctrl+K or a header button opens a `<dialog>` listing every action, typing narrows it, an action that cannot run now is listed greyed with its reason in the vocabulary the panels already use (`PaneRelevance.ReasonLine`), Enter runs the first match, and a destructive action asks first with the same sentence the key does.
+
+Timeline: today only evals have history (`EvalStore`, `EvalTimeline`); hot-reload verdicts, test runs and tweaks keep at most their last value. After the timeline, one strip per session shows all four kinds on one axis, a per-tab cursor scrubs it, a drawer shows what each entry recorded, and `get_message_journal` reads the same record instead of synthesising one from eval history.
+
+Outcome gates: palette, a headless Chromium journey (`DashboardMobileBrowserTests.fs` technique) that opens the palette by button and by Ctrl+K, types "hot", sees only matching rows, presses Enter and observes the route's effect, presses Esc and finds focus back on the button, at 375, 768 and 1400 px, with zero console and `PatchElementsNoTargetsFound` errors. Timeline, the browser matrix in "What done looks like" plus one assertion per kind inside the journey that already drives that kind. Linux only; the Ctrl+K browser-shortcut collision is unproven in Firefox and in Chromium outside Playwright.
+
+### 2. Where the code is today
+
+Verified by reading on 2026-11-11.
+
+Palette:
+
+- `KeyBindings.all` is `SageFs/Dashboard.fs:230` (not ~192); `Confirmation` `:196`; `tableJson` `:261`; the inline keyboard script is the `sprintf` at `:347`. `Ctrl+K` appears nowhere in `Dashboard.fs` (grep count 0). `Ctrl+Tab` is bound at `:245`.
+- The inline JS budget is 6,144 bytes (`SageFs.Tests/DashboardSnapshotTests.fs:858-867`), and `:842-856` forbids state management and GET fetches in inline scripts.
+- The modal pattern is `SageFs/NewSessionDialogView.fs`: `Signals.NewSessionOpen` (`:30-45`), `SuggestDebounce = "250ms"` (`:26`), `showModal()` from a `Ds.effect` (`:36`).
+- `createEndpoints` is `Dashboard.fs:3848`; the action routes are literal strings at `:3932-4130` (`/dashboard/eval`, `/reset`, `/hard-reset`, `/cancel-eval`, `/switch-workflow`, `/clear-output`, `/hygiene/scan`, `/set-theme`, `/live-testing/enable`, `/disable`, `/session/create`, `/session/stop-others`, `/layout`, `/cohort/scrub`, `/cohort/seat`, and more). No `DashboardRoutes.fs` exists; the literals are inline.
+- `dashboard-follows-context` is Done. Its vocabulary is `PaneRelevance = OnPage | ReasonLine of name | NothingToShow of why` (`SageFs/PaneMenuView.fs:21-27`) computed by `relevanceOf (facts: PanelFacts) (pane: PanelId)` (`:76`); `PanelFacts` is built at `Dashboard.fs:1057`. The plan's `HiddenBecause` does not exist; use `PaneRelevance`.
+- `move-and-dock-dashboard-panes` is In progress (step 3 of 8): the six sidebar panels already move, close, reopen and reset from a Panels menu (`PaneMenuView.fs`), so `ShowPane`/`ClosePane`/`ResetLayout` have routes to call (`/dashboard/layout`, `:4103`).
+- The per-tab scrub model: `renderCohortScrubControl` (`SageFs/DashboardFragments.fs:3776`), `DashboardStreamCommand.SetCohortViewingSeq` (`SageFs/DashboardTypes.fs:1646`), `StreamBurst.add` (`Dashboard.fs:792`), `Features.CohortScrubber` (`SageFs.Core/Features/CohortScrubber.fs`).
+
+Timeline:
+
+- Eval: `Mcp.recordEvalForSession` (`SageFs/Mcp.fs:126`, called at `:1170`) into `FeatureHooks.recordEvalWithCost`; `CachedTimeline: EvalTimeline.TimelineState` (`SageFs.Core/Features/FeatureHooks.fs:25`, recorded at `:79`). `getEvalTimeline` `Mcp.fs:2980`. `getMessageJournal` is `Mcp.fs:2943`, comment "synthesized from eval history" at `:2942`; the tool is `McpTools.fs:2297`.
+- Hot reload: `ensureReloadRelay` (`SageFs/DaemonMode.fs:3775`) posts `SessionCommand.ReloadObserved` (`SageFs.Core/SessionManager.fs:112`, handled `:1254`) and raises `ReloadReported`. Last verdict only.
+- Test run: `TuiEvent.TestRunCompleted` dispatched at `SageFs/SageFsEffectHandler.fs:1157` and `:1190`; `formatTestRunCompletedEvent` at `McpServer.fs:2230`.
+- Tweak: `TweakLog.LoggedEvent = { Id; At: int64; Event }` (`SageFs.Core/Features/Tweak/TweakLog.fs:195`), `At` is a sim-clock reading (`:64-66`); the journal path is `NudgeFs.journalPathFor` wired at `SageFs/EvalWriteBackWire.fs:94`; `SageFs/LiveBindingsTweakService.fs` exists. Which store is live is still untraced.
+- `SageFs/SseEvent.fs` has 22 cases (not 20). `SageFs.Core/TimeTravel.fs` and `ModelSnapshot.fs` have no caller outside their own files (grep); `RingBuffer.fs` exists.
+- Lanes: `Features.CohortLanes.project : LedgerEntry list -> LaneModel` (`SageFs.Core/Features/CohortLanes.fs:224`); the SVG is drawn by `CohortTerritory.toSvg` (named in `CohortLanes.fs:294`), not `CohortLanes.toSvg`.
+- Simulation building blocks: `SageFs.Simulation/FaultInjection.fs` (fsproj `:50`), `RetentionSim.fs` and `RetentionSimInvariants.fs` (`:265-266`), tests `SageFs.Tests/RetentionSimDstTests.fs`.
+- Browser journeys named in the plan all exist: `DashboardMobileBrowserTests.fs`, `HotReloadBrowserTests.fs`, `LiveTestingBrowserTests.fs`, `DashboardLiveBindingsTweakBrowserTests.fs`.
+- Tool list budget: `RatchetBudgets.toolList` is 38,286 characters for the full catalog (`SageFs.Tests/RatchetBudgets.fs:462`). A longer `get_message_journal` description fails `ToolListBudgetTests`; the new description must be no longer than the old one or the budget is raised in the same commit with the reason, as the `:455-461` comment records earlier raises.
+
+### 3. Steps
+
+Palette:
+
+1. Measure (one hour). Render one node with the typed `Ds.onEvent` and a `__window` modifier and read the attribute; if it passes through, Ctrl+K costs no inline bytes. Record the current inline JS byte count from the `DashboardSnapshotTests` message. Open the dashboard in a real Firefox and Chromium (headless screenshot only, per house rule) and note whether Ctrl+K reaches the page.
+2. RED, pure. `SageFs.Tests/DashboardCommandsTests.fs`, list `DashboardCommands`: "WHY - every keyboard action that is not ClientOnly is a palette command with the same confirmation". Register in `SageFs.Tests/SageFs.Tests.fsproj` next to `DashboardSnapshotTests.fs` (line 239). Fails to compile. Commit red.
+3. GREEN, pure. `SageFs/DashboardCommands.fs`: `DashboardCommand`, `CommandAvailability = Available | Unavailable of PaneRelevance`, `catalogue : PanelFacts -> SessionInfo list -> Command list`, `Invoke = PostRoute of string | OpenSignal of string | Navigate of string`. Add to `SageFs/SageFs.fsproj` before `Dashboard.fs`. The property "catalogue is total and every Unavailable has a non-empty reason".
+4. Edge. `SageFs/PaletteView.fs`: the `<dialog>`, `Signals.PaletteOpen`, `Signals.PaletteQuery`, one `<button>` per command with `Ds.show` over the lowercased search string, Enter through a `Ds.onEvent` expression. Snapshot test in `DashboardSnapshotTests.fs` that the dialog is in the shell and the JS budget still holds.
+5. Edge. The header "Commands" button and Ctrl+K: a `KeyBindings` row with `Effect.ClientOnly` if step 1 found the attribute route, else about 100 bytes in the keyboard script at `Dashboard.fs:347`. `dashboard.css` rows.
+6. Browser journey (the palette gate above) in `DashboardMobileBrowserTests.fs` style, run in `--integration-browser`.
+
+Timeline:
+
+7. Measure (half a day). Count producer events during one `HotReloadBrowserTests` and one `LiveTestingBrowserTests` run; read `LiveBindingsTweakService.fs` and `EvalWriteBackWire.fs` and write down which tweak store is live and whether its `At` is wall time; run one eval through `/exec` and one through MCP in a test host and count `recordEvalForSession` calls.
+8. RED, pure. `SageFs.Tests/SessionTimelineTests.fs`, list `SessionTimeline`: "WHY - an eval, a reload, a test run and a tweak recorded out of order come back in sequence order, each once", plus the capacity and `Evicted` properties. Commit red.
+9. GREEN, pure. `SageFs.Core/Features/SessionTimeline.fs` with the types in Design (`TimelineKind`, `TimelineEntry`, `TimelineCursor`, `Resolved`), a single-writer ring. Add to `SageFs.Core.fsproj` after `EvalTimeline.fs`.
+10. `SageFs.Core/Features/TimelineOwner.fs` in the `CohortOwner.fs` style (mailbox, published immutable snapshot), and `SageFs.Simulation/SessionTimelineSim.fs` with invariants (a) to (e) and the double-door twin; registered in both fsproj files.
+11. Producer hooks, one commit each, file-disjoint: `Mcp.fs:126` (eval, deduplicated with the `/exec` door by session and cell), `DaemonMode.fs:3775` (reload), `SageFsEffectHandler.fs:1157` and `:1190` (test run), the tweak completion in `LiveBindingsTweakService.fs`. Each adds one call and one test through its own door.
+12. `DashboardStreamCommand.SetTimelineCursor` beside `SetCohortViewingSeq` (`DashboardTypes.fs:1646`), a case in `StreamBurst.add` (`Dashboard.fs:792`), `SageFs/TimelineView.fs` (SVG marks with a shape per kind, labelled; range input with arrow keys; drawer), and the `#main` morph.
+13. `getMessageJournal` (`Mcp.fs:2943`) reads the timeline; description in `McpTools.fs:2297` and `docs/mcp-tools.md` updated; trailer `Plugin: n/a no client reads this tool`. Per-kind browser assertions in the four journeys.
+
+DECISION: split the roadmap item in two (palette, timeline). Recommendation: yes, before step 7.
+DECISION: scrub is inspect-only for v1. Recommendation: yes; state restore is its own item.
+DECISION: Ctrl+K only, plus the button. Recommendation: yes.
+DECISION: in memory per session (recommended) or persisted beside the tweak log.
+
+### 4. How to check it
+
+- Inner loop: a session on `SageFs.Tests`; `send_fsharp_code` the `catalogue` property and the ring cases before writing files.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (JS budget, tool list, type scale, glyphs).
+- Filtered: `... --summary --filter-test-list "DashboardCommands"`, `"SessionTimeline"`, `"Dashboard snapshot"`.
+- Acceptance: unfiltered `--summary` (TRUST `Trusted`); `--integration-browser --summary` for the palette and strip journeys; `--integration-hr` and `--integration-lt` for the reload and run entries.
+
+### 5. Traps in this repo
+
+- Budgets only go down: the 6,144-byte inline JS cap, `RatchetBudgets.toolList`, `DashboardTypeScaleTests` (rem/em only, no px), `DashboardGlyphTests` (monochrome glyphs from the closed `Glyph` type, no emoji).
+- Theme tokens: pick colours by meaning; a kind is told apart by shape and a word, never by colour alone.
+- The "one morph, one `#main`" invariant: the dialog and the strip are part of the shell every render state composes, or the SSE morph throws `PatchElementsNoTargetsFound`.
+- SAGE-005: `catalogue` takes `PanelFacts` and a typed list; `TimelineEntry` carries `SessionId` and a unit-of-measure seq, never two `int64`s side by side.
+- No `let mutable` in the pure ring: the owner holds the mutable state at the edge.
+- Timing: browser waits are `waitForSSE` on a morph, never a sleep; the simulation injects its clock.
+- `Mcp.fs` and `DaemonMode.fs` are the largest files in the repo and in `RatchetBudgets.fileSize`; a hook is one call, and the budget is not raised.
+- `McpTools.fs` and `docs/mcp-tools.md` are wire-surface files: those commits carry `Plugin:` trailers.
+- Commit `.fsproj` files whole. Linux only.
+
+### 6. Size and order
+
+Palette, steps 1 to 6: about a week. Timeline, steps 7 to 13: three weeks or more. Step 2 first; 3 and 4 serial; 5 after 1. Step 11's four hooks can run in parallel once step 9's types are committed. First commit: `test(palette): RED every keyboard action that is not client-only is a palette command` with `DashboardCommandsTests.fs` and the fsproj line.
+
+### 7. Not now
+
+- State restore by scrubbing (`TimeTravel.fs`, `ModelSnapshot.fs`): unused code; a separate item with its own measurement of `SageFsModel` sharing.
+- The live bindings and app output as movable panes: `move-and-dock-dashboard-panes`, in progress.
+- Ctrl+Shift+P and other bindings: only if someone asks.
+- Persisting the timeline across daemon restarts.
 
 ## Resume here
 
@@ -36,7 +130,7 @@ Verified by reading the code.
 
 Palette side:
 
-- Keys are data: `KeyBindings.all` in `SageFs/Dashboard.fs` (line ~192) lists each binding with `Keys`, `Shown`, `Help`,
+- Keys are data: `KeyBindings.all` in `SageFs/Dashboard.fs` (line 230 on 2026-11-11) lists each binding with `Keys`, `Shown`, `Help`,
   `Effect` and `Confirm`, and `tableJson` feeds the one inline keyboard script. `Ctrl+K` is not bound. The script already
   handles `Ctrl+Tab`, `Ctrl+=`, `Ctrl+-`, and clicks the viewing card's Stop button for confirmed stops.
 - The inline JavaScript is capped at 6144 bytes (`DashboardSnapshotTests.fs`, "total inline JS payload is under 6KB"), and a
@@ -45,13 +139,13 @@ Palette side:
 - The pattern for a modal is `NewSessionDialogView.fs`: a native `<dialog>` with `Ds.effect` calling `showModal()` from a signal
   (`Signals.NewSessionOpen`), `Ds.preserveAttr "open"`, and a `close` handler folding Esc back into the signal. It debounces typing
   with Datastar's own `250ms` modifier (`SuggestDebounce`).
-- The actions are existing routes. `Dashboard.fs` `createEndpoints` maps (lines ~3430 to 3700) among others:
+- The actions are existing routes. `Dashboard.fs` `createEndpoints` (line 3848 on 2026-11-11) maps (lines 3932 to 4130) among others:
   `/dashboard/session/create`, `/dashboard/reset`, `/dashboard/hard-reset`, `/dashboard/cancel-eval`, `/dashboard/clear-output`,
   `/dashboard/switch-workflow`, `/dashboard/live-testing/enable` and `/disable`, `/dashboard/set-theme`,
   `/dashboard/hygiene/scan` and `/tidy/{plan}`, `/dashboard/session/switch/{id}`, `/dashboard/settings` (page). The palette needs
   no new action routes.
-- A scrubber exists for the cohort: `renderCohortScrubControl` (a range input posting `/dashboard/cohort/scrub`),
-  `DashboardStreamCommand.SetCohortViewingSeq` on the tab's own channel, and the pure `CohortScrubber`. It is the model for a
+- A scrubber exists for the cohort: `renderCohortScrubControl` (`SageFs/DashboardFragments.fs:3776`, a range input posting `/dashboard/cohort/scrub`),
+  `DashboardStreamCommand.SetCohortViewingSeq` (`SageFs/DashboardTypes.fs:1646`) on the tab's own channel, and the pure `CohortScrubber` (`SageFs.Core/Features/CohortScrubber.fs`). It is the model for a
   per-tab cursor. It builds its post with a hand-written `@post('...')` string in `Ds.onEvent`; the new cursor should use the
   typed builders.
 
@@ -59,19 +153,19 @@ Timeline side, event by event:
 
 | Kind | Where it is recorded today | What is kept |
 |---|---|---|
-| Eval | `FeatureHooks.recordEval` into `FeaturePushState.History` (`EvalStore`, bounded to a byte budget and a cell cap), and `CachedTimeline` (`EvalTimeline`, 1000 entries: cell, start, duration, status) | per-session store via `Mcp.recordEvalForSession` (line 178), and a global store for the `/exec` door that has no MCP connection, so two feeds exist |
-| Hot reload | `ensureReloadRelay` in `DaemonMode.fs` (~line 3243) receives each worker verdict, posts `SessionManager.ReloadObserved` and triggers `SseEvent.ReloadReported` | only the last verdict, in `SessionInfo.Reload`. No history |
-| Test run | `SageFsEffectHandler.fs` (~lines 1109, 1142) dispatches `TuiEvent.TestRunCompleted`; `McpServer.fs` (~1985) emits `test_run_completed` | `LiveTestState` keeps per-test `History` (the previous duration) and `LastTiming`; no list of runs |
+| Eval | `FeatureHooks.recordEvalWithCost` into `FeaturePushState.History` (`EvalStore`, bounded to a byte budget and a cell cap), and `CachedTimeline` (`EvalTimeline`, `FeatureHooks.fs:25`, `:79`) | per-session store via `Mcp.recordEvalForSession` (`Mcp.fs:126`), and a global store for the `/exec` door that has no MCP connection, so two feeds exist |
+| Hot reload | `ensureReloadRelay` in `DaemonMode.fs` (line 3775) receives each worker verdict, posts `SessionManager.ReloadObserved` (`SessionManager.fs:112`) and triggers `ReloadReported` | only the last verdict, in `SessionInfo.Reload`. No history |
+| Test run | `SageFsEffectHandler.fs` (lines 1157, 1190) dispatches `TuiEvent.TestRunCompleted`; `McpServer.fs:2230` emits `test_run_completed` | `LiveTestState` keeps per-test `History` (the previous duration) and `LastTiming`; no list of runs |
 | Tweak | `SageFs.Core/Features/Tweak/TweakLog.fs` (an event-sourced `EventLog` with `At: int64` from a "sim clock") and the nudge journal (`NudgeFs.journalPathFor`, used by `LiveBindingsTweakService`) | two stores; I did not trace which is the live one |
 
-- `get_message_journal` (`Mcp.fs` line ~2968) is "synthesized from eval history": it builds a `MessageJournal.Journal` from
+- `get_message_journal` (`Mcp.fs:2943`, tool at `McpTools.fs:2297`) is "synthesized from eval history": it builds a `MessageJournal.Journal` from
   `EvalHistory` code strings with source `"eval"`. There is no real journal of events. `get_eval_timeline` and
   `get_session_filmstrip` read the same eval history. `sagefs.nvim` and `sagefs-vscode` consume only the `eval_timeline` SSE event
   (sparkline stats); neither calls `get_message_journal`.
 - `SageFs.Core/TimeTravel.fs` and `ModelSnapshot.fs` implement a ring of immutable model snapshots with step back and forward.
   I found no caller outside their own files, so they are unused. `SageFs.Core/RingBuffer.fs` is the copy-on-write ring (each push
   copies the whole backing array).
-- `SseEvent` (`SageFs/SseEvent.fs`) has 20 cases on two channels; none is a timeline entry.
+- `SseEvent` (`SageFs/SseEvent.fs`) has 22 cases on two channels (counted 2026-11-11); none is a timeline entry.
 
 So the sources exist, but only evals have history. Hot-reload verdicts, test runs and tweaks each need a recorder.
 
@@ -82,7 +176,7 @@ So the sources exist, but only evals have history. Hot-reload verdicts, test run
 ```fsharp
 type CommandAvailability =
   | Available
-  | Unavailable of because: HiddenBecause          // the same case type dashboard-follows-context defines
+  | Unavailable of because: PaneRelevance          // the case type dashboard-follows-context built (SageFs/PaneMenuView.fs:21)
 
 type Confirmation = NoPrompt | AskFirst of prompt: string      // reuse KeyBindings.Confirmation
 
@@ -142,8 +236,8 @@ not take, and `TimeTravel.fs` is unused. The honest v1 shows, per kind, what was
 the tweak's before and after). Whether to go further is a decision below.
 
 The cursor is per tab: `DashboardStreamCommand.SetTimelineCursor` beside `SetCohortViewingSeq`, with a case in `StreamBurst.add`
-(`Dashboard.fs` line ~749) so a burst keeps the last cursor. The strip is part of the snapshot and the one `#main` morph, drawn
-as SVG marks the way `Features.CohortLanes.toSvg` draws lanes: one lane per kind, a distinct shape per kind, each mark labelled
+(`Dashboard.fs:792`) so a burst keeps the last cursor. The strip is part of the snapshot and the one `#main` morph, drawn
+as SVG marks the way `CohortTerritory.toSvg` draws the lanes `Features.CohortLanes.project` builds: one lane per kind, a distinct shape per kind, each mark labelled
 for screen readers, a range input with arrow-key stepping. At 480 px and below the strip scrolls horizontally inside its own
 box and the drawer stacks under it.
 

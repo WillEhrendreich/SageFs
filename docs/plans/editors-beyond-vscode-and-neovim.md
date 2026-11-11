@@ -1,6 +1,86 @@
 # Rider, Zed, Helix and Emacs
 
-Roadmap item: `editors-beyond-vscode-and-neovim` (Exploring, Editors). Plan written 2026-10-26 against master 59a8692c.
+Roadmap item: `editors-beyond-vscode-and-neovim` (Exploring, Editors). Plan written 2026-10-26 against master 59a8692c. Work order added 2026-11-11 against master 8975e898.
+
+## Work order
+
+This work order is written for a contributor who wants to write a SageFs client for an editor we do not ship one for. It names the wire they need, the smallest client that proves it, and the in-repo work that makes the next client cheaper than the last two.
+
+### 1. Outcome
+
+Today a Helix, Emacs, Zed or Rider user has no way to evaluate a block in a SageFs session short of reading `McpServer.fs`. After this item, `docs/editor-protocol.md` says what to send and what comes back for nine routes and the event stream, a test keeps that list mapped, `sagefs eval` and `sagefs events` let any editor with a shell pipe evaluate a block and watch a session, and a conformance suite proves the doc against a real daemon. One first-class client (Rider or Emacs) is a later item, decided by the request count in "Measure first".
+
+Outcome gate: `EditorProtocolConformanceTests` in the host tier drives a real daemon with the same client code `sagefs eval` uses over the matrix in "What done looks like", asserting structured fields (`success`, `errorDetails.case`, the SSE `event` name and `id`), never sentences. Linux only; the CLI is .NET and runs where the tool runs, but nothing has been run on Windows or macOS.
+
+### 2. Where the code is today
+
+Verified by reading on 2026-11-11.
+
+The contract a client needs:
+
+- Discovery: `GET /health` (`SageFs/McpServer.fs:3115`) on the MCP port (37749 by default, `SAGEFS_MCP_PORT`) carries `apiVersion` and `version`; the VS Code client reads `apiVersion` from it (`sagefs-vscode/src/SageFsClient.fs:340`) and requires an exact match with `expectedApiVersion = 4` (`:619`). `GET /api/daemon-info` on the dashboard port replaced `daemon.json` (`SageFs/Dashboard.fs:4231-4232`). The two in-repo discovery modules are `sagefs-vscode/src/DaemonDiscovery.fs` and `sagefs.nvim/lua/sagefs/daemon_discovery.lua`.
+- Compatibility: `EndpointContracts.apiVersion = 4` (`SageFs.Core/EndpointContracts.fs:38`; the comment above it says what each bump changed). Neovim declares a range, `M.api_range = { min = 3, max = 4 }` with a `min_reason` and `max_reason` per bound (`sagefs.nvim/lua/sagefs/compat.lua:21-26`), and a `reads` list of optional wire fields each with a degradation spec that `spec/compat_spec.lua` walks. A new client should copy the range pattern, not the exact match: `scripts/sync-nvim-version.fsx -- --compat` refuses a release when the daemon's `apiVersion` is outside the plugin's range.
+- Routes: `EndpointContracts.all` (`:144`) is every route; `neovimContract` (`:158`, 19 entries) and `vscodeContract` (`:181`, 17 entries) are the two client contracts, and `EndpointContractTests.fs:162-235` checks each entry exists and is really mapped (`RouteScan`, `:104`). Request shapes live only in handlers: `POST /exec` (`McpServer.fs:2756`) reads `code`, optional `working_directory`, `file_path`, `eval_mode`, `block_start_line`, answers 200 with `success=false` for an eval that failed and a real error status when it never ran; `POST /api/sessions/create` (`:4089`) reads `workingDirectory` or `working_directory`, `projects`, `workflow`; `POST /api/cancel-eval` (`:2904`) reads the session id through `sessionIdFromJson`; `POST /api/completions` (`:4820`). Errors are `structuredErrorBody` with `errorDetails.case`.
+- Events: `GET /events` and `GET /events?sessionId=` (`docs/sse-events.md:9-31`); 24 `SseWriter` event types plus `session` (8 subtypes) and `state` (8 variants) (`:63`, `:173`, `:190`), 22 cases in `SageFs/SseEvent.fs`. Resume with `Last-Event-ID: <epoch>:<seq>` (`docs/sse-events.md:32-62`, read at `McpServer.fs:3438`); the daemon replays what it still holds and sends the snapshots either way; a resync is not an error. SSE readers in the tree: `sagefs-vscode/src/sse-helpers.js` and `sagefs.nvim/lua/sagefs/sse.lua`.
+- Agent panels: the stdio bridge `sagefs mcp` (`SageFs/McpStdioBridge.fs`) gives any MCP-speaking editor the tool catalogue (38,286 characters, `SageFs.Tests/RatchetBudgets.fs:462`). `sagefs call <tool> --flag value` (`SageFs/McpCallCommand.fs`, `docs/mcp-tools.md:195-250`) calls one tool from a shell with the same client code, JSON on stdout, exit 1 on a tool error, 2 on usage. It speaks MCP over HTTP, not `/exec`, so a shell client can already do `sagefs call send_fsharp_code --code "..."`.
+- The smallest client that proves the contract, no code in this repo: `curl -s localhost:37749/health | jq .apiVersion` (expect 4); `curl -s -X POST localhost:37749/exec -H 'content-type: application/json' -d '{"code":"1 + 1;;"}'` (expect `success: true`); `curl -N 'localhost:37749/events?sessionId=<id>'` and read the `id:` lines; disconnect, reconnect with `-H 'Last-Event-ID: <last id>'` and see the gap replayed. A Helix `:pipe-to` or an Emacs `make-process` around those three is a working loop.
+
+What is missing, and what the plan got wrong:
+
+- No request or response shapes are documented outside handlers. `docs/editor-protocol.md` does not exist.
+- The plan's `/exec` line (`McpServer.fs:2484`), `SageFsClient.fs:314` and `docs/configuration.md:47` are stale; the numbers above are current (`SAGEFS_EDITOR` is at `docs/configuration.md:146`).
+- `SageFs/DaemonClient.fs` already exists and is something else: the `/api/state` parser for the retained TUI (`parseStateEvent`), used by `Dashboard.fs` and three test files. The new module must take another name; this work order uses `EditorClient`.
+- The CLI has grown since the plan: `CliCommand` (`SageFs/Program.fs:125`) now has `Member`, `Cohort`, `Data`, `Call`, `CohortExport` beside `Stop`, `Status`, `Check`, `Sweep`, `Hygiene`, `Play`, `Mcp`, `Jupyter`. Nothing evaluates code over `/exec` from a shell or streams `/events`.
+- `JupyterDaemonBridge` (`SageFs/JupyterDaemonBridge.fs`: `PostJson` `:27`, `parseExecResponse` `:69`, `httpPostJson` `:117`) is the one place that decodes `/exec` structurally. `McpStdioBridge.fs` reads SSE inline (`:135`, `:161`). `McpCallCommand.clientFor` (`:56`) builds the credentialed `HttpClient`.
+- There is no `--integration-hosts` tier anywhere; the host tier is `Integration.hostList` run by `--integration-host` (`SageFs.Tests/Program.fs:299`).
+
+### 3. Steps
+
+1. Measure (one hour). `gh search issues --repo WillEhrendreich/SageFs "Rider"`, then `Zed`, `Helix`, `Emacs`; count distinct people and write the four numbers into "Measure first". Also time `GET /api/live-testing/entries` on a `SageFs.Tests` session (the rehydrate cost a client with no id pays).
+2. RED. `EndpointContractTests.fs`: a `testList "Thin editor contract"` shaped like the Neovim one (`:164-213`): exists in `all`, really mapped, expected count 9. Fails to compile until `thinEditorContract` exists. Commit red.
+3. GREEN. `EndpointContracts.thinEditorContract` (`GET /health`, `GET /api/sessions`, `POST /api/sessions/create`, `POST /exec`, `POST /api/cancel-eval`, `POST /api/completions`, `GET /events`, `GET /api/live-testing/file-annotations`, `GET /api/live-testing/status`), and the first draft of `docs/editor-protocol.md` with the request and reply fields read from the handlers named above, the compat rule and the resume rule. Trailer `Plugin: n/a adds a contract list, no endpoint changes`.
+4. RED, pure. `SageFs.Tests/SseLineReaderTests.fs`: an event split at every byte offset parses the same; comments and `retry:` are skipped; `id:` is carried. Then `SageFs/SseLineReader.fs` (pure reducer over chunks) and `McpStdioBridge.fs` rewired to it with no behaviour change. Coordinate with `jupyter-kernel-that-works` so the reader is extracted once.
+5. RED, pure. `SageFs.Tests/EditorClientTests.fs`: `SessionPick` cases (zero, one Ready, one warming, two unnamed gives `Several`) and `DaemonReach` from a health payload. Then `SageFs/EditorClient.fs` with `DaemonReach`, `SessionPick`, `EventPump`, using `JupyterDaemonBridge.PostJson` and `parseExecResponse`.
+6. Edge. `Eval of args`, `Events of args`, `Sessions of args` in `CliCommand`; `sagefs eval` reads code from stdin, exit 0 success, 1 eval failed, 2 never ran; `sagefs events` writes NDJSON and resumes by `Last-Event-ID`. Test 6 with a fake `PostJson`. Help text in `Program.fs`.
+7. Simulation `SageFs.Simulation/EventPumpSim.fs` with P1 to P4 and the two twins under Tests; registered in both fsproj files.
+8. `SageFs.Tests/EditorProtocolConformanceTests.fs` as `Integration.hostList`, daemon via `Harness.startDaemonWithArgs port workDir [ "--no-resume" ]` and `TestPorts.reservePair ()` as `JupyterKernelSocketTests.fs:139-144` does.
+9. Docs: the Helix and Emacs recipes in `docs/editor-protocol.md`, each run once by hand; `docs/agents.md` gets the agent-panel sentence (`sagefs mcp`, and the catalogue's size).
+10. DECISION, then a new plan file for the first client.
+
+DECISION: is a CLI (`sagefs eval`, `events`, `sessions`) a supported surface? Recommendation: yes; it is the conformance harness as well.
+DECISION: first real client, Rider or Emacs, after step 1's counts. Recommendation: Emacs unless Rider's count is clearly larger and a Kotlin repo is acceptable.
+DECISION: an `sagefs lsp` server. Recommendation: later, after the CLI shows what it cannot cover.
+
+### 4. How to check it
+
+- Inner loop: a session on `SageFs.Tests`; `send_fsharp_code` the `SessionPick` and reader cases before writing files.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Filtered: `... --summary --filter-test-list "Thin editor contract"`, `"EditorClient"`, `"SseLineReader"`.
+- Acceptance: unfiltered `--summary` (TRUST `Trusted`); `--integration-host --summary` for the conformance suite; `cd ~/Work/sagefs.nvim && busted` stays green because nothing on the wire changed.
+- By hand: the three `curl` lines above against the installed daemon, then `echo '1 + 1;;' | sagefs eval` once step 6 lands.
+
+### 5. Traps in this repo
+
+- `EndpointContracts.fs` is on the wire-surface list: every commit touching it carries a `Plugin:` trailer, and the plugin lands first when a route changes shape. Steps 2 and 3 change no route.
+- `EndpointContractTests` has a count test per contract and a "no duplicate endpoint" test; a new list is fine, a new route is not part of this item.
+- `sagefs call` output shapes and the new CLI shapes are governed by `apiVersion`; a change to them later is a bump.
+- Never match the daemon's sentences in the CLI: commit 09717cec fixed that in the Jupyter bridge. Branch on `errorDetails.case`.
+- SAGE-005: `sagefs eval --session <id> --file <path>` parses into `SessionId` and a file path type, never two strings in one function signature.
+- `SageFs.Json` profiles for every JSON the CLI reads or writes.
+- Timing: the conformance suite waits on the ready event and on a named frame, never a sleep; the drop cell closes the client socket and waits for the replayed `id:`.
+- `JsonCentralizationTests`, `TimeoutLiteralsTests`: no `JsonSerializerOptions`, no bare `TimeSpan` at a call site.
+- Commit `.fsproj` files whole. No new NuGet package: the SSE reader and the JSON-RPC-free CLI need none.
+- Linux only.
+
+### 6. Size and order
+
+Steps 2 and 3: one day. Steps 4 and 5: two days. Step 6: one day. Steps 7 and 8: two to three days. About a week and a half for one person. Step 1 runs first and in parallel with 2. Step 4 can run in parallel with 2 and 3. First commit: `test(editor-protocol): RED the thin editor contract endpoints exist and are mapped` touching `EndpointContractTests.fs` only.
+
+### 7. Not now
+
+- A plugin repo for Rider, Zed, Helix or Emacs: its own item after the DECISION.
+- An LSP server: after the CLI.
+- A per-client `apiVersion` range check in the daemon (the daemon does not know who connects): `compat.lua` and `expectedApiVersion` are the client's job and stay so.
 
 ## Resume here
 
@@ -24,22 +104,22 @@ Someone using Helix, Emacs, Zed or Rider can evaluate a block in a SageFs sessio
 
 Two first-class clients, both large. `sagefs-vscode/src` is 13,165 lines of Fable F# across about forty files; `sagefs.nvim/lua/sagefs` is 20,741 lines of Lua across 77 top-level files (counted with `wc -l`, specs and the `dashboard` subfolder not included). Each re-implements the same things independently:
 - daemon discovery (`sagefs-vscode/src/DaemonDiscovery.fs`, `lua/sagefs/daemon_discovery.lua`; both try the `daemon.json` port, then the configured port, then 37749);
-- a compatibility gate on `apiVersion` (VS Code requires an exact match, `sagefs-vscode/src/SageFsClient.fs:314` reads it from `/health`; Neovim declares `api_range` in `lua/sagefs/compat.lua:21`, currently 3 to 4);
+- a compatibility gate on `apiVersion` (VS Code requires an exact match, `expectedApiVersion = 4` at `sagefs-vscode/src/SageFsClient.fs:619`, read from `/health` at `:340`; Neovim declares `api_range` in `lua/sagefs/compat.lua:21`, currently 3 to 4);
 - SSE parsing (`sse-helpers.js`, `lua/sagefs/sse.lua`);
 - the eval-block rule (`sagefs-vscode/src/CodeBlocks.fs` and `lua/sagefs/cells.lua`: `;;` delimiters if the file has any, else blank-line blocks);
 - rendering of test status, coverage, bindings, hot reload.
 
-The contract between daemon and clients is a list of paths and nothing else. `SageFs.Core/EndpointContracts.fs` defines `neovimContract` (19 entries) and `vscodeContract`, plus `all`, and `SageFs.Tests/EndpointContractTests.fs` checks that every listed route exists and is really mapped (`RouteScan.mapped`). Request and response shapes live only in the handlers (`/exec` is `McpServer.fs:2484`: body `code`, optional `working_directory`, `file_path`, `eval_mode`, `block_start_line`; it answers HTTP 200 with `success=false` for an eval that fails, a real error status when it never ran, per `docs/progress.md:515`). The SSE events are documented in `docs/sse-events.md` (25 event types; `GET /events` and `GET /events?sessionId=` narrow the stream; `GET /diagnostics` is a separate SSE stream).
+The contract between daemon and clients is a list of paths and nothing else. `SageFs.Core/EndpointContracts.fs` defines `neovimContract` (19 entries) and `vscodeContract`, plus `all`, and `SageFs.Tests/EndpointContractTests.fs` checks that every listed route exists and is really mapped (`RouteScan.mapped`). Request and response shapes live only in the handlers (`/exec` is `McpServer.fs:2756` on 2026-11-11: body `code`, optional `working_directory`, `file_path`, `eval_mode`, `block_start_line`; it answers HTTP 200 with `success=false` for an eval that fails, a real error status when it never ran). The SSE events are documented in `docs/sse-events.md` (24 `SseWriter` event types plus `session` and `state`; `GET /events` and `GET /events?sessionId=` narrow the stream; `GET /diagnostics` is a separate SSE stream).
 
 What a thin client can already do with the existing wire, all verified as routes in `EndpointContracts.fs`: `GET /health` (status, `apiVersion`, `version`, session states), `GET /api/sessions`, `POST /api/sessions/create`, `POST /exec`, `POST /api/cancel-eval`, `POST /api/completions`, `GET /api/live-testing/status`, `GET /api/live-testing/file-annotations`, `POST /api/live-testing/run`, and the events `eval_started`, `eval_result`, `warmup_progress`, `test_summary`, `file_annotations`, `live_bindings`, `session`, `state`.
 
 Gaps in that picture.
 - No documented request and response shapes, so a third client author reads F# handlers.
 - The reconnect story was thinner than the code suggested when this plan was written: the replay buffer had no caller and the `/events` handler read no `Last-Event-ID` header, so a client rehydrated after a drop, as `sagefs.nvim`'s `batch_hydration.lua` does against `/api/live-testing/entries`. It is wired now. The daemon numbers every broadcast frame `<epoch>:<seq>`, replays what a reconnecting client missed, and sends the snapshots either way (`docs/sse-events.md`, "Resuming after a drop"). `sagefs.nvim` and the VS Code extension send the header, and a new client should too.
-- There is no command-line client. `Program.fs` has `stop`, `status`, `check`, `sweep`, `hygiene`, `play`, `mcp`, `--jupyter` (`CliCommand`, line 105 on). Nothing evaluates code or streams events from a shell.
+- There is no command-line client over `/exec` and `/events`. `Program.fs` has `stop`, `status`, `check`, `sweep`, `hygiene`, `play`, `mcp`, `member`, `cohort`, `data`, `call`, `cohort-export`, `--jupyter` (`CliCommand`, `Program.fs:125` on 2026-11-11). `sagefs call <tool>` (`SageFs/McpCallCommand.fs`) reaches any MCP tool from a shell, so `sagefs call send_fsharp_code --code "..."` evaluates code today; nothing streams events.
 - No LSP server of ours (`grep -i "language server"` over the docs and daemon code finds only `docs/live-testing-as-you-type.md`, which is about live testing).
 - The MCP stdio bridge (`sagefs mcp`, `SageFs/McpStdioBridge.fs`) already makes the tool catalogue available to any editor with an agent panel that speaks MCP. That is the zero-code path for agent-driven use. It carries the catalogue's roughly 28,000 tokens into that agent's context, which suits an agent and does not suit a human who wants "run this block".
-- `SAGEFS_EDITOR` already picks Rider or VS Code link schemes for clickable `file:line:column` (`docs/configuration.md:47`); that is the only Rider-specific thing in the tree.
+- `SAGEFS_EDITOR` already picks Rider or VS Code link schemes for clickable `file:line:column` (`docs/configuration.md:146`, `SageFs.Core/EditorLink.fs`); that is the only Rider-specific thing in the tree.
 
 I checked nothing about the four editors beyond our own repo. Everything below about their extension systems comes from memory and is marked "unverified"; step 3 verifies each against current documentation before any decision rests on it.
 
@@ -52,7 +132,7 @@ Rung 0, the contract as a document and a test.
 - `EndpointContracts.thinEditorContract` beside the other two, and a test list in `EndpointContractTests.fs` shaped like the existing ones (exist, really mapped). The list: `GET /health`, `GET /api/sessions`, `POST /api/sessions/create`, `POST /exec`, `POST /api/cancel-eval`, `POST /api/completions`, `GET /events`, `GET /api/live-testing/file-annotations`, `GET /api/live-testing/status`. This touches `EndpointContracts.fs`, which is on the wire-surface list, so the commit carries `Plugin: n/a adds a contract list, no endpoint changes`.
 - Because shapes are only in handlers, the conformance suite below checks the doc against the daemon.
 
-Rung 1, a reference client and a CLI built on it. Pure core in `SageFs/` (the daemon project, beside `JupyterDaemonBridge.fs`):
+Rung 1, a reference client and a CLI built on it. Pure core in `SageFs/` (the daemon project, beside `JupyterDaemonBridge.fs`). The module is `EditorClient`, because `SageFs/DaemonClient.fs` already exists and parses `/api/state` for the retained TUI (seen 2026-11-11):
 
 ```fsharp
 type DaemonReach =
