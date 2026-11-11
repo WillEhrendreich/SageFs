@@ -2,17 +2,75 @@
 
 Roadmap item: `project-check-with-overlays` (Next, Repl). Plan written 2026-11-07 against master 27163dfa.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898.
+
+What changed since the plan was written. `small-default-tool-list` is Built (`docs/roadmap.md:181`), so nothing blocks the tool registration any more. The registered count is 74, not 72 (`seat_conductor` and `profile` landed), and the budgets are `RatchetBudgets.toolList`: full catalog 38,286 characters, starter list 5,395 (`SageFs.Tests/RatchetBudgets.fs:462`). The patch file still says 72 to 73; apply it as 74 to 75. `SageFs/McpTools.fs` had uncommitted edits in the working tree today (`withEcho` to `withEchoResult` on the session tools); `list_references` at `:2544` still uses `withEcho`, so the patch applies as written, but coordinate the commit with that work.
+
+### 1. Outcome
+
+An agent calls `check_project` with a project path and zero or more overlays and gets the project's diagnostics without a build and without a session, in seconds, where today it runs `dotnet build` for minutes. Gate: `ToolSurfaceHonestyTests`, `McpWireProtocolTests`, `McpToolGateTests`, `ToolDescriptionTests` and `McpAffordanceHardeningTests` green with the new name in the default suite; `SageFs.Tests/CheckProjectMsBuildTests.fs:24` (`Integration.hostCaseTask`, `--integration-host`) extended to call the tool over MCP; and one `sagefs call check_project` from a shell returning `Clean` for `SageFs.Core/SageFs.Core.fsproj`. Measured, written here: the cold and warm cost on `SageFs.Tests.fsproj` on a quiet machine. Linux only; the design-time MSBuild run should be the same on Windows and is unmeasured there.
+
+### 2. Where the code is today
+
+- Pure: `SageFs.Core/Features/ProjectCheckCore.fs` (fsproj `:253`). Tests `SageFs.Tests/ProjectCheckTests.fs` (fsproj `:158`): lists "overlays", "compiler arguments", "what the MSBuild run said", "arguments kept between calls", "referenced projects".
+- Effect: `SageFs.Core/Features/CheckProject.fs:42` `runDotnet` (drains stderr, kills the tree on cancel), `:119` the arguments run under `Timeouts.projectArgumentsRun`, `:247` the reference build under `projectReferenceBuild`, `:325` the `CacheHolder<FSharpChecker>`, `:365` `GetProjectOptionsFromCommandLineArgs`. The entry the patch calls is `CheckProject.answer` `[not re-read today; grep "let answer"]`. Waits: `SageFs.Core/Timeouts.fs:674` 2 min, `:678` 10 min, `:682` 3 min.
+- Compiler cases: `SageFs.Tests/CheckProjectCompilerTests.fs:56` (six, default suite). Sim: `SageFs.Simulation/ProjectCheckSim.fs`, `SageFs.Tests/ProjectCheckSimTests.fs:28` (eight named scenarios and the property).
+- No tool: `grep check_project SageFs/McpTools.fs` is empty, and `docs/mcp-tools.md` has no row.
+- The seven places: `SageFs/McpTools.fs:2544` (`list_references`, the neighbour). `SageFs.Core/Affordances.fs:192` (gate), `:651` `ToolName.ListReferences`, `:743` `toToolName`, `:820` `all`. `SageFs.Core/Capability.fs:186` is the `SessionRead` list and `:441` the list of every session tool: add to neither; the `ReadsDirectory` tag and `ToolClass.CodeAnalysis` list are the targets `[grep them; not re-read]`. Docs: `docs/mcp-tools.md:128` ("74 tools"), `:351` (the `check_fsharp_code` row to sit beside), `:1257` ("Adding a tool", the seven places); `Readme.md:59,553`. Tables: `SageFs.Tests/ToolDescriptionTests.fs:59` `requiredParamsByTool`, `:245` the count case; `McpAffordanceHardeningTests.fs:238` expects 74.
+- `SageFs.Core/ToolList.fs:11` `starterTools` (nine). `check_project` is not in it and should stay out: the starter list is for a first session.
+- No tool in `McpTools.fs` takes a `CancellationToken` today (grep is empty), so the patch's claim that the SDK binds it is unproven.
+
+### 3. Steps
+
+1. (measure, no code) Twice, cold then warm, with `uptime` load under 2: `time dotnet msbuild SageFs.Tests/SageFs.Tests.fsproj -nodeReuse:false -t:ResolveReferences,FindReferenceAssembliesForReferences,BeforeBuild,BeforeCompile,CoreCompile -p:DesignTimeBuild=true -p:SkipCompilerExecution=true -p:ProvideCommandLineArgs=true -p:BuildProjectReferences=false -getTargetResult:CoreCompile`. Write both numbers under "Measure first". A cold run near `projectArgumentsRun` (2 min) is a question for Will before step 2.
+2. (edge, RED) `ToolDescriptionTests.fs` count 74 to 75 with a `// + check_project: ...` comment line, `McpAffordanceHardeningTests.fs:238` 74 to 75, `requiredParamsByTool` row `"check_project", set ["project"]`. Red: no such tool.
+3. (edge) Apply the patch's sections 1 to 5 (tool, gate, name, routing kind, class). Run `--ratchets`: if `toolList` goes red, the description pushed the catalog over 38,286; trim it (the patch says which sentences go first). Never raise the budget by hand.
+4. (edge, measure) Cancellation: start a daemon from the Release build on a free port, call the tool through `sagefs call`, send `notifications/cancelled`, watch the `dotnet msbuild` child exit. If the SDK does not bind the token, drop the parameter and say so in the description and in this plan.
+5. (docs) The patch's section 6, with 75 on every page `ToolSurfaceHonestyTests` reads.
+6. (test) Extend `CheckProjectMsBuildTests.fs` to call the tool through `McpClient.CallToolAsync` (as `EvalReachesRunningAppTests.fs:67` does) with one breaking overlay and assert the diagnostic names the project's own path and line.
+7. (finish) Landmark `(landmark "SageFs.Core/Features/CheckProject.fs" "answer")` in `scripts/roadmap/RoadmapItems.fs`, `dotnet fsi scripts/gen-roadmap.fsx`, this plan's Status to Done, delete the patch file. One commit with the trailer the patch gives.
+
+### 4. How to check it
+
+- REPL: a session on `SageFs.Tests`; `CheckProject.answer` can be evaluated against a fixture project with `send_fsharp_code` before the tool exists.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (tool list, file size, tool surface honesty).
+- Inner loop: `--summary --filter-test-list "check_project"` and `--filter-test-list "project check"`.
+- Acceptance: unfiltered `--summary` (the count tables and wire tests live there), then `--integration-host --summary`.
+
+### 5. Traps in this repo
+
+- `RatchetBudgets.toolList` only goes down. A 770-character description is about 2% of the catalog; measure, do not guess.
+- `McpTools.fs` and `docs/mcp-tools.md` are wire files: `Plugin:` trailer, plugin first (nothing to add to the plugin unless it gains a command).
+- `RetiredToolNameTests` refuses a retired name; `check_project` should be new `[not verified; the suite will say]`.
+- Commit the two test tables and `SageFs.Tests.fsproj` whole.
+- The three `Timeouts` entries have no environment override; adding one needs `docs/configuration.md` regenerated by `scripts/gen-configuration-doc.fsx`.
+- The design-time run writes `obj/<config>/<tfm>/*.AssemblyInfo.fs` and the `AssemblyAttributes.fs` when missing. A test that asserts "nothing written" allows those two.
+
+### 6. Size and order
+
+S to M: a day for steps 1 to 5, a day for step 6. Step 1 first. The first commit is step 2's RED.
+
+### 7. Not now
+
+- The transparent compiler's `FSharpProjectSnapshot` (in-memory overlays, no temp files): another backend; the overlay directory is documented.
+- A worker-side check: it needs a session, which the item is for avoiding.
+- FsiMcp's own figures for the comparison page: Will's go and a sandbox first.
+
+DECISIONS: the two under "Decisions for Will" below stand. Recommendation unchanged: the check runs in the daemon with one held checker, and a stale referenced project is built once with the reply saying so.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (the core, its simulation and the effect module are in; the tool registration waits for the tool-list work) |
+| Status | In progress (the core, its simulation and the effect module are in; the tool registration is unblocked since `small-default-tool-list` went Built, see the Work order) |
 | Size | M |
 | Branch and worktree | `cohort/p4-projectcheck` in `/home/will/scratch/cohort/p4-projectcheck` |
 | Last green commit | 8f82c052 (the effect module, the compiler cases and the MSBuild integration case). Before it: ee598f22 (the decisions), a0189416 (the simulation). |
-| Next action | Apply `docs/plans/project-check-with-overlays-tool-patch.txt` once `small-default-tool-list` has landed (it holds the seven declarations in the order `docs/mcp-tools.md` gives, the description, and the commit trailer). Then run the real `dotnet msbuild` path once against `SageFs.Tests.fsproj` on a quiet machine for the "Measure first" numbers, and add an `--integration-host` journey that starts from a restored fixture project, since the in-process cases build their arguments by hand. Then the roadmap landmark and Status `Done`. |
+| Next action | Run the Work order's step 1 measurement, then apply `docs/plans/project-check-with-overlays-tool-patch.txt` with the counts read as 74 to 75 (`small-default-tool-list` has landed; it holds the seven declarations in the order `docs/mcp-tools.md` gives, the description, and the commit trailer). Then run the real `dotnet msbuild` path once against `SageFs.Tests.fsproj` on a quiet machine for the "Measure first" numbers, and add an `--integration-host` journey that starts from a restored fixture project, since the in-process cases build their arguments by hand. Then the roadmap landmark and Status `Done`. |
 | Decisions made | 2026-11-07, the packet agent: overlays are written as stable files under a per-project directory in the temp folder and the compiler is given those paths, instead of the transparent compiler's in-memory snapshot (see "Overlays"). Arguments come from a child `dotnet msbuild` process, never from MSBuild loaded into the daemon. The held checker lives in the daemon and reuses the resident-bytes ceiling and idle retention that `list_references` uses. The three new waits in `Timeouts` (`projectArgumentsRun`, `projectReferenceBuild`, `projectCheck`) take no environment override yet: a variable needs a line in `docs/configuration.md`, which `scripts/gen-configuration-doc.fsx` writes with a link to a landed commit. |
 | Surprises | The design-time MSBuild run writes `obj/<config>/<tfm>/<Project>.AssemblyInfo.fs` and the `AssemblyAttributes.fs` file when they are missing. It builds nothing else, and the plan keeps those two files as the cost of the run. A module named `ProjectCheck` cannot exist beside `SymbolReferences.ProjectCheck`, the union the `list_references` path already has (FS0250), so the effect module is `CheckProject`. `ReferencePathWithRefAssemblies` carries `MSBuildSourceProjectFile` on every project reference, direct or not, so one run gives the project-to-output pairs and `-getItem:ProjectReference` is not needed. A project built from outside after the one above it leaves the one above behind its reference, so a project's inputs include the outputs of what it references (`Staleness.inputsOf`). |
 
