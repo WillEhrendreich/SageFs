@@ -4,7 +4,7 @@
 
 ### You save. The affected tests re-run. The running app serves the new code.
 
-Your F# project, loaded once and kept running. Ask it whether something compiles and it answers in about 20 milliseconds, on a 300-line sample or an 86,000-line engine. Tests re-run on edits you haven't saved. A save reaches the app that's already running, with its state. VS Code, Neovim, a browser dashboard and your AI agent all work in that one live session. Free, MIT.
+Your F# project, loaded once and kept running. Ask it whether a snippet type-checks against your loaded project and it answers in about 20 milliseconds, on a 300-line sample or an 86,000-line engine. (Checking the whole project without a build is not a tool yet.) Tests re-run on edits you haven't saved. A save reaches the app that's already running, with its state. VS Code, Neovim, a browser dashboard and your AI agent all work in that one live session. Free, MIT.
 
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10 and 11](https://img.shields.io/badge/.NET-10%20%7C%2011-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
@@ -22,7 +22,7 @@ The idea is small. Your project is loaded into one live F# session and stays the
 
 | You want to know | Rebuilding | Asking the live session |
 |:---|:---|:---|
-| Does this still compile? | `dotnet build`: 2 s on a 300-line sample, 49 to 52 s on projects of 22,000 and 86,000 lines | 21 to 25 ms on all three. The check does not care how big the project is ([the numbers](docs/repl-loop-benchmarks.md)) |
+| Does this snippet type-check against my project? | `dotnet build` of the whole project: 2 s on a 300-line sample, 49 to 52 s on projects of 22,000 and 86,000 lines | `check_fsharp_code` on one snippet in a warm session: 21 to 25 ms on all three, because the work is the snippet and not the project. It is a smaller question than a build answers, and a snippet that passes here can still fail `dotnet build`. A whole-project check without a build is not a tool yet ([the numbers](docs/repl-loop-benchmarks.md), [what is missing](docs/roadmap.md)) |
 | Did I break a test? | Build, then run the tests | The tests the edit can reach re-run on the edit, saved or not: 0.7 s from keystroke to verdict on the 11-test sample I measured ([how live testing works](docs/how-live-testing-works.md)) |
 | Does my running app do the new thing? | Stop, build, start, click back to where you were | Save. The changed methods are re-pointed in the process that's already running and its state stays. A save was served in 1.8 to 2.6 s on the test fixture, against 6 to 8.5 s for the restart it replaced ([how hot reload works](docs/how-hot-reload-works.md)) |
 
