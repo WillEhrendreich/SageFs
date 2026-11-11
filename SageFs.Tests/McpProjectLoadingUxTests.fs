@@ -129,6 +129,12 @@ module FormatCreateSessionReplyTests =
         let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] None
         reply |> Expect.stringContains "should direct the agent to confirm via get_session_status" "get_session_status"
 
+      testCase "WHY — the reply promises no fixed warmup time, and points at progress and the wait" <| fun _ ->
+        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] None
+        reply.Contains "15-30" |> Expect.isFalse "a big repo warms for minutes, so a fixed estimate misleads"
+        reply |> Expect.stringContains "progress is where the evidence lives" "progress"
+        reply |> Expect.stringContains "the wait is the way to ask" "wait_seconds=60"
+
       testCase "WHY — a detection hint, when present, is appended rather than dropped" <| fun _ ->
         let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] (Some "💡 some hint")
         reply |> Expect.stringContains "should include the hint" "💡 some hint"

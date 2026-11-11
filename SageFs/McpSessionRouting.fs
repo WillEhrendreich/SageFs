@@ -269,7 +269,7 @@ module McpSessionRouting =
   let formatSessionResolution = function
     | Routable _ -> ""
     | WarmingUp (sid, status) ->
-      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
+      sprintf "Session '%s' is still warming up (%s). Warmup takes seconds on a small project and minutes on a large repo, and get_session_status reports its progress. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | Unroutable (sid, status) ->
       sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_session_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | FaultedSession (sid, cause) ->

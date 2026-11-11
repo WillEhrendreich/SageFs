@@ -109,5 +109,5 @@ module CreateSessionUx =
     (detectionHint: string option) : string =
     let requestedLine = sprintf "Requested target: %s" (SessionProjectTarget.describe targets)
     let hintLine = detectionHint |> Option.map (sprintf "\n\n%s") |> Option.defaultValue ""
-    sprintf "%s\n%s\nSession is warming up (typically 15-30s). Call get_session_status with wait_seconds=60 to wait until it reports State='Ready' (no sleeping or polling), then read loadedProjects to confirm what actually loaded.%s"
+    sprintf "%s\n%s\nSession is warming up: seconds on a small project, minutes on a large repo, and get_session_status reports its progress. Call get_session_status with wait_seconds=60 to wait until it reports State='Ready' (no sleeping or polling), then read loadedProjects to confirm what actually loaded.%s"
       sid requestedLine hintLine

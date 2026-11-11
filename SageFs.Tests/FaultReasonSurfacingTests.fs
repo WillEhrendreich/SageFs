@@ -62,6 +62,12 @@ let tests =
       FaultCause.ofStatus (SessionLifecycleStatus.Faulted (FaultReason.Reported "  "))
       |> Expect.equal "whitespace isn't a reason" FaultCause.NoReasonRecorded
 
+    testCase "WHY: a warming session's text promises no fixed duration, and points at progress and the wait" <| fun _ ->
+      let text = formatSessionResolution (SessionResolution.WarmingUp ("a0a0a0a0", SessionLifecycleStatus.Stopped))
+      text.Contains "15-30" |> Expect.isFalse "a big repo warms for minutes, so a fixed estimate misleads"
+      text |> Expect.stringContains "progress is where the evidence lives" "progress"
+      text |> Expect.stringContains "the wait is the way to ask" "wait_seconds=60"
+
     testProperty "PROPERTY: any non-blank recorded reason appears verbatim in the faulted message" <|
       fun (NonWhiteSpaceString reason) ->
         let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.Faulted (FaultReason.Reported reason)))) false
