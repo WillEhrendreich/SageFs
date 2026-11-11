@@ -2,6 +2,64 @@
 
 Roadmap item: `live-bindings-watch-view` (Next, Dashboard). Plan written 2026-11-04 against master `7065203b`.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Steps 1 to 11 are built and proven in a real browser. This order is for what is left: step 12 (spies) and the chip's buffer-ahead form. One correction to the roadmap text (`docs/roadmap.md:35`, generated from `scripts/roadmap/RoadmapItems.fs`): it says following a call into the function that builds a value is "a pure resolver and a test that do not exist yet". They exist: `SageFs.Core/Features/Tweak/CallFollow.fs` (fsproj `:638`), used by `BindingTweakRows.fs` and `SageFs/LiveBindingsTweakService.fs`, with eleven cases in `SageFs.Tests/CallResultTests.fs` (fsproj `:619`). What step 6 left open is in Resume here and is not a defect.
+
+### 1. Outcome
+
+Spies: a Watch expression that runs code, marked as a spy, is re-evaluated by the daemon each time the test loop settles (green or red), and its row shows the previous value beside the new one, so `normalize "  Foo "` stays on screen while you edit `normalize`. Buffer-ahead chip: when the live buffer is ahead of the content the last evaluated run used, the bar's chip reads `as of the last eval, buffer ahead` instead of `current`.
+
+Gate: a Playwright case in `--integration-lt` beside `SageFs.Tests/LiveTestingBrowserTests.fs:148` ("the bindings pane follows the loop"): add a spy, break a test on disk, after the red settle the row shows the old and the new value; post a changed buffer without saving and the chip reads buffer ahead. Pure cases in the default suite, a browser case against the real shell in `--integration-browser`. Linux, headless Chromium.
+
+### 2. Where the code is today
+
+- The settle event: `SageFs.Core/Features/Tweak/SinceGreen.fs:20` `SettleEvent = GreenSettled | RedSettled | NotSettled`, `:29` `settleEvent generation activity`, `:67` `settle`. The daemon hook: `SageFs/LiveBindingsSinceGreen.fs:47` `observeModel` runs on every model change for every session with a cycle, keyed by `TestState.LastGeneration`; installed at `SageFs/DaemonMode.fs:3989` (`sinceGreenHook`). It acts on a green settle only (`observe`, `:28-33`). This is where a spy's trigger belongs.
+- The chip: `SageFs.Core/Features/Tweak/LoopFreshness.fs:10` `Freshness` (Updating, Current, HeldByErrors, HeldByRebuild), `:32` `ofActivity`, `:76` `chipOf`; tests `SageFs.Tests/LoopFreshnessTests.fs`, browser `LiveBindingsFreshnessBrowserTests.fs` (fsproj `:301`).
+- Buffer-ahead facts: `SageFs.Core/Features/LiveTestingCycle.fs:645` `LatestAnalysisIdentity: AnalysisIdentity option`, `:662` `RunBasis: RunBasis`; `BuildConfirmation.fs:48` `RunBasis = Compiled | Evaluated of content: AnalysisIdentity * tests | ConfirmingBuild`. "Buffer ahead" is `RunBasis = Evaluated (content, _)` and `LatestAnalysisIdentity <> Some content`. `LiveTestActivity.fs:37` has no case for it, so `LoopFreshness.ofActivity` cannot say it today.
+- Watch rows: `SageFs.Core/WatchExpression.fs:19` (smart constructor; `parse` `:63`, `reach` `:91` answers `NamesOnly | RunsCode`); `SageFs.Core/Features/Tweak/WatchRows.fs:12` `Reading = ReadFromWalk | HeldUntilClicked | RunsOnItsOwn`, `:22` `decide mode reach`, `:78` `answer mode walk lastRun expression`. `SageFs/LiveBindingsWatch.fs:32` `runs` (a `PageChoices<RunOutcome option>` of 512), `:36` `recordRun`, `:39` `lastRun`, `:46` `rowsFor`. The Run door: `SageFs/LiveBindingsWatchRoute.fs:79` `runOnList` evaluates `"<expr>;;"` through `dashboardActions.EvalCode`, wired at `DaemonMode.fs:5292-5294`. The list is the setting `bindings.watch.expressions` (`SageFs.Core/WatchSettings.fs:10`).
+- `Reading.RunsOnItsOwn` exists for Everything mode, and nothing runs it on its own: that is the spy's hole.
+- Tabs: `WatchTabs.fs:12` `lists` over the five `WatchTab`s. Test registrations: fsproj `:624-629` (`WatchTabTests`, `WatchExpressionTests`, `LoopFreshnessTests`, `SinceGreenTests`, `SinceGreenRecorderTests`).
+
+### 3. Steps
+
+1. (pure, RED) `SageFs.Tests/SpyTests.fs` (new; `<Compile Include="SpyTests.fs" />` after `SinceGreenRecorderTests.fs`, fsproj `:629`) for a new `SageFs.Core/Features/Tweak/Spies.fs` (Core fsproj after `WatchRows.fs`): a `Spy = { Expression: WatchExpression; Previous: RunOutcome option; Current: RunOutcome option; SettledAt: int64 }` and `Spies.due (event: SettleEvent) (spies: Spy list) : WatchExpression list`: `GreenSettled g` or `RedSettled g` with `g` newer than `SettledAt` makes a spy due, `NotSettled` makes none, the same generation twice makes none. Then `Spies.record spy outcome generation` moves Current to Previous. Pure, no eval here.
+2. (pure) `WatchRows.Answer` gains `Spied of previous: string option * current: string`; `LiveBindingsWatch.rowNode` draws the previous dimmed with `was ...`, as Since green does. RED in `SpyTests.fs` for `answer` with a spy outcome.
+3. (edge) The trigger: a `SageFs/LiveBindingsSpies.fs` with `observeModel` installed next to `DaemonMode.fs:3989`, reading `SinceGreen.settleEvent` per session, asking `Spies.due`, running each due expression through `dashboardActions.EvalCode` off the Elm thread (`Started.andForget`), recording with the spy store, then pushing the pane. The store is per session in the daemon, like `LiveBindingsSinceGreen.Recorder`, never `PageChoices`. A spy is a pinned Watch expression (one gesture, the pin already exists) unless Will wants a separate mark (decision below).
+4. (pure, RED) `LoopFreshnessTests.fs`: `BufferStanding = AtLastEval | Ahead | Unknown` with `BufferStanding.ofCycle (cycle: LiveTestCycleState)` from the two fields above; `Freshness.BufferAhead`; `LoopFreshness.chip (activity) (buffer)` maps every pair to one word, detail and tone, exhaustively; `Settled` with `Ahead` reads `as of the last eval, buffer ahead`, tone Moving.
+5. (edge) The dashboard passes `BufferStanding` where it builds the chip today (grep `LoopFreshness.chipOf` in `SageFs/`), and `LiveBindingsFreshnessBrowserTests.fs` gains the chip with its tone and 4.5:1 text.
+6. (test) The `--integration-lt` case beside `LiveTestingBrowserTests.fs:148`: `POST /dashboard/watch/add` a spy, break a test on disk, wait for the red settle frame, read the row's previous and current; then `POST /api/sessions/{sid}/buffer-changed` with changed content and read the chip. Every wait is a frame (`LtStream.expectFrame`).
+7. (docs) Resume here; `docs/dashboard-ux-redesign.md` if it describes the pane `[not verified]`. The landmark in `RoadmapItems.fs` and Status Done at the end.
+
+### 4. How to check it
+
+- REPL: a session on `SageFs.Tests`; `SinceGreen.settleEvent` and `Spies.due` evaluate directly before anything is written.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (`DashboardTypeScaleTests`, `DashboardGlyphTests`, file sizes).
+- Inner loop: `--summary --filter-test-list "spy"`, `--filter-test-list "LoopFreshness"`; browser: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-browser --summary --filter-test-list "freshness"`.
+- Acceptance: `--integration-lt --summary` (the whole tier, `Trusted`) and `--integration-browser --summary`, both unfiltered.
+
+### 5. Traps in this repo
+
+- A spy runs the person's code in their session on every settle. In Safe mode `WatchRows.decide` must still answer `HeldUntilClicked`; spies run in Everything mode only, and the row says so in words.
+- The hook runs on the Elm loop for every model change: decide on that thread, run the eval off it, never block it.
+- Theme tokens only: the previous value in `--fg-dim` (4.5:1, `DashboardAccessibilityTests`), red for failure only, state as a word beside a dot.
+- Relative units only (`DashboardTypeScaleTests`); glyphs from the closed `Glyph` type (`DashboardGlyphTests`).
+- `PageChoices` is a per-page cache that may be absent; a spy's history is session truth and lives in the daemon.
+- `LiveBindingsDock.fs` and `DaemonMode.fs` sit at their `fileSize` budgets: new code in new files.
+- No wire change unless the SSE payload gains a field; then `Plugin:`, plugin first.
+
+### 6. Size and order
+
+M: steps 1 to 3 two days, 4 to 5 one day, 6 one day. Steps 1 and 4 touch different files and can run in parallel. First commit: step 1's RED.
+
+### 7. Not now
+
+- Failure context (failing tests and `explain_test_failure` text beside the bindings): waits on the two weeks of use the plan asks for.
+- The text form of a per-row view (`value.hex()`).
+- A team-shared layout file.
+
+DECISIONS: is a spy the same as a pinned Watch expression (recommendation: yes, no new setting, one gesture), or its own mark? In Safe mode, refuse spies or ask once (recommendation: refuse, as held getters are)?
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
