@@ -338,7 +338,7 @@ let fileSize : (string * int) list =
     // (until then a file not listed here was unbounded, which made "a file not in a budget table has a budget of zero"
     // false for this table). A budget above a file's real count fails, so `--ratchets --tighten` lowers these as the
     // files shrink; a file that grows fails. Never raise one.
-    "SageFs/DaemonMode.fs", 5525
+    "SageFs/DaemonMode.fs", 5524
     "SageFs/McpServer.fs", 5056
     "SageFs/DashboardFragments.fs", 4454
     "SageFs/Dashboard.fs", 4259
@@ -431,9 +431,9 @@ let ignoredPerTier : (string * int) list =
 let analyzerFindings : (string * int) list =
   [ "SageFs.Core/SAGE-003", 1
     "SageFs.Core/SAGE-004", 64
-    "SageFs.Core/SAGE-005", 179
+    "SageFs.Core/SAGE-005", 178
     "SageFs.Core/SAGE-006", 4
-    "SageFs.Core/SAGE-007", 137
+    "SageFs.Core/SAGE-007", 133
     "SageFs.Core/SAGE-009", 32
     "SageFs.Host/SAGE-004", 2
     "SageFs.Host/SAGE-005", 2
@@ -441,7 +441,7 @@ let analyzerFindings : (string * int) list =
     "SageFs.Host/SAGE-009", 13
     "SageFs/SAGE-001", 7
     "SageFs/SAGE-003", 13
-    "SageFs/SAGE-004", 40
+    "SageFs/SAGE-004", 37
     "SageFs/SAGE-005", 211
     "SageFs/SAGE-006", 3
     "SageFs/SAGE-007", 100
