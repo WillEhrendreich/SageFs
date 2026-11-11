@@ -346,13 +346,13 @@
           "type": "number",
           "default": 37749,
           "scope": "machine",
-          "description": "Port for the SageFs MCP server."
+          "description": "Port the extension uses to reach the SageFs daemon, and the port a daemon it starts listens on. A change takes effect at once, without reloading the window."
         },
         "sagefs.dashboardPort": {
           "type": "number",
           "default": 37750,
           "scope": "machine",
-          "description": "Legacy fallback dashboard port. SageFs normally discovers the daemon and derives the dashboard port from the MCP port."
+          "description": "Port the Open Dashboard command uses when the running daemon cannot be asked for its own. Usually leave it alone: the extension finds the dashboard from the daemon. A change takes effect at once."
         },
         "sagefs.autoStart": {
           "type": "boolean",
@@ -460,6 +460,10 @@
     },
     "menus": {
       "commandPalette": [
+        {
+          "command": "sagefs.start",
+          "when": "!sagefs:daemonRunning"
+        },
         {
           "command": "sagefs.eval",
           "when": "editorLangId == fsharp"
@@ -861,7 +865,7 @@
           {
             "id": "sagefs.startDaemon",
             "title": "Start the SageFs Daemon",
-            "description": "Click the SageFs icon in the status bar or run **SageFs: Start Daemon** from the command palette.\n\n[Start SageFs](command:sagefs.start)",
+            "description": "Click the SageFs item in the status bar and pick **Start SageFs**, or run **SageFs: Start Daemon** from the command palette.\n\n[Start SageFs](command:sagefs.start)",
             "media": {
               "markdown": "walkthrough/start-daemon.md"
             },

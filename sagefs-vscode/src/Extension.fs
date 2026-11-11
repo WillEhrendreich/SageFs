@@ -1103,7 +1103,6 @@ let rec startDaemon () =
         do! offerProject "No .fsproj or .sln found. Open an F# project first."
       | Some proj ->
         let out = getOutput ()
-        out.show true
         out.appendLine (sprintf "Starting SageFs daemon with %s on mcpPort=%d..." proj c.mcpPort)
         daemonStderr <- ""
         let workDir = getWorkingDirectory () |> Option.defaultValue "."

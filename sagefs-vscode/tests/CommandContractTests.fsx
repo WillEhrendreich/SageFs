@@ -313,6 +313,19 @@ let tests =
         paletteWhen command
         |> Expect.equal (sprintf "%s gate" command) (Some "editorLangId == fsharp")
 
+    // Start Daemon with the daemon already running did nothing and said nothing (roast-5 commands section).
+    testCase "WHY - Start Daemon is hidden from the palette while the daemon runs, because it can only do nothing then" <| fun _ ->
+      let entry =
+        contributes
+        |> tryProp "menus"
+        |> Option.bind (tryProp "commandPalette")
+        |> Option.bind (fun p ->
+          p.EnumerateArray()
+          |> Seq.tryFind (fun e -> (e |> tryProp "command" |> Option.map (fun c -> c.GetString())) = Some "sagefs.start"))
+        |> Option.bind (tryProp "when")
+        |> Option.map (fun w -> w.GetString())
+      entry |> Expect.equal "gated on the daemon being down" (Some "!sagefs:daemonRunning")
+
     // A `when` naming a key nothing sets hides the command forever, silently.
     testCase "WHY - every sagefs: context key a when clause names is set by the extension" <| fun _ ->
       let rec whenClauses (el: JsonElement) : string list =

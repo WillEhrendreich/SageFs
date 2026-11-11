@@ -39,6 +39,18 @@ let tests =
     testCase "WHY - Retry restarts only when nothing answers" <| fun _ ->
       retryStep DaemonProbe.Silent
       |> Expect.equal "restart" RetryStep.RestartDaemon
+
+    // WHY — roast-5 first-run finding: `out.show true` ran on every start, so auto-start put the Output
+    // panel over the editor on every window open. The start has a status bar spinner, and each failure
+    // has a dialog with a Show Output button.
+    testCase "WHY - starting the daemon does not open the Output panel, because every failure has a Show Output button" <| fun _ ->
+      let source = System.IO.File.ReadAllText(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "src", "Extension.fs"))
+      let startOfStart = source.IndexOf "let rec startDaemon ()"
+      let spawnLine = source.IndexOf("Starting SageFs daemon with", startOfStart)
+      Expect.isGreaterThan "markers found" (startOfStart, -1)
+      Expect.isGreaterThan "spawn line found" (spawnLine, startOfStart)
+      let beforeSpawn = source.Substring(startOfStart, spawnLine - startOfStart)
+      Expect.isFalse "no out.show before the spawn" (beforeSpawn.Contains "out.show")
   ]
 
 let argv = System.Environment.GetCommandLineArgs() |> Array.skipWhile (fun a -> not (a.EndsWith ".fsx")) |> Array.skip 1
