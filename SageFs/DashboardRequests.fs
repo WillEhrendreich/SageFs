@@ -1,10 +1,20 @@
-/// What the dashboard's page-level handlers decide before they touch a session: why an Evaluate click cannot run. Pure values and
-/// sentences, so a test reads them and `Dashboard.fs` (which is over its file-size budget) does not have to grow to hold them.
+/// What the dashboard's page-level handlers decide before they touch a session: why an Evaluate click cannot run, what the
+/// landing page says when it falls back, and what the HTML shell is drawn from. Pure values and sentences, so a test reads them
+/// and `Dashboard.fs` (which is over its file-size budget) does not have to grow to hold them.
 module SageFs.Server.DashboardRequests
 
 open System
 open Falco.Markup
 open SageFs
+
+/// What the HTML shell is drawn from. `ShellNotice` sits outside #main, so the stream's morph of #main cannot wipe it.
+type ShellInputs =
+  { ShellVersion: string
+    ShellClientId: string
+    ShellInitialSessionId: string
+    ShellDefaultWorkingDir: string
+    ShellContent: XmlNode
+    ShellNotice: XmlNode }
 
 /// What the Evaluate click carried: the code box and the session the page believes it is viewing.
 type EvalSignals = { Code: string; ViewingSessionId: string }
@@ -45,3 +55,11 @@ module EvalRequest =
           match trimmed.EndsWith(";;") with
           | true -> Result.Ok(sessionId, signals.Code)
           | false -> Result.Ok(sessionId, sprintf "%s;;" trimmed)
+
+/// What the landing page says when it fell back to the session picker because reading the session failed.
+module LandingFailure =
+  /// The sentence: what failed, what the page shows instead, and the one thing to do. The full error is in the daemon log.
+  let sentence (reason: string) : string =
+    sprintf
+      "The dashboard could not read the running session (%s), so this page opened on the session picker. Reload the page to try again; the daemon log has the full error."
+      reason

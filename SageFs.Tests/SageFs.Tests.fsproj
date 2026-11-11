@@ -1013,6 +1013,7 @@
         <Compile Include="EvalWriteBackTests.fs" />
         <!-- Before the browser runner, which lists the journeys this file adds. -->
         <Compile Include="DashboardPanelVisibilityTests.fs" />
+        <Compile Include="DashboardLandingFailureTests.fs" />
         <Compile Include="DashboardNoSessionLinesTests.fs" />
         <Compile Include="DashboardControlNamesTests.fs" />
         <Compile Include="DashboardPanelContextBrowserTests.fs" />

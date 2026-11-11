@@ -354,7 +354,9 @@ let keyboardHandlerScript () =
 /// server-side default for the signal (first available session, or empty for
 /// the picker). There is NO session query parameter anywhere — the dashboard
 /// is driven entirely by the `viewingSessionId` signal synced with the backend.
-let renderShell (version: string) (clientId: string) (initialSessionId: string) (defaultWorkingDir: string) (initialContent: XmlNode) =
+let renderShellOf (shell: ShellInputs) =
+  let version, clientId, initialSessionId, defaultWorkingDir, initialContent, notice =
+    shell.ShellVersion, shell.ShellClientId, shell.ShellInitialSessionId, shell.ShellDefaultWorkingDir, shell.ShellContent, shell.ShellNotice
   Elem.html [ Attr.lang "en" ] [
     Elem.head [] [
       yield! pageHeadMetas
@@ -395,6 +397,9 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       // The dock's own signals (filter, pins, the pane pin), declared once out here so no morph can reset them.
       Elem.div LiveBindingsDock.DockSignals.initial []
       Elem.div [ Attr.id DomIds.Main ] [ initialContent ]
+      // A notice for the first paint (`renderLanding` says why it fell back). Out here beside #main, so the stream's morph of
+      // #main does not wipe it and the person can read it and dismiss it.
+      notice
       // Polite announcement of unseen evals. Out here in the shell rather than
       // next to the pill, because a morph rewrites text inside #main and a
       // live region would re-announce on every push.
@@ -405,6 +410,16 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       keyboardHandlerScript ()
     ]
   ]
+
+/// The shell with no notice.
+let renderShell (version: string) (clientId: string) (initialSessionId: string) (defaultWorkingDir: string) (initialContent: XmlNode) =
+  renderShellOf
+    { ShellVersion = version
+      ShellClientId = clientId
+      ShellInitialSessionId = initialSessionId
+      ShellDefaultWorkingDir = defaultWorkingDir
+      ShellContent = initialContent
+      ShellNotice = Text.raw "" }
 
 /// Every session the sidebar lists, in registry order, as typed cards (never
 /// re-parsed from the TUI's text) with the per-session enrichments each card
@@ -3776,12 +3791,27 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
     // so the user can resume/create a session). The stream's no-session push
     // morphs the same state, so this page must contain #session-picker or
     // Datastar fails it with PatchElementsNoTargetsFound.
-    let noSessionPage () =
+    //
+    // `notice` is empty for a page that simply has no session and says why for one that fell back: the session list read or
+    // the snapshot threw, so the page opened on the picker beside a sidebar that may list the very session it failed to show.
+    // Every state of this page applies the cohort view the stream applies (`applyCohortViewing`, live, since a new page is
+    // never scrubbed), so the first paint and the first push agree on the cohort panel.
+    let noSessionPage (notice: XmlNode) =
       task {
         let! snapRaw = buildNoSessionSnapshot q infra
         let facts = panelFactsFor q infra None clientId
-        let snap = PanelVisibility.apply facts snapRaw |> DashboardNewSession.apply clientId
-        return renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContentIn (paneLayoutViewFor q None facts) snap)
+        let snap =
+          applyCohortViewing infra None snapRaw
+          |> PanelVisibility.apply facts
+          |> DashboardNewSession.apply clientId
+        return
+          renderShellOf
+            { ShellVersion = infra.Version
+              ShellClientId = clientId
+              ShellInitialSessionId = ""
+              ShellDefaultWorkingDir = resolveDefaultWorkingDir ()
+              ShellContent = renderMainContentIn (paneLayoutViewFor q None facts) snap
+              ShellNotice = notice }
       }
     try
       let! sessions = q.GetAllSessions ()
@@ -3801,12 +3831,16 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
               Look = PageState.PageLook.onAll }
         let snapRaw, resolvedId = built.Snapshot, built.SessionId
         let facts = panelFactsFor q infra (Some resolvedId) clientId
-        let snap = PanelVisibility.apply facts snapRaw |> DashboardNewSession.apply clientId
+        let snap =
+          applyCohortViewing infra None snapRaw
+          |> PanelVisibility.apply facts
+          |> DashboardNewSession.apply clientId
         return renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContentIn (paneLayoutViewFor q (Some resolvedId) facts) snap)
       | None ->
-        return! noSessionPage ()
-    with _ ->
-      return! noSessionPage ()
+        return! noSessionPage (Text.raw "")
+    with ex ->
+      Log.warn "[dashboard] the landing page could not read the session and fell back to the picker: %s" ex.Message
+      return! noSessionPage (ActionResult.render (ActionOutcome.Failure(LandingFailure.sentence ex.Message)))
   }
 
 let createEndpoints
