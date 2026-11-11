@@ -47,12 +47,22 @@ let private toSymbolReference (symbol: WireSymbolRef) : LiveTesting.SymbolRefere
     FilePath = symbol.FilePath
     Line = symbol.Line }
 
+/// Every case of this FCS's `FSharpGlyph`, by name, already mapped through the exhaustive `ofGlyph`. Built once, on first
+/// use: scanning the union cases and calling `MakeUnion` for each completion item cost about 120 microseconds an item,
+/// 62 ms for a list of 500 on every keystroke.
+let completionKindsByGlyphName : Lazy<Map<string, AutoCompletion.CompletionKind>> =
+  lazy
+    (FSharpType.GetUnionCases typeof<FSharpGlyph>
+     |> Array.map (fun case ->
+       case.Name, AutoCompletion.CompletionKind.ofGlyph (FSharpValue.MakeUnion(case, [||]) :?> FSharpGlyph))
+     |> Map.ofArray)
+
 /// Map FCS's glyph name (sent by the host, taken from ITS FSharpGlyph type) back to SageFs's CompletionKind through
 /// the existing exhaustive `ofGlyph`. A glyph this SageFs's FCS does not know (a newer SDK's) degrades to Type.
-let private kindOfGlyph (name: string) : AutoCompletion.CompletionKind =
-  match FSharpType.GetUnionCases typeof<FSharpGlyph> |> Array.tryFind (fun case -> case.Name = name) with
-  | Some case -> AutoCompletion.CompletionKind.ofGlyph (FSharpValue.MakeUnion(case, [||]) :?> FSharpGlyph)
-  | None -> AutoCompletion.CompletionKind.Type
+let kindOfGlyph (name: string) : AutoCompletion.CompletionKind =
+  completionKindsByGlyphName.Value
+  |> Map.tryFind name
+  |> Option.defaultValue AutoCompletion.CompletionKind.Type
 
 /// The one sync-over-async seam of this file. `IFsiSession` is a synchronous port (an in-process FSI is), and its
 /// callers run on the session's dedicated eval/actor threads, so a remote call blocks one of those and never a
