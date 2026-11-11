@@ -341,10 +341,11 @@ let describeRefusal (refusal: Refusal) : string =
         match t.Need with
         | AtLeastMajor needed when needed > t.HostMajor ->
           sprintf
-            "The project needs .NET SDK %d or newer and the worker can only load SDK %d or older, so no global.json can fix this. Run SageFs on .NET %d or newer."
+            "The project needs .NET SDK %d or newer and this SageFs runs on .NET %d, so it can only load SDK %d or older, and no global.json can fix this. %s"
             needed
             t.HostMajor
-            needed
+            t.HostMajor
+            (ProjectLoading.NewerSdkAdvice.reinstallRecipe needed)
         | AtLeastMajor needed ->
           sprintf
             "No installed SDK is one the worker can load (major %d through %d). Install a .NET %d SDK from https://dotnet.microsoft.com/download and pin it with a global.json:\n{\n  \"sdk\": {\n    \"version\": \"%d.0.100\",\n    \"rollForward\": \"latestFeature\"\n  }\n}\nThen run hard_reset_fsi_session."

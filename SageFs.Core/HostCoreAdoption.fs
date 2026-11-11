@@ -164,7 +164,7 @@ module HostCoreAdoption =
       | false, _, _ ->
         Adoption.Refused(
           sprintf
-            "The running SageFs daemon (SageFs.Core %s) and the session project's own build (SageFs.Core %s, read from %s) come from different builds — rebuild SageFs so both come from one build, then retry. If that path is not the checkout you meant, the project path was resolved somewhere else: pass an absolute path."
+            "The running SageFs daemon (SageFs.Core %s) and the session project's own build (SageFs.Core %s, read from %s) come from different builds, so rebuild one to match the other, then retry. When the project uses the SageFs package, update the package to the daemon's version and run `dotnet build` on the project, or update the daemon with `sagefs stop` and `dotnet tool update --global SageFs`. On a checkout of SageFs itself, install the checkout as the daemon: `dotnet fsi scripts/install-local.fsx -- --build --force`. If that path is not the checkout you meant, the project path was resolved somewhere else: pass an absolute path."
             (hostVersion.ToString())
             (candidateVersion.ToString())
             (Path.GetFullPath candidatePath))

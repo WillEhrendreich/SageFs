@@ -83,6 +83,14 @@ module HostConcern =
         hostVersion
         projectVersion
 
+/// A project SDK newer than SageFs's runtime: `dotnet tool install` picks the net10.0 or net11.0 build by the SDK it
+/// runs under, and keeps it through updates. The SDK refusal, the in-process skip and the loader failure say this.
+module NewerSdkAdvice =
+  let reinstallRecipe (neededMajor: int) : string =
+    sprintf "To get the net%d.0 build of SageFs: install the .NET %d SDK, run `sagefs stop` (with the service, `systemctl --user stop sagefs`), then `dotnet tool uninstall --global SageFs`, then `dotnet tool install --global SageFs` from a folder where `dotnet --version` prints %d.x (your home directory, when no global.json there pins an older SDK). `sagefs --version` then says net%d.0." neededMajor neededMajor neededMajor neededMajor
+  let describe (cause: {| ProjectSdkMajor: int; RuntimeMajor: int |}) : string =
+    sprintf "This project's .NET SDK is %d.x, newer than the .NET %d this SageFs runs on, so its MSBuild cannot load in-process. %s If the project also builds on .NET %d, pinning an installed SDK %d.x with a global.json in its folder works too (`dotnet --list-sdks` lists them)." cause.ProjectSdkMajor cause.RuntimeMajor (reinstallRecipe cause.ProjectSdkMajor) cause.RuntimeMajor cause.RuntimeMajor
+
 module FallbackCause =
   let private whatToDo =
     "Run `dotnet build` on the project and read the first MSBuild error. A session loaded this way can evaluate code but cannot run_app or hot reload."
@@ -97,12 +105,7 @@ module FallbackCause =
     | FallbackCause.ReturnedNothing ->
       sprintf "MSBuild evaluation failed in-process without reporting an error (the project loader returned no projects). %s" whatToDo
     | FallbackCause.SkippedNewerSdk (sdkMajor, hostMajor) ->
-      sprintf
-        "This project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d), so it was not loaded in-process. To load it, pin an installed SDK of major %d or older with a global.json in the project's folder or above it (`dotnet --list-sdks` lists what is installed). %s"
-        sdkMajor
-        hostMajor
-        hostMajor
-        whatToDo
+      sprintf "%s %s" (NewerSdkAdvice.describe {| ProjectSdkMajor = sdkMajor; RuntimeMajor = hostMajor |}) whatToDo
 
 /// Project role classification for session management.
 /// Determines which projects are suitable for hot-reloading vs. testing.
@@ -927,9 +930,8 @@ let classifyProjectLoaderFailure (hostMajor: int) (exceptionMessage: string) : s
     | true, sdkMajor when sdkMajor > hostMajor ->
       Some(
         sprintf
-          "the project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d) — its MSBuild tooling can't load into this already-running process. This is expected (a newer SDK is installed, or the project's global.json pins one); falling back to a manual fsproj parse, which gets source files but not full MSBuild-derived project metadata."
-          sdkMajor
-          hostMajor
+          "%s Falling back to a manual fsproj parse, which gets source files but not full MSBuild-derived project metadata."
+          (NewerSdkAdvice.describe {| ProjectSdkMajor = sdkMajor; RuntimeMajor = hostMajor |})
       )
     | _ -> None
 
@@ -974,9 +976,8 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
         // never gets unhooked after a failed load, so the safe move is never to attempt it at all.
         logger.LogWarning (
           sprintf
-            "Skipping in-process MSBuild project load: this project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d) — loading that SDK's MSBuild tooling into this process would leave it corrupted for the rest of the process's life, not just fail this one load. Falling back straight to a manual fsproj parse. This is expected (a newer SDK is installed, or the project's global.json pins one)."
-            sdkMajor
-            hostMajor
+            "Skipping in-process MSBuild project load (loading a newer SDK's MSBuild would corrupt this process for the rest of its life), so the project is read by hand from its fsproj. %s"
+            (NewerSdkAdvice.describe {| ProjectSdkMajor = sdkMajor; RuntimeMajor = hostMajor |})
         )
         [], None, FallbackCause.SkippedNewerSdk (sdkMajor, hostMajor)
       | _ ->

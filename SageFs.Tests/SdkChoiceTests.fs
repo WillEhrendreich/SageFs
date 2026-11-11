@@ -122,8 +122,20 @@ let tests =
         match refusalOf (decide facts) with
         | TooNewForHost tooNew ->
           tooNew.Remedy |> Expect.equal "SDK 10 cannot build a net11.0 project" NoInstalledFit
-          describeRefusal (TooNewForHost tooNew) |> Expect.stringContains "says what to do instead" "Run SageFs on .NET 11 or newer"
+          let text = describeRefusal (TooNewForHost tooNew)
+          text |> Expect.stringContains "gives the reinstall recipe" (SageFs.ProjectLoading.NewerSdkAdvice.reinstallRecipe 11)
+          text |> Expect.stringContains "names the uninstall" "dotnet tool uninstall --global SageFs"
+          text |> Expect.stringContains "says where to run the install" "dotnet --version"
         | other -> failtestf "expected TooNewForHost, got %A" other
+
+      testCase "WHY — the in-process skip and the loader failure name the same reinstall as the refusal, so three surfaces give one answer" <| fun () ->
+        let skipped = SageFs.ProjectLoading.FallbackCause.describe (SageFs.ProjectLoading.FallbackCause.SkippedNewerSdk(11, 10))
+        skipped |> Expect.stringContains "the fallback names the reinstall" (SageFs.ProjectLoading.NewerSdkAdvice.reinstallRecipe 11)
+        let failure =
+          SageFs.ProjectLoading.classifyProjectLoaderFailure 10 "Could not load file or assembly 'System.Runtime, Version=11.0.0.0'"
+        match failure with
+        | Some text -> text |> Expect.stringContains "the loader failure names it too" (SageFs.ProjectLoading.NewerSdkAdvice.reinstallRecipe 11)
+        | None -> failtest "a System.Runtime 11 bind failure on a .NET 10 worker is the newer-SDK case"
 
       testCase "WHY — a release is suggested over a newer pre-release of the same major" <| fun () ->
         let facts = { reported with Installed = sdks [ "10.0.201"; "10.0.300-rc.1.26425.128"; "11.0.100" ] }

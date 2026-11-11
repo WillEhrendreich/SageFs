@@ -111,6 +111,8 @@ let tests =
         reason |> Expect.stringContains "the reason names the daemon's version" "1.2.3"
         reason |> Expect.stringContains "the reason names the candidate's version" "1.2.4"
         reason |> Expect.stringContains "the reason says what to do about it" "rebuild"
+        reason |> Expect.stringContains "WHY — the rebuild is a command a person can run, as every other skew message names one" "dotnet build"
+        reason |> Expect.stringContains "and the daemon side of it" "dotnet tool update --global SageFs"
       | other -> failtestf "expected Refused, got %A" other
 
     testCase "decide refuses a candidate whose version matches but whose BUILD is older, because that is the stale copy the version cannot catch" <| fun _ ->
