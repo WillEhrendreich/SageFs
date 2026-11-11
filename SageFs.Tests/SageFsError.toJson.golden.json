@@ -356,8 +356,8 @@
     "fields": {
       "port": 42
     },
-    "message": "Port 42 is already in use. Another SageFs instance may be running \u2014 try \u0027sagefs status\u0027 or use --mcp-port to pick a different port.",
-    "suggestedAction": "Stop the other process or use --mcp-port"
+    "message": "Port 42 is already in use. If a SageFs daemon holds it, \u0060sagefs status\u0060 shows it and \u0060sagefs stop\u0060 stops it. To keep your daemon on another port, set SAGEFS_MCP_PORT=\u003Cport\u003E before you start it (the dashboard takes the port after it); for a throwaway daemon, run \u0060sagefs --mcp-port \u003Cport\u003E --ttl 8h\u0060.",
+    "suggestedAction": "Run \u0027sagefs status\u0027, then \u0027sagefs stop\u0027 if it is a SageFs daemon, or set SAGEFS_MCP_PORT"
   },
   {
     "case": "SseConnectionError",

@@ -421,7 +421,7 @@ module SageFsError =
     | SageFsError.DaemonNotRunning ->
       "SageFs daemon is not running. Start it with 'sagefs' in your project directory."
     | SageFsError.PortInUse port ->
-      sprintf "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." port
+      SageFsConfig.portInUseAdvice port
     | SageFsError.SseConnectionError reason ->
       sprintf "SSE connection failed: %s" reason
     | SageFsError.JsonParseError(context, reason) ->
@@ -660,7 +660,7 @@ module SageFsError =
     | SageFsError.RestartLimitExceeded _ -> "Check the log file and restart SageFs"
     | SageFsError.DaemonStartFailed _ -> "Check port availability and .NET SDK"
     | SageFsError.DaemonNotRunning -> "Start SageFs with 'sagefs'"
-    | SageFsError.PortInUse _ -> "Stop the other process or use --mcp-port"
+    | SageFsError.PortInUse _ -> "Run 'sagefs status', then 'sagefs stop' if it is a SageFs daemon, or set SAGEFS_MCP_PORT"
     | SageFsError.SseConnectionError _ -> "Check daemon is running and retry"
     | SageFsError.JsonParseError _ -> "Check request payload format"
     | SageFsError.CohortActionFailed(_, suggestion) -> suggestion
