@@ -33,6 +33,7 @@ module DebugRects = SageFs.Vscode.DebugRects
 module NudgeKnob = SageFs.Vscode.NudgeKnob
 module SessionsTreePure = SageFs.Vscode.SessionsTreePure
 module StatusBarPure = SageFs.Vscode.StatusBarPure
+module EvalPreflightPure = SageFs.Vscode.EvalPreflightPure
 module WorkflowPickPure = SageFs.Vscode.WorkflowPickPure
 module ContextKeysPure = SageFs.Vscode.ContextKeysPure
 
@@ -1439,6 +1440,34 @@ let evalCore (code: string) (filePath: string option) (evalMode: string option) 
       return EvalConnectionError (string err)
   }
 
+/// `ensureRunning`, then make sure this window has a session to evaluate in. With none, the first
+/// Alt+Enter on a fresh install ended in an inline red "No active session selected" and nothing
+/// said what to do next. The step is `EvalPreflightPure.nextStep`; a missing session gets a
+/// notice whose button runs `sagefs.createSession`. Returns false when the eval must not run.
+let ensureEvalReady () : JS.Promise<bool> =
+  promise {
+    let! running = ensureRunning ()
+    match running, client, activeSessionId with
+    | false, _, _ -> return false
+    | true, None, _ | true, Some _, Some _ -> return true
+    | true, Some c, None ->
+      let! sessions = Client.listSessions c
+      match windowSession sessions with
+      | Some s ->
+        adoptWindowSession c s
+        return true
+      | None ->
+        let step = EvalPreflightPure.nextStep EvalPreflightPure.DaemonState.Up (EvalPreflightPure.SessionState.NoneBound sessions.Length)
+        match EvalPreflightPure.notice step with
+        | None -> return true
+        | Some n ->
+          let! choice = Window.showWarningMessage n.Text (n.Actions |> List.map (fun a -> a.Label) |> List.toArray)
+          match choice |> Option.bind (fun label -> n.Actions |> List.tryFind (fun a -> a.Label = label)) with
+          | Some a -> Commands.executeCommand a.Command |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+          | None -> ()
+          return false
+  }
+
 /// Log eval result to output channel. Auto-shows output on error.
 let logEvalResult (out: OutputChannel) (result: EvalResult) =
   match result with
@@ -1516,7 +1545,7 @@ let evalSelection (anchor: EvalAnchor) =
       | Some "Open File" -> openQuickFile ()
       | _ -> ()
     | Some ed ->
-      let! ok = ensureRunning ()
+      let! ok = ensureEvalReady ()
       match ok, codeForAnchor ed anchor with
       | false, _ | _, None -> ()
       | true, Some (code, blockStart, blockEnd) ->
@@ -1551,7 +1580,7 @@ let evalFile () =
     match Window.getActiveTextEditor () with
     | None -> ()
     | Some ed ->
-      let! ok = ensureRunning ()
+      let! ok = ensureEvalReady ()
       let code = ed.document.getText ()
       match ok, code.Trim() with
       | false, _ | _, "" -> ()
@@ -1574,7 +1603,7 @@ let evalRange (args: obj) =
     match Window.getActiveTextEditor () with
     | None -> ()
     | Some ed ->
-      let! ok = ensureRunning ()
+      let! ok = ensureEvalReady ()
       let range: Range = unbox args
       let raw = ed.document.getTextRange range
       let endLine = int range.``end``.line
@@ -1612,7 +1641,7 @@ let evalAllBlocks () =
       | Some "Open File" -> openQuickFile ()
       | _ -> ()
     | Some ed ->
-      let! ok = ensureRunning ()
+      let! ok = ensureEvalReady ()
       match ok with
       | false -> ()
       | true ->
@@ -2224,7 +2253,7 @@ let evalAdvance () =
       | Some "Open File" -> openQuickFile ()
       | _ -> ()
     | Some ed ->
-      let! ok = ensureRunning ()
+      let! ok = ensureEvalReady ()
       match ok, getEvalCode ed with
       | false, _ | _, None -> ()
       | true, Some (code, blockStart, blockEnd) ->
