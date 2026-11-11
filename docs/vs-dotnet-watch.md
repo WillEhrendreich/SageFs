@@ -21,7 +21,7 @@ A type error in the buffer means nothing is evaluated and nothing runs. The last
 | C# | Applies the change to the running process | SageFs's hot reload is built for F# |
 | F# | Restarts the app. The SDK tracks this in [sdk#55464](https://github.com/dotnet/sdk/issues/55464) and the F# compiler team has [work in progress](https://github.com/dotnet/fsharp/issues/19941) | Re-points the changed methods in the process that is already running and keeps its state. It says when a change needs a restart and why ([how hot reload works](how-hot-reload-works.md)) |
 
-The F# row is as of 2026-10-01 and will go stale when Microsoft ships F# support. The comparison in [how-hot-reload-works.md](how-hot-reload-works.md) is the one I keep current.
+The F# row is as of 2026-10-01 and will go stale when Microsoft ships F# support. One thing has moved since: Nat Elkins published [`fsharp-watch`](https://www.nuget.org/packages/fsharp-watch) as a NuGet preview (`0.2.0-preview.20261027.*`, source [NatElkins/hot_reload_poc](https://github.com/NatElkins/hot_reload_poc)). It is a `dotnet watch` style tool for F# that uses the compiler's hot reload API. Its README says the stock SDKs it tested (`10.0.401` and `11.0.100-rc.1.26420.103`) lack that API, so it needs an SDK with the F# compiler changes today and otherwise rebuilds and restarts. I have not run it. The comparison in [how-hot-reload-works.md](how-hot-reload-works.md) is the one I keep current.
 
 ## When `dotnet watch` is the better pick
 

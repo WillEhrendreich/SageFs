@@ -18,7 +18,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 ## Why this item exists
 
-FsiMcp (github.com/OnurGumus/FsiMcp, MIT, Onur Gumus, created 2026-11-07) is a stdio MCP server that gives an agent a persistent, project-aware F# REPL. Its whole tool list is seven tools. Mine is 72. Will's rule is that SageFs does not lose to another tool on a metric a user feels (`feedback_never_lose_to_another_tool`), and an agent's context filling with tool definitions before the first message is something a user feels: the first reply is slower and dearer, and on a client that does not defer tools it also crowds the window. A stranger who connects both tools sees this on the first turn.
+FsiMcp (github.com/OnurGumus/FsiMcp, MIT, Onur Gumus, created 2026-11-07) is a stdio MCP server that gives an agent a persistent, project-aware F# REPL. Its whole tool list was seven tools when I read it at 0.3.0 on 2026-11-07, and the latest release, v0.4.3 of 2026-11-08, lists eight (its README names them; nobody has measured that list's characters). Mine was 72. Will's rule is that SageFs does not lose to another tool on a metric a user feels (`feedback_never_lose_to_another_tool`), and an agent's context filling with tool definitions before the first message is something a user feels: the first reply is slower and dearer, and on a client that does not defer tools it also crowds the window. A stranger who connects both tools sees this on the first turn.
 
 ## What done looks like
 
