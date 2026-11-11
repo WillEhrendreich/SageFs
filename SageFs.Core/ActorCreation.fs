@@ -6,21 +6,10 @@ open SageFs.Middleware.Tracing
 open SageFs.ProjectLoading
 open SageFs.AppState
 
-let commonMiddleware: AppState.Middleware list = [
-  // Must run FIRST: it never rewrites code, only ever short-circuits a
-  // submission that has nothing for FSI to run (a bare module/namespace
-  // header, or blank/comments only) — see EvaluableSubmission.fs. Every
-  // Executable submission passes through it unmodified, so ordering it
-  // ahead of the rewriting middleware below costs nothing on the normal
-  // path and saves wasted rewrite work (plus a guaranteed FSI compile
-  // error) on the "nothing to evaluate" path.
-  EvaluableSubmission.nothingToEvaluateMiddleware
-  Directives.viBindMiddleware
-  Directives.OpenDirective.openDirectiveMiddleware
-  ComputationExpression.compExprMiddleware
-  NonBlockingRun.nonBlockingRunMiddleware
-  HotReloading.hotReloadingMiddleware
-]
+/// The functions of `Tracing.namedCommonMiddleware`, in its order: the stage list and the names the
+/// eval trace gives them come from the same entries, so the two cannot drift apart.
+let commonMiddleware: AppState.Middleware list =
+  Tracing.namedCommonMiddleware |> List.map (fun stage -> stage.Middleware)
 
 /// Hot reload used to seed its registry here, loading every project's assemblies into the WORKER. The session's agent owns
 /// that now, in whichever process the user's code runs, so nothing is loaded on the worker's behalf.
@@ -167,19 +156,7 @@ let createActorImmediate a =
   let customData = a.InitFunctions |> Seq.map (fun fn -> fn sln) |> Map.ofSeq
   let tracedBuild: AppState.PipelineBuildFn =
     fun middleware evalFn ->
-      let namedMiddleware =
-        Tracing.namedCommonMiddleware
-        |> List.map (fun nm -> nm.Name, nm.Middleware)
-        |> Map.ofList
-      let named =
-        middleware
-        |> List.map (fun mw ->
-          let name =
-            namedMiddleware
-            |> Map.tryFindKey (fun _ v -> obj.ReferenceEquals(v, mw))
-            |> Option.defaultValue "Unknown"
-          { Tracing.NamedMiddleware.Name = name; Middleware = mw })
-      Tracing.buildTracedPipeline named "CoreEval" evalFn
+      Tracing.buildTracedPipeline (Tracing.nameStages Tracing.namedCommonMiddleware middleware) "CoreEval" evalFn
   // Classifying reads every .fsproj, so it is done once for the reload decision and the session's ProjectRoles.
   let classified = SageFs.ProjectLoading.classifiedProjectsOf sln
   let webDevReload =

@@ -29,7 +29,7 @@ let private traceMiddleware
     let outcome =
       match response.EvaluationResult with
       | Ok _ -> StageOutcome.Succeeded
-      | Error _ -> StageOutcome.Failed (SageFsError.EvalFailed "middleware error")
+      | Error ex -> StageOutcome.Failed (SageFsError.EvalFailed ex.Message)
     stages.Value <-
       { Name = named.Name
         ElapsedMs = Measures.toMs sw.Elapsed
@@ -54,7 +54,7 @@ let buildTracedPipeline
       let outcome =
         match response.EvaluationResult with
         | Ok _ -> StageOutcome.Succeeded
-        | Error _ -> StageOutcome.Failed (SageFsError.EvalFailed "eval error")
+        | Error ex -> StageOutcome.Failed (SageFsError.EvalFailed ex.Message)
       stages.Value <-
         { Name = coreEvalName
           ElapsedMs = Measures.toMs sw.Elapsed
@@ -91,14 +91,47 @@ let tryGetTrace (response: EvalResponse) : PipelineTrace<string> option =
     | :? PipelineTrace<string> as t -> Some t
     | _ -> None)
 
-/// Format middleware names for the standard middleware list.
+/// The standard middleware stages, each with its name: the ONE list. The pipeline a session runs
+/// (`ActorCreation.commonMiddleware`) is these functions in this order, and the trace names its stages
+/// from the same entries, so a stage cannot run without a name or carry a name it does not have.
 let namedCommonMiddleware: NamedMiddleware list = [
+  // Must run FIRST: it never rewrites code, only ever short-circuits a submission that has nothing for
+  // FSI to run (a bare module/namespace header, or blank/comments only), see EvaluableSubmission.fs.
+  // Every Executable submission passes through it unmodified, so ordering it ahead of the rewriting
+  // middleware below costs nothing on the normal path and saves wasted rewrite work (plus a guaranteed
+  // FSI compile error) on the "nothing to evaluate" path.
+  { Name = "NothingToEvaluate"; Middleware = EvaluableSubmission.nothingToEvaluateMiddleware }
   { Name = "ViBind"; Middleware = Directives.viBindMiddleware }
   { Name = "OpenDirective"; Middleware = Directives.OpenDirective.openDirectiveMiddleware }
   { Name = "CompExpr"; Middleware = ComputationExpression.compExprMiddleware }
   { Name = "NonBlockingRun"; Middleware = NonBlockingRun.nonBlockingRunMiddleware }
   { Name = "HotReload"; Middleware = HotReloading.hotReloadingMiddleware }
 ]
+
+/// The name the trace gives the error wrapper the eval actor puts at the head of every pipeline.
+[<Literal>]
+let ErrorWrapperStageName = "ErrorWrapper"
+
+/// The name a trace gives a stage that is in no known list. A production pipeline has none: a stage
+/// carrying this name is a stage someone added to the pipeline without naming it.
+[<Literal>]
+let UnknownStageName = "Unknown"
+
+/// Name the stages of the pipeline the eval actor hands to the trace builder. That pipeline is the
+/// error wrapper followed by the session's middleware (`AppState`'s eval command: `wrapErrorMiddleware
+/// :: middleware`), so the head is the error wrapper by position, and every other stage is named by
+/// the entry of `known` that holds the very same function.
+let nameStages (known: NamedMiddleware list) (pipeline: Middleware list) : NamedMiddleware list =
+  let nameOf (stage: Middleware) =
+    known
+    |> List.tryFind (fun candidate -> obj.ReferenceEquals(candidate.Middleware, stage))
+    |> Option.map (fun candidate -> candidate.Name)
+    |> Option.defaultValue UnknownStageName
+  match pipeline with
+  | [] -> []
+  | wrapper :: rest ->
+    { Name = ErrorWrapperStageName; Middleware = wrapper }
+    :: (rest |> List.map (fun stage -> { Name = nameOf stage; Middleware = stage }))
 
 /// Build the full traced pipeline including the error wrapper middleware.
 /// This is the production-ready replacement for `buildPipeline (wrapErrorMiddleware :: middleware) evalFn`.
@@ -108,5 +141,5 @@ let buildProductionTracedPipeline
   (evalFn: MiddlewareNext)
   : MiddlewareNext =
   let allNamed =
-    { Name = "ErrorWrapper"; Middleware = wrapError } :: middleware
+    { Name = ErrorWrapperStageName; Middleware = wrapError } :: middleware
   buildTracedPipeline allNamed "CoreEval" evalFn

@@ -177,14 +177,16 @@ let tracingMiddlewareTests =
       // `use` binding to `let` before FSI saw the code, which was unnecessary
       // (FSI accepts an indented `use` fine) and destructive (`let` does not
       // dispose, so user code silently stopped releasing what it opened).
+      // 5 -> 6: NothingToEvaluate joined the list, which is now the one source of the
+      // pipeline AND of the trace's stage names (ActorCreation.commonMiddleware is built from it).
       test "has correct count" {
         namedCommonMiddleware
-        |> Expect.hasLength "5 middlewares" 5
+        |> Expect.hasLength "6 middlewares" 6
       }
 
       test "has unique names" {
         let names = namedCommonMiddleware |> List.map (fun nm -> nm.Name)
-        names |> List.distinct |> Expect.hasLength "all unique" 5
+        names |> List.distinct |> Expect.hasLength "all unique" 6
       }
 
       test "names are non-empty" {
