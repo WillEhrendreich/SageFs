@@ -3410,6 +3410,28 @@ h2 {
     min-height: 46rem;
   }
 
+  /* With no session in view the main area holds only the picker (the output area is hidden behind it), so it is as tall as
+     the picker and no taller. The 46rem floor above is for an output transcript and a dock sharing the area: left on the picker
+     it put the Sessions sidebar at y=1186 under a 1050px main area, a screen and a half down from a 900px window. */
+  .main-area:has(#session-picker .picker-container) {
+    min-height: 0;
+  }
+
+  .picker-container {
+    padding: 1rem;
+    gap: 1rem;
+  }
+
+  /* With no session in view the session list comes before the picker. Stacked after it, the list sat under the picker's cards
+     and its Resume Previous scroller, at y=1104 in a 900px window, and a person who wanted to open a running session had to
+     scroll the column to find it. The list is short here (it is bounded by max-height below and scrolls inside itself), and the
+     picker's Quick Start card still starts inside the first screen. */
+  .app-layout:has(#session-picker .picker-container) .sidebar {
+    order: -1;
+    border-top: none;
+    border-bottom: 1px solid var(--border-normal);
+  }
+
   /* Output keeps a box of its own, and the main area grows around it. The dock and Output used to share the main area's 46rem, with
      Output the one that shrank: a dock opened out by the View panel (its cap is 54rem while the panel is open) or a busy session left
      Output 1px or 34px tall at phone width, and the page's own scroll could not help because the main area never grew. Now the
@@ -3469,6 +3491,18 @@ h2 {
        first, the bindings began halfway down a 400x800 window and only the first two rows showed above the fold: three reviewers
        scored the narrow layouts 5 because the subject was buried under the log. */
     order: -1;
+  }
+
+  /* A dock with no bindings tree is one line saying why there is nothing to show. It does not come first: the bindings are what
+     the page is opened for, and a strip with nothing in it above the picker took the first 60px of a phone screen. */
+  .live-dock:not(:has(.live-tree)) {
+    order: 0;
+  }
+
+  /* With no session in view the picker is the page and the "no session is open" strip repeats what the header badge and the
+     Sessions panel already say, so it is not drawn. */
+  .main-area:has(#session-picker .picker-container) .live-dock:not(:has(.live-tree)) {
+    display: none;
   }
 
   /* In the stacked layout the page is the one scroll, so the dock is as tall as its rows: a fixed height is for the side-by-side layout. */

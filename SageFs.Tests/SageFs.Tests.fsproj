@@ -1019,6 +1019,7 @@
         <Compile Include="PaneLayoutTests.fs" />
         <Compile Include="PaneMenuViewTests.fs" />
         <Compile Include="DashboardPaneLayoutBrowserTests.fs" />
+        <Compile Include="DashboardNarrowLayoutBrowserTests.fs" />
         <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="VscodeCommandProofTests.fs" />
         <Compile Include="CoverageTreemapTests.fs" />
