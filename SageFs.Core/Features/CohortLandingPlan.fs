@@ -157,6 +157,30 @@ module CohortLandingPlan =
   let private isInertExtension (lower: string) : bool =
     [ ".md"; ".txt"; ".fsx"; ".sh"; ".ps1"; ".yml"; ".yaml"; ".gitignore" ] |> List.contains (extensionOf lower)
 
+  /// What a file is by its name alone, for a caller that has no project index: the live-test watcher, which sees one
+  /// changed file at a time under a session's own directory. The same rules `classify` applies, in the same order.
+  [<RequireQualifiedAccess>]
+  type FileByName =
+    | ProjectFile
+    /// Props, targets, a lock file, the SDK pin, a NuGet config.
+    | BuildInputByName
+    /// F#, its signatures, C#, VB.
+    | CompiledSource
+    /// A document or a script: no build reads it.
+    | Inert
+    /// Anything else in a project's folder (a resource, a content or data file): it can change what the build makes.
+    | Content
+
+  let kindByName (path: string) : FileByName =
+    let p = normalize path
+    let lower = p.ToLowerInvariant()
+    match isProjectFile lower, isBuildInputByName p, isCompiledSourceExtension lower, isInertExtension lower with
+    | true, _, _, _ -> FileByName.ProjectFile
+    | false, true, _, _ -> FileByName.BuildInputByName
+    | false, false, true, _ -> FileByName.CompiledSource
+    | false, false, false, true -> FileByName.Inert
+    | false, false, false, false -> FileByName.Content
+
   /// What a changed file is to the integration session. FAIL-CLOSED: a source file whose project cannot be found (the index
   /// is empty, or it missed the project) counts as compiled source, a project file the index does not know is a build input,
   /// a resource or content file of a project in the closure is a build input, and an empty `loaded` counts every project as

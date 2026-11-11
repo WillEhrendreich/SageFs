@@ -272,6 +272,118 @@ let propertyTests =
           | _ -> owners = [])
   ]
 
+module private BuildInputFixtures =
+  let project (property: string) (compiles: string list) =
+    let items = compiles |> List.map (sprintf "<Compile Include=\"%s\" />") |> String.concat ""
+    sprintf "<Project><PropertyGroup><X>%s</X></PropertyGroup><ItemGroup>%s</ItemGroup></Project>" property items
+  let nothingReadable (_: string) : string option = None
+  let test (name: string) = SageFs.Tests.LiveTestingTestHelpers.mkTestCase name SageFs.Features.LiveTesting.TestFramework.Expecto SageFs.Features.LiveTesting.TestCategory.Unit
+
+let buildInputTests =
+  let open' = BuildInputFixtures.project
+  testList "LiveTestBuildInput" [
+    test "WHY — classify — each file a watched directory can hold has one answer, and .fs/.fsx stay on the source path" {
+      [ "src/Lib.fs", LiveTestBuildInput.WatchedFile.Source
+        "build.fsx", LiveTestBuildInput.WatchedFile.Source
+        "src/App.fsproj", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.ProjectFile
+        "Directory.Build.props", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.OtherInput
+        "build/Custom.targets", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.OtherInput
+        "src/packages.lock.json", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.OtherInput
+        "global.json", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.OtherInput
+        "tests/fixtures/orders.json", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.OtherInput
+        "src/Lib.fsi", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.OtherInput
+        "README.md", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.UnwatchedExtension
+        ".editorconfig", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.UnwatchedExtension
+        "src/Lib.fs~", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile
+        "src/.Lib.fs.swp", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile
+        "src/.#Lib.fs", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile
+        "src/4913", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile
+        "tests/Snap.received.json", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile ]
+      |> List.iter (fun (path, expected) ->
+        LiveTestBuildInput.classify path |> Expect.equal (sprintf "%s is classified" path) expected)
+    }
+
+    test "WHY — decide — a project edit that only reshapes the compile list narrows to the files at and after the first difference" {
+      LiveTestBuildInput.decide BuildInputFixtures.nothingReadable "src/App.fsproj" LiveTestBuildInput.BuildInputKind.ProjectFile
+        (Some (open' "1" [ "A.fs"; "B.fs" ])) (Some (open' "1" [ "A.fs"; "New.fs"; "B.fs" ]))
+      |> Expect.equal "the added file and the one after it"
+           (LiveTestBuildInput.Action.Run (SageFs.Features.ProjectFileChange.Selection.NarrowToFiles [ "src/New.fs"; "src/B.fs" ]))
+    }
+
+    test "WHY — decide — a project edit to a property runs the whole suite" {
+      match
+        LiveTestBuildInput.decide BuildInputFixtures.nothingReadable "src/App.fsproj" LiveTestBuildInput.BuildInputKind.ProjectFile
+          (Some (open' "1" [ "A.fs" ])) (Some (open' "2" [ "A.fs" ]))
+      with
+      | LiveTestBuildInput.Action.Run (SageFs.Features.ProjectFileChange.Selection.WholeSuite _) -> ()
+      | other -> failtestf "a property change runs the whole suite, got %A" other
+    }
+
+    test "WHY — decide — a project file saved with only whitespace changed runs nothing" {
+      let text = open' "1" [ "A.fs" ]
+      LiveTestBuildInput.decide BuildInputFixtures.nothingReadable "src/App.fsproj" LiveTestBuildInput.BuildInputKind.ProjectFile
+        (Some text) (Some (text.Replace("><", ">\n  <")))
+      |> Expect.equal "same statements" LiveTestBuildInput.Action.Unchanged
+    }
+
+    test "WHY — decide — a deleted project file and a changed data file run the whole suite, an unchanged data file runs nothing" {
+      match
+        LiveTestBuildInput.decide BuildInputFixtures.nothingReadable "src/App.fsproj" LiveTestBuildInput.BuildInputKind.ProjectFile
+          (Some (open' "1" [ "A.fs" ])) None
+      with
+      | LiveTestBuildInput.Action.Run (SageFs.Features.ProjectFileChange.Selection.WholeSuite _) -> ()
+      | other -> failtestf "a deleted project runs the whole suite, got %A" other
+      LiveTestBuildInput.decide BuildInputFixtures.nothingReadable "fixtures/a.json" LiveTestBuildInput.BuildInputKind.OtherInput (Some "h1") (Some "h2")
+      |> Expect.equal "a changed data file"
+           (LiveTestBuildInput.Action.Run
+             (SageFs.Features.ProjectFileChange.Selection.WholeSuite [ SageFs.Features.ProjectFileChange.Change.OtherBuildInput "fixtures/a.json" ]))
+      LiveTestBuildInput.decide BuildInputFixtures.nothingReadable "fixtures/a.json" LiveTestBuildInput.BuildInputKind.OtherInput (Some "h1") (Some "h1")
+      |> Expect.equal "an unchanged data file" LiveTestBuildInput.Action.Unchanged
+    }
+
+    test "WHY — testsFor — a narrow runs the tests covering its files plus the ones with no coverage, and a narrow that selects nothing runs everything" {
+      let covering = BuildInputFixtures.test "covers New.fs"
+      let elsewhere = BuildInputFixtures.test "covers Other.fs"
+      let unknown = BuildInputFixtures.test "no coverage"
+      let all = [| covering; elsewhere; unknown |]
+      let coveredFilesOf (id: SageFs.Features.LiveTesting.TestId) =
+        match id with
+        | i when i = covering.Id -> Some [ "/repo/src/New.fs" ]
+        | i when i = elsewhere.Id -> Some [ "/repo/src/Other.fs" ]
+        | _ -> None
+      LiveTestBuildInput.testsFor (SageFs.Features.ProjectFileChange.Selection.NarrowToFiles [ "src/New.fs" ]) coveredFilesOf all
+      |> Array.map (fun t -> t.FullName)
+      |> Expect.equal "the covering test and the unknown one" [| "covers New.fs"; "no coverage" |]
+      LiveTestBuildInput.testsFor (SageFs.Features.ProjectFileChange.Selection.NarrowToFiles [ "src/New.fs" ]) coveredFilesOf [| elsewhere |]
+      |> Array.map (fun t -> t.FullName)
+      |> Expect.equal "the floor runs everything" [| "covers Other.fs" |]
+      LiveTestBuildInput.testsFor (SageFs.Features.ProjectFileChange.Selection.WholeSuite []) coveredFilesOf all
+      |> Expect.equal "the whole suite" all
+    }
+
+    test "WHY — onBuildInputChanged — while a run is in flight the rebuild waits in the queue, so the busy run is not cancelled and the change is not lost" {
+      let one = BuildInputFixtures.test "M.one"
+      let idle =
+        { SageFs.Features.LiveTesting.LiveTestCycleState.empty with
+            TestState =
+              { SageFs.Features.LiveTesting.LiveTestState.empty with
+                  Activation = SageFs.Features.LiveTesting.LiveTestingActivation.Active
+                  DiscoveredTests = [| one |] } }
+      let running = SageFs.Features.LiveTesting.TestRunPhase.Running (SageFs.Features.LiveTesting.RunGeneration 3)
+      let busy = { idle with TestState = { idle.TestState with RunPhases = Map.ofList [ "s", running ] } }
+      let idleEffects, idleAfter = SageFs.Features.LiveTesting.LiveTestCycleState.onBuildInputChanged "App.fsproj" [| one |] idle
+      match idleEffects with
+      | [ SageFs.Features.LiveTesting.TestCycleEffect.RequestRebuild (generation, req) ] ->
+        req.Tests |> Expect.equal "the selected test" [| one |]
+        idleAfter.PendingRebuild |> Option.map (fun p -> p.Generation) |> Expect.equal "recorded as pending" (Some generation)
+      | other -> failtestf "an idle session rebuilds at once, got %A" other
+      let busyEffects, busyAfter = SageFs.Features.LiveTesting.LiveTestCycleState.onBuildInputChanged "App.fsproj" [| one |] busy
+      busyEffects |> Expect.isEmpty "nothing starts while the run is in flight"
+      busyAfter.QueuedRebuild |> Option.map (fun q -> q.Means, q.Tests)
+      |> Expect.equal "queued as a rebuild" (Some (SageFs.Features.LiveTesting.QueuedMeans.RebuildThenRun, [| one |]))
+    }
+  ]
+
 [<Tests>]
 let liveTestWatcherCoreTests =
-  testList "LiveTestWatcherCore" [ scenarioTests; neededDirsTests; isUnderWatchedDirTests; ownershipTests; propertyTests ]
+  testList "LiveTestWatcherCore" [ scenarioTests; neededDirsTests; isUnderWatchedDirTests; ownershipTests; propertyTests; buildInputTests ]

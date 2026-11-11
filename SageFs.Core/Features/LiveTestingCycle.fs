@@ -835,6 +835,61 @@ module LiveTestCycleState =
             PendingRebuild = None
             QueuedRebuild = None }
 
+  /// A build input changed (a project file, props, targets, a lock file, a data file the build reads): the session is
+  /// rebuilt and `tests` run against what it built. While a run is in flight the rebuild waits in the queue, the way a
+  /// source save's rebuild does, and `promoteQueuedRebuild` starts it when the run ends. `tests` are chosen by the caller
+  /// (`LiveTestBuildInput.testsFor`); the session's run policies still apply, as they do to a save.
+  let onBuildInputChanged (filePath: string) (tests: TestCase array) (s: LiveTestCycleState)
+    : TestCycleEffect list * LiveTestCycleState =
+    let targetSession = LiveTestState.ownerSessionId s.TestState
+    let maps =
+      match targetSession |> Option.bind (fun id -> Map.tryFind id s.InstrumentationMaps) with
+      | Some sessionMaps -> sessionMaps
+      | None -> s.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+    let filtered =
+      PolicyFilter.filterTests s.TestState.RunPolicies RunTrigger.FileSave tests
+      |> TestPrioritization.prioritize s.TestState.LastResults
+    match Array.isEmpty filtered with
+    | true -> [], s
+    | false ->
+      match TestRunPhase.isSessionRunning targetSession s.TestState.RunPhases with
+      | true ->
+        let queued =
+          { Means = QueuedMeans.RebuildThenRun
+            Tests = filtered
+            Trigger = RunTrigger.FileSave
+            FilePath = filePath
+            AnalysisIdentity = s.LatestAnalysisIdentity
+            TreeSitterElapsed = System.TimeSpan.Zero
+            FcsElapsed = System.TimeSpan.Zero
+            SessionId = targetSession
+            InstrumentationMaps = maps }
+        [], { s with QueuedRebuild = Some queued }
+      | false ->
+        let generation = s.NextRebuildGeneration + 1L
+        let pending =
+          { Generation = generation
+            Tests = filtered
+            Trigger = RunTrigger.FileSave
+            FilePath = filePath
+            AnalysisIdentity = s.LatestAnalysisIdentity
+            TreeSitterElapsed = System.TimeSpan.Zero
+            FcsElapsed = System.TimeSpan.Zero
+            SessionId = targetSession
+            InstrumentationMaps = maps }
+        [ TestCycleEffect.RequestRebuild(
+            generation,
+            { Tests = filtered
+              Trigger = RunTrigger.FileSave
+              TreeSitterElapsed = System.TimeSpan.Zero
+              FcsElapsed = System.TimeSpan.Zero
+              SessionId = targetSession
+              InstrumentationMaps = maps }) ],
+        { s with
+            NextRebuildGeneration = generation
+            PendingRebuild = Some pending
+            QueuedRebuild = None }
+
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestCycleState) =
     let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
     let newDepGraph =

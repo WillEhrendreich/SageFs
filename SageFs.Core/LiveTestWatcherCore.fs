@@ -151,3 +151,198 @@ module LiveTestWatcherCore =
   let isUnderWatchedDir (watched: Set<string>) (path: string) : bool =
     let pathCase = PathContainment.PathCase.ofCurrentOs ()
     watched |> Set.exists (fun dir -> PathContainment.isWithin pathCase dir path)
+
+/// What the live-test watcher does with a file that is not F# source: a project file, props, targets, a lock file, the
+/// SDK pin, or a data file in the project's folder. The watcher used to see `.fs` and `.fsx` only, so a changed package
+/// version or fixture never reached live testing and the status stayed green over a build that no longer matched it.
+///
+/// The rule is the landing gate's (`ProjectFileChange.select`, see docs/decisions.md): an edit that only changes a
+/// project's compile list runs the tests that cover the files at and after the first difference, and any other change to a
+/// build input runs the whole suite. Either way the session is rebuilt first, since only a build reads these files.
+module LiveTestBuildInput =
+
+  open SageFs.Features
+  open SageFs.Features.LiveTesting
+
+  [<RequireQualifiedAccess>]
+  type BuildInputKind =
+    /// A `.fsproj`, `.csproj` or `.vbproj`: its text is diffed against the text the watcher saw last.
+    | ProjectFile
+    /// Anything else a build reads: props, targets, a lock file, the SDK pin, a resource or data file. Any change to its
+    /// content can reach any test.
+    | OtherInput
+
+  /// What a changed file under a watched directory is to live testing.
+  [<RequireQualifiedAccess>]
+  type WatchedFile =
+    /// `.fs` or `.fsx`: the source save path, unchanged.
+    | Source
+    | BuildInput of BuildInputKind
+    /// Nothing to run: an editor's scratch file, a test run's own output, or a file no build reads.
+    | Ignored of SageFs.FileWatcher.WatchDrop
+
+  /// File names an editor or a test run writes next to real files while saving or failing: vim's `name~`, `.name.swp` and
+  /// its `4913` write probe, Emacs' `.#name`, `~name` and `name.tmp`, and Verify's `name.received.ext`. A run that wrote
+  /// a received file and was then woken by it would never stop.
+  let isScratchName (fileName: string) : bool =
+    let lower = fileName.ToLowerInvariant()
+    lower.StartsWith "~"
+    || lower.StartsWith ".#"
+    || lower.EndsWith "~"
+    || lower.EndsWith ".tmp"
+    || lower.EndsWith ".swp"
+    || lower.EndsWith ".swo"
+    || lower.EndsWith ".swx"
+    || lower = "4913"
+    || lower.Contains ".received."
+
+  let classify (path: string) : WatchedFile =
+    let fileName = System.IO.Path.GetFileName(path.Replace('\\', '/'))
+    let lower = fileName.ToLowerInvariant()
+    match isScratchName fileName with
+    | true -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.TemporaryFile
+    | false ->
+      match lower.EndsWith ".fs" || lower.EndsWith ".fsx" with
+      | true -> WatchedFile.Source
+      | false ->
+        match CohortLandingPlan.kindByName path with
+        | CohortLandingPlan.FileByName.ProjectFile -> WatchedFile.BuildInput BuildInputKind.ProjectFile
+        | CohortLandingPlan.FileByName.BuildInputByName
+        | CohortLandingPlan.FileByName.CompiledSource -> WatchedFile.BuildInput BuildInputKind.OtherInput
+        | CohortLandingPlan.FileByName.Inert -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.UnwatchedExtension
+        | CohortLandingPlan.FileByName.Content ->
+          // A dotfile (.editorconfig, .DS_Store, .gitattributes) is tooling state, not something a test reads.
+          match fileName.StartsWith "." with
+          | true -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.UnwatchedExtension
+          | false -> WatchedFile.BuildInput BuildInputKind.OtherInput
+
+  /// Why the live-test watcher drops an event, or `None` when it queues it. Source keeps the `.fs`/`.fsx` filter it
+  /// always had; a build input passes the same bin/obj and pattern checks with its own extension; a scratch file or a
+  /// document is dropped by name. `config.Extensions` is ignored: the kind of file decides it.
+  let dropReason (config: SageFs.FileWatcher.WatchConfig) (path: string) : SageFs.FileWatcher.WatchDrop option =
+    let watchedAs (extensions: string list) = SageFs.FileWatcher.dropReason { config with Extensions = extensions } path
+    match classify path with
+    | WatchedFile.Ignored reason -> Some reason
+    | WatchedFile.Source -> watchedAs [ ".fs"; ".fsx" ]
+    | WatchedFile.BuildInput _ -> watchedAs [ System.IO.Path.GetExtension(path).ToLowerInvariant() ]
+
+  /// What a change to a build input asks of live testing.
+  [<RequireQualifiedAccess>]
+  type Action =
+    /// The file states what it stated before (a save with no change, whitespace or a comment in a project file).
+    | Unchanged
+    /// Rebuild, then run this selection.
+    | Run of ProjectFileChange.Selection
+
+  /// The decision for one changed build input. `relativePath` is the file's path under the session's directory, so the
+  /// compile list resolves the way the landing gate resolves it; `readText` reads a source file by that same kind of path.
+  /// For a project file `before` and `after` are its texts (`None` for a side that did not exist). For any other input
+  /// they are fingerprints of its content.
+  let decide
+    (readText: string -> string option)
+    (relativePath: string)
+    (kind: BuildInputKind)
+    (before: string option)
+    (after: string option)
+    : Action =
+    match kind with
+    | BuildInputKind.ProjectFile ->
+      match ProjectFileChange.diff relativePath before after with
+      | [] -> Action.Unchanged
+      | changes -> Action.Run (ProjectFileChange.select readText changes)
+    | BuildInputKind.OtherInput ->
+      match before = after with
+      | true -> Action.Unchanged
+      | false -> Action.Run (ProjectFileChange.Selection.WholeSuite [ ProjectFileChange.Change.OtherBuildInput relativePath ])
+
+  /// Each test's covered files from the session's coverage, the way the landing gate reads them: `None` for a test whose
+  /// coverage cannot be trusted (no instrumentation, or a bitmap of another size), so the selection keeps it.
+  let coveredFilesOf
+    (blind: string list)
+    (maps: InstrumentationMap array)
+    (bitmaps: Map<TestId, CoverageBitmap>)
+    : TestId -> string list option =
+    let merged = InstrumentationMap.merge maps
+    fun testId ->
+      match merged.Slots.Length with
+      | 0 -> None
+      | _ ->
+        match Map.tryFind testId bitmaps with
+        | Some bitmap when bitmap.Count = merged.TotalProbes && bitmap.Count > 0 ->
+          Some (InputHashCoverage.selectionFiles blind merged bitmap)
+        | _ -> None
+
+  /// The tests a selection runs. A narrow that selects nothing runs the whole suite, the landing gate's floor: a build
+  /// input changed, and a run of nothing would leave every result standing over a build it no longer describes.
+  let testsFor
+    (selection: ProjectFileChange.Selection)
+    (coveredFilesOf: TestId -> string list option)
+    (tests: TestCase array)
+    : TestCase array =
+    match selection with
+    | ProjectFileChange.Selection.WholeSuite _ -> tests
+    | ProjectFileChange.Selection.NarrowToFiles files ->
+      let chosen =
+        AffectedTests.affected files coveredFilesOf (tests |> Array.map (fun test -> test.Id) |> Array.toList) |> Set.ofList
+      match Set.isEmpty chosen with
+      | true -> tests
+      | false -> tests |> Array.filter (fun test -> chosen.Contains test.Id)
+
+  /// A build input's content as the watcher compares it: a project file's text, any other input's SHA-256. `None` when
+  /// the file is gone or cannot be read.
+  let read (kind: BuildInputKind) (path: string) : string option =
+    try
+      match System.IO.File.Exists path, kind with
+      | false, _ -> None
+      | true, BuildInputKind.ProjectFile -> Some (System.IO.File.ReadAllText path)
+      | true, BuildInputKind.OtherInput ->
+        use stream = System.IO.File.OpenRead path
+        Some (System.Convert.ToHexString(System.Security.Cryptography.SHA256.HashData stream))
+    with
+    | :? System.IO.IOException
+    | :? System.UnauthorizedAccessException -> None
+
+  /// What each build input under the watched directories said when the watcher last read it, and the decision for the
+  /// next change against it. The impure edge of `decide`: it reads files. Owned by the watcher's mailbox loop, the
+  /// only caller, so it takes no lock.
+  type Store() =
+    let lastSeen = System.Collections.Generic.Dictionary<string, string>()
+
+    /// Read every project file under `dir` (pruned the way the watcher prunes), so the first edit to one is diffed
+    /// against the text it had and a compile-list edit narrows from the start. Other inputs are not read ahead: their
+    /// first change runs the whole suite, which is what any change to them does.
+    member _.Seed(dir: string) =
+      for watched in SageFs.FileWatcher.watchableDirs dir SageFs.FileWatcher.hasCheckoutMarker do
+        try
+          for file in System.IO.Directory.EnumerateFiles watched do
+            match classify file with
+            | WatchedFile.BuildInput BuildInputKind.ProjectFile ->
+              read BuildInputKind.ProjectFile file |> Option.iter (fun text -> lastSeen[file] <- text)
+            | WatchedFile.BuildInput BuildInputKind.OtherInput
+            | WatchedFile.Source
+            | WatchedFile.Ignored _ -> ()
+        with
+        | :? System.IO.IOException
+        | :? System.UnauthorizedAccessException -> ()
+
+    /// Decide a change to `path`, a build input under one of `watched`, and remember what it says now. The compile list
+    /// resolves against the deepest watched directory holding the file, the way the landing gate resolves it against
+    /// the repository root.
+    member _.Decide(watched: Set<string>, path: string, kind: BuildInputKind) : Action =
+      let pathCase = PathContainment.PathCase.ofCurrentOs ()
+      let root =
+        watched
+        |> Seq.filter (fun dir -> PathContainment.isWithin pathCase dir path)
+        |> Seq.fold (fun (best: string) dir -> match dir.Length > best.Length with | true -> dir | false -> best) ""
+      let relative = System.IO.Path.GetRelativePath(root, path).Replace('\\', '/')
+      let readText (file: string) =
+        try Some (System.IO.File.ReadAllText(System.IO.Path.Combine(root, file)))
+        with
+        | :? System.IO.IOException
+        | :? System.UnauthorizedAccessException -> None
+      let before = match lastSeen.TryGetValue path with | true, seen -> Some seen | false, _ -> None
+      let after = read kind path
+      match after with
+      | Some now -> lastSeen[path] <- now
+      | None -> lastSeen.Remove path |> ignore
+      decide readText relative kind before after
