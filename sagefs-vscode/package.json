@@ -311,7 +311,7 @@
       {
         "command": "sagefs.cancelEval",
         "key": "ctrl+shift+c",
-        "when": "editorTextFocus && editorLangId == fsharp"
+        "when": "editorTextFocus && editorLangId == fsharp && sagefs:daemonRunning"
       },
       {
         "command": "sagefs.evalAllBlocks",
@@ -331,12 +331,12 @@
       {
         "command": "sagefs.nextFailingTest",
         "key": "alt+shift+]",
-        "when": "sagefs:daemonRunning"
+        "when": "sagefs:daemonRunning && sagefs:hasSession"
       },
       {
         "command": "sagefs.prevFailingTest",
         "key": "alt+shift+[",
-        "when": "sagefs:daemonRunning"
+        "when": "sagefs:daemonRunning && sagefs:hasSession"
       }
     ],
     "configuration": {
@@ -462,23 +462,23 @@
       "commandPalette": [
         {
           "command": "sagefs.eval",
-          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+          "when": "editorLangId == fsharp"
         },
         {
           "command": "sagefs.evalFile",
-          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+          "when": "editorLangId == fsharp"
         },
         {
           "command": "sagefs.evalRange",
-          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+          "when": "editorLangId == fsharp"
         },
         {
           "command": "sagefs.evalAdvance",
-          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+          "when": "editorLangId == fsharp"
         },
         {
           "command": "sagefs.evalAllBlocks",
-          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+          "when": "editorLangId == fsharp"
         },
         {
           "command": "sagefs.cancelEval",
@@ -486,7 +486,7 @@
         },
         {
           "command": "sagefs.loadScript",
-          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+          "when": "editorLangId == fsharp"
         },
         {
           "command": "sagefs.nextBlock",

@@ -269,6 +269,70 @@ let tests =
       |> Set.filter (isBound >> not)
       |> Expect.isEmpty "a keyboard shortcut that IS bound stays clean"
 
+    // WHY — roast-5 finding 10: the palette hid Evaluate unless the daemon ran, while Alt+Enter had no such
+    // gate and its handler offers "Start SageFs"; `nextFailingTest` had the keybinding on the daemon alone and
+    // the palette entry on daemon and session. A command must not be offered by one route and refused by another.
+    testCase "WHY - a keybinding is gated on every sagefs: key its palette entry is gated on, because the two disagreed" <| fun _ ->
+      let whenOf (el: JsonElement) = el |> tryProp "when" |> Option.map (fun p -> p.GetString()) |> Option.defaultValue ""
+      let sagefsKeys (clause: string) =
+        Regex.Matches(clause, @"sagefs:[A-Za-z]+") |> Seq.map (fun m -> m.Value) |> Set.ofSeq
+      let paletteWhen =
+        contributes
+        |> tryProp "menus"
+        |> Option.bind (tryProp "commandPalette")
+        |> Option.map (fun p ->
+          p.EnumerateArray()
+          |> Seq.choose (fun e -> e |> tryProp "command" |> Option.map (fun c -> c.GetString(), whenOf e))
+          |> Map.ofSeq)
+        |> Option.defaultValue Map.empty
+      paletteWhen.Count > 10 |> Expect.isTrue "palette entries were found"
+      let disagreements =
+        keybindingEntries
+        |> List.choose (fun e ->
+          let command = e |> tryProp "command" |> Option.map (fun p -> p.GetString()) |> Option.defaultValue ""
+          match Map.tryFind command paletteWhen with
+          | None -> None
+          | Some palette ->
+            let missing = Set.difference (sagefsKeys palette) (sagefsKeys (whenOf e))
+            match Set.isEmpty missing with
+            | true -> None
+            | false -> Some (sprintf "%s: palette needs %s, keybinding does not" command (String.concat ", " missing)))
+      disagreements |> Expect.isEmpty (sprintf "keybinding and palette disagree: %s" (String.concat "; " disagreements))
+
+    testCase "WHY - the eval commands are offered in the palette with the daemon down, because their handler offers Start SageFs" <| fun _ ->
+      let paletteWhen command =
+        contributes
+        |> tryProp "menus"
+        |> Option.bind (tryProp "commandPalette")
+        |> Option.bind (fun p ->
+          p.EnumerateArray()
+          |> Seq.tryFind (fun e -> (e |> tryProp "command" |> Option.map (fun c -> c.GetString())) = Some command)
+          |> Option.bind (tryProp "when")
+          |> Option.map (fun w -> w.GetString()))
+      for command in [ "sagefs.eval"; "sagefs.evalFile"; "sagefs.evalRange"; "sagefs.evalAdvance"; "sagefs.evalAllBlocks"; "sagefs.loadScript" ] do
+        paletteWhen command
+        |> Expect.equal (sprintf "%s gate" command) (Some "editorLangId == fsharp")
+
+    // A `when` naming a key nothing sets hides the command forever, silently.
+    testCase "WHY - every sagefs: context key a when clause names is set by the extension" <| fun _ ->
+      let rec whenClauses (el: JsonElement) : string list =
+        match el.ValueKind with
+        | JsonValueKind.Object ->
+          [ for p in el.EnumerateObject() do
+              match p.Name, p.Value.ValueKind with
+              | "when", JsonValueKind.String -> yield p.Value.GetString()
+              | _ -> yield! whenClauses p.Value ]
+        | JsonValueKind.Array -> [ for v in el.EnumerateArray() do yield! whenClauses v ]
+        | _ -> []
+      let used =
+        whenClauses contributes
+        |> List.collect (fun w -> Regex.Matches(w, @"sagefs:[A-Za-z]+") |> Seq.map (fun m -> m.Value) |> List.ofSeq)
+        |> Set.ofList
+      used.Count >= 4 |> Expect.isTrue "when clauses with sagefs: keys were found"
+      let allSource = sourceFiles |> Array.map snd |> String.concat "\n"
+      let unset = used |> Set.filter (fun k -> not (allSource.Contains (sprintf "\"%s\"" k))) |> Set.toArray
+      unset |> Expect.isEmpty (sprintf "context keys named in a when clause and set nowhere: %s" (String.concat ", " unset))
+
     testCase "WHY - the eval keystroke is bound exactly as onboarding says, in both onboarding sources" <| fun _ ->
       // Pins the specific reconciliation: both sources must name the SAME key,
       // and it must be the one bound to sagefs.eval.
