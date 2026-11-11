@@ -849,10 +849,17 @@ module Cohort =
     | Blank
     | TooLong of max: int
 
+  /// Why a caller is not a present member: the state has no record of it, or it departed at `since` (it left, or its
+  /// lease lapsed). The owner turns `NeverJoined` into `DepartedAt` when its ledger shows the member purged.
+  [<RequireQualifiedAccess>]
+  type MemberAbsence =
+    | NeverJoined
+    | DepartedAt of since: DateTime
+
   [<RequireQualifiedAccess>]
   type CohortError<'m> =
     | DuplicateJoin of 'm
-    | MemberNotPresent of 'm
+    | MemberNotPresent of 'm * MemberAbsence
     | ClaimConflict of ClaimScope * holder: 'm
     | NotClaimHolder of ClaimId * requester: 'm
     | UnknownClaim of ClaimId
@@ -868,21 +875,14 @@ module Cohort =
     | NotLandingRequester of LandingId * 'm
     | LandingNotAtFrontOfQueue of LandingId
     | LandingNotInExpectedState of LandingId * expected: string
-    /// A conductor-only command (`ReassignClaim`, `DelegateConductor`,
-    /// `SetIntegrationHead`, `ResolveVeto`) was issued by a member whose
-    /// `Authority.present` is not `Conductor _` (§4.2) — because the seat IS
-    /// filled and the caller is simply not its holder.
+    /// A conductor-only command (`ReassignClaim`, `DelegateConductor`, `SetIntegrationHead`, `ResolveVeto`) was issued
+    /// by a member whose `Authority.present` is not `Conductor _` (§4.2): the seat IS filled and the caller is not its holder.
     | NotConductor of 'm
-    /// ...and the other refusal, which is a different thing entirely: the seat
-    /// is EMPTY. `former` names the last holder (`None` when nobody ever held
-    /// it — `why = NeverBound`), `since` when it emptied (the arrival time of
-    /// the refused command for a never-bound cohort), `why` why. Distinct from `NotConductor` because
-    /// it implies a different user action: `NotConductor` is "the conductor can
-    /// do it for you", `ConductorVacant` is "NOBODY can — a human has to
-    /// appoint a conductor first". `delegate_conductor` exists now, but only a
-    /// SITTING conductor can issue it, so it cannot fill an empty seat; there is
-    /// no auto-promotion to lean on either: a vacancy is a typed state a
-    /// person fills.
+    /// ...and the other refusal: the seat is EMPTY. `former` names the last holder (`None` when nobody ever held it,
+    /// `why = NeverBound`), `since` when it emptied (the refused command's arrival for a never-bound cohort), `why` why.
+    /// `NotConductor` is "the conductor can do it for you"; `ConductorVacant` is "NOBODY can, a person appoints a
+    /// conductor first". `delegate_conductor` needs a SITTING conductor, and nothing is auto-promoted: a vacancy is a
+    /// typed state a person fills.
     | ConductorVacant of former: 'm option * since: DateTime * why: VacancyReason
     /// `DelegateConductor` named a member who is not present, so the seat would have gone to nobody. Carries the
     /// roster of members who ARE present, so the refusal says who the conductor can pick instead.
@@ -908,17 +908,9 @@ module Cohort =
     | InvalidVetoReason of VetoReasonRefusal
     /// The landing is already vetoed, by `by`. The first veto and its reason stand; a second does not overwrite them.
     | LandingAlreadyVetoed of LandingId * by: 'm
-    /// The command names a cohort this one is NOT — `requested` is the scope the
-    /// caller arrived with, `cohort` is the scope this state was opened at. This
-    /// is the refusal that keeps a member from acting on a cohort it is not in:
-    /// without it, a cross-scope command that did not happen to hit a
-    /// `MemberNotPresent` would apply silently to the wrong cohort's claims.
-    ///
-    /// WHY IT IS NAMED, NOT AN UNTYPED STRING RESULT. This repo counts DOWN on
-    /// untyped-string refusals because a bare string says nothing about
-    /// which of the twenty-odd refusals it was; a typed DU case makes every
-    /// refusal a site the compiler forces you to handle, and carries both scopes
-    /// so the message can name WHICH scope the caller actually reached.
+    /// The command names a cohort this one is NOT: `requested` is the scope the caller arrived with, `cohort` the scope
+    /// this state was opened at. Without it, a cross-scope command that did not happen to hit a `MemberNotPresent` would
+    /// apply silently to the wrong cohort's claims. Typed, with both scopes, so the message names the scope reached.
     | WrongCohortScope of requested: CohortScope * cohort: CohortScope
     /// The owner shell's own step threw while applying the command (the ledger append, the frame projection), so the
     /// command was NOT applied. `decide` never returns this: it is the shell answering a caller that would otherwise
@@ -927,6 +919,9 @@ module Cohort =
     /// The owner did not answer within `waited`: it is stuck in a step that never returns. The command may or may not
     /// have been applied; the caller reads the cohort again before acting. Shell-only, like `OwnerStepFailed`.
     | OwnerUnresponsive of waited: TimeSpan
+    /// Shell-only: `UnknownClaim`/`UnknownLanding` for an id the ledger shows was pruned by `Retention.sweep`.
+    | PrunedClaim of ClaimId * ClaimPruneReason
+    | PrunedLanding of LandingId * settledAt: DateTime
 
   /// WHICH cohort a command addresses — the one exhaustive place the scope field
   /// is read off a command.
@@ -1012,6 +1007,13 @@ module Cohort =
     | Some { Presence = MemberPresence.Departed _ } -> false
     | None -> false
 
+  /// The refusal for a caller that `isPresent` said is not here, with what the state knows about why.
+  let private notPresent (state: CohortState<'m>) (who: 'm) : CohortError<'m> =
+    match Map.tryFind who state.Members with
+    | Some { Presence = MemberPresence.Departed since } -> CohortError.MemberNotPresent(who, MemberAbsence.DepartedAt since)
+    | Some { Presence = MemberPresence.Present }
+    | None -> CohortError.MemberNotPresent(who, MemberAbsence.NeverJoined)
+
   /// Every `Held` claim of `who` becomes `Orphaned`, each with its own fence bump
   /// (property 3: fence is strictly increasing per claim id, not shared).
   let private orphanClaimsOf (who: 'm) (now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
@@ -1033,19 +1035,11 @@ module Cohort =
   let private departMember (why: VacancyReason) (who: 'm) (now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
     let record = state.Members.[who]
     let state1 = { state with Members = Map.add who { record with Presence = MemberPresence.Departed now } state.Members }
-    // THE ONLY SITE that moves `Bound m` to `Vacant` — and it does so in the
-    // same step that marks `m` Departed, which is what makes the
-    // `ConductorBinding` invariant ("`Bound m` implies `m` is Present")
-    // structural rather than a convention every future departure site has to
-    // remember. `why` is how the caller classifies the departure: `Depart` is a
-    // person walking away, the silent-member reaper in `Tick` is `LeaseLapsed`,
-    // and an explicit revocation is `Revoked`.
-    //
-    // Everything else is untouched — in particular there is NO auto-promotion:
-    // the seat stays empty until somebody fills it. Silently promoting the next
-    // member on a lease timeout is a machine granting itself the highest
-    // authority in the cohort with nobody in the loop, which is exactly the
-    // fail-open this whole change exists to close.
+    // THE ONLY SITE that moves `Bound m` to `Vacant`, in the same step that marks `m` Departed: that is what makes
+    // "`Bound m` implies `m` is Present" structural. `why` classifies the departure: `Depart` is a person walking
+    // away, the reaper in `Tick` is `LeaseLapsed`, a revocation is `Revoked`. There is NO auto-promotion: promoting
+    // the next member on a lease timeout is a machine granting itself the cohort's highest authority with nobody in
+    // the loop, the fail-open this exists to close.
     let state2 =
       match state1.Conductor with
       | ConductorBinding.Bound c when c = who -> { state1 with Conductor = ConductorBinding.Vacant(who, now, why) }
@@ -1364,7 +1358,7 @@ module Cohort =
       match checkScope scope with
       | Error e -> Error e
       | Ok () ->
-      if not (isPresent state who) then Error(CohortError.MemberNotPresent who)
+      if not (isPresent state who) then Error(notPresent state who)
       else
         let newState, events = departMember VacancyReason.ConductorLeft who clock state
         Ok(newState, events, [])
@@ -1378,7 +1372,7 @@ module Cohort =
         let newState = { state with Members = Map.add who { record with LastRenewal = clock } state.Members }
         Ok(newState, [ CohortEvent.LeaseRenewed who ], [])
       | Some { Presence = MemberPresence.Departed _ }
-      | None -> Error(CohortError.MemberNotPresent who)
+      | None -> Error(notPresent state who)
 
     | CohortCommand.Tick scope ->
       match checkScope scope with
@@ -1409,7 +1403,7 @@ module Cohort =
       match checkScope cohort with
       | Error e -> Error e
       | Ok () ->
-      if not (isPresent state who) then Error(CohortError.MemberNotPresent who)
+      if not (isPresent state who) then Error(notPresent state who)
       else
         match Purpose.tryCreate purposeRaw with
         | Error e -> Error(CohortError.InvalidPurpose e)
@@ -1474,7 +1468,7 @@ module Cohort =
         | Some claim ->
           match claim.State with
           | ClaimState.Orphaned _ ->
-            if not (isPresent state toMember) then Error(CohortError.MemberNotPresent toMember)
+            if not (isPresent state toMember) then Error(notPresent state toMember)
             else
               // Property 1: reactivating an Orphaned claim must not create a
               // second simultaneously-Held claim over an overlapping scope —
@@ -1635,7 +1629,7 @@ module Cohort =
       match checkScope scope with
       | Error e -> Error e
       | Ok () ->
-      if not (isPresent state requester) then Error(CohortError.MemberNotPresent requester)
+      if not (isPresent state requester) then Error(notPresent state requester)
       else
         match Statement.tryCreate statementRaw with
         | Error e -> Error(CohortError.InvalidStatement e)

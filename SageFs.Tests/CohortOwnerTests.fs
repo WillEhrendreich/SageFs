@@ -267,3 +267,59 @@ let cohortOwnerTests =
       warnings.ToArray() |> Expect.equal "nothing was dropped or diverged, so nothing was logged" [||]
     }
   ]
+
+/// A clock a test moves on: the retention sweep only drops what has aged past `settledRetention`.
+type private MovingClock(start: DateTime) =
+  let mutable now = start
+  member _.Read () = now
+  member _.Advance (by: TimeSpan) = now <- now + by
+
+[<Tests>]
+let prunedRefusalTests =
+  testList "a refusal about something the sweep dropped says when it went, from the ledger" [
+
+    testTask "WHY — a released claim, a withdrawn landing and a departed member are named as gone, with when, after the sweep" {
+      let ledger = InMemory.create<MemberId> ()
+      let clock = MovingClock epoch
+      use owner = CohortOwner.start silentLogger machine ledger clock.Read (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let commit cmd = task {
+        match! owner.Commit cmd with
+        | Ok(events, _) -> return events
+        | Error err -> return failtestf "%A was refused: %A" cmd err
+      }
+      let! _ = commit (CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+      let! _ = commit (CohortCommand.Join(bob, JoinableRole.Implementer, None, machine))
+      let! acquired = commit (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "edit A", machine))
+      let claimId, fence =
+        acquired |> List.pick (function CohortEvent.ClaimAcquired(cid, _, _, f) -> Some(cid, f) | _ -> None)
+      let! requested = commit (CohortCommand.RequestLanding(alice, [ claimId, fence ], [ "c1" ], "land A", machine))
+      let landingId = requested |> List.pick (function CohortEvent.LandingQueued(lid, _) -> Some lid | _ -> None)
+      let! _ = commit (CohortCommand.WithdrawLanding(alice, landingId, machine))
+      let! released = commit (CohortCommand.ReleaseClaim(alice, claimId, fence, machine))
+      let releasedFence = released |> List.pick (function CohortEvent.ClaimReleased(_, _, f) -> Some f | _ -> None)
+      let! _ = commit (CohortCommand.Depart(bob, machine))
+      clock.Advance(Cohort.settledRetention + TimeSpan.FromMinutes 1.)
+      let! _ = commit (CohortCommand.RenewLease(alice, machine))
+      let! swept = commit (CohortCommand.Tick machine)
+      swept |> List.exists (function CohortEvent.LandingPruned _ -> true | _ -> false) |> Expect.isTrue "the landing was swept"
+      let! claimAgain = owner.Commit(CohortCommand.ReleaseClaim(alice, claimId, releasedFence, machine))
+      match claimAgain with
+      | Error(CohortError.PrunedClaim(id, ClaimPruneReason.ReleasedPastRetention at)) ->
+        id |> Expect.equal "names the claim" claimId
+        at |> Expect.equal "says when it was released" epoch
+      | other -> failtestf "expected PrunedClaim, got %A" other
+      let! landingAgain = owner.Commit(CohortCommand.WithdrawLanding(alice, landingId, machine))
+      match landingAgain with
+      | Error(CohortError.PrunedLanding(id, at)) ->
+        id |> Expect.equal "names the landing" landingId
+        at |> Expect.equal "says when it settled" epoch
+      | other -> failtestf "expected PrunedLanding, got %A" other
+      let! bobAgain = owner.Commit(CohortCommand.AcquireClaim(bob, ClaimScope.File "src/B.fs", "edit B", machine))
+      bobAgain |> Expect.equal "bob was purged, and the ledger says when he left" (Error(CohortError.MemberNotPresent(bob, MemberAbsence.DepartedAt epoch)))
+    }
+
+    test "WHY — a refusal about something the ledger never pruned comes back as decide gave it" {
+      let err : CohortError<MemberId> = CohortError.UnknownLanding(LandingId "l-nope")
+      CohortOwner.explainFromLedger (fun () -> []) err |> Expect.equal "unknown stays unknown" err
+    }
+  ]

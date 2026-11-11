@@ -224,6 +224,13 @@ module McpCohortTools =
         let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r, sessionOpt, cohortScope))
         return
           result
+          // The core names the member; only the shell knows the agentName this call passed, which is what a sub-agent
+          // recognises as its own.
+          |> Result.mapError (fun err ->
+            match err with
+            | SageFsError.CohortRefused(CohortFailureKind.DuplicateJoin, reason, suggestion) ->
+              SageFsError.CohortRefused(CohortFailureKind.DuplicateJoin, sprintf "%s This call passed agentName '%s'." reason agentName, suggestion)
+            | other -> other)
           |> Result.map (fun (events, _) ->
             let becameConductor = events |> List.exists (function Cohort.CohortEvent.ConductorBound _ -> true | _ -> false)
             let sessionNote =

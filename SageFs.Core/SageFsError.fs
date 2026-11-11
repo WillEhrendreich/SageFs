@@ -101,6 +101,8 @@ type CohortFailureKind =
   | WrongCohortScope
   | OwnerStepFailed
   | OwnerUnresponsive
+  | PrunedClaim
+  | PrunedLanding
 
 module CohortFailureKind =
   /// The kind of a cohort refusal. One exhaustive match, so a new `CohortError` case cannot compile without a kind.
@@ -136,6 +138,8 @@ module CohortFailureKind =
     | Cohort.CohortError.WrongCohortScope _ -> CohortFailureKind.WrongCohortScope
     | Cohort.CohortError.OwnerStepFailed _ -> CohortFailureKind.OwnerStepFailed
     | Cohort.CohortError.OwnerUnresponsive _ -> CohortFailureKind.OwnerUnresponsive
+    | Cohort.CohortError.PrunedClaim _ -> CohortFailureKind.PrunedClaim
+    | Cohort.CohortError.PrunedLanding _ -> CohortFailureKind.PrunedLanding
 
   /// The kind's name on the wire (`fields.kind`).
   let label (kind: CohortFailureKind) : string =
@@ -170,6 +174,8 @@ module CohortFailureKind =
     | CohortFailureKind.WrongCohortScope -> "WrongCohortScope"
     | CohortFailureKind.OwnerStepFailed -> "OwnerStepFailed"
     | CohortFailureKind.OwnerUnresponsive -> "OwnerUnresponsive"
+    | CohortFailureKind.PrunedClaim -> "PrunedClaim"
+    | CohortFailureKind.PrunedLanding -> "PrunedLanding"
 
 /// Unified error type for the entire SageFs system.
 /// Every Result<..., SageFsError> across all layers uses this single DU.

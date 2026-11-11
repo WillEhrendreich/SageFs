@@ -218,3 +218,49 @@ let claimToolTests =
       text |> Expect.stringContains "says the lease is renewed" "renewed"
     }
   ]
+
+[<Tests>]
+let refusalTextTests =
+  testList "a cohort refusal says what happened, from the facts the cohort holds" [
+
+    testTask "WHY — a second join names the agentName, says sub-agents on one connection are one member, and points to mint_member" {
+      let! ctx, _ = scene ()
+      let! again = McpCohortTools.joinCohort ctx "bob" "Implementer" wd
+      let text = refused "a second join" again
+      text |> Expect.stringContains "names the agentName passed" "agentName 'bob'"
+      text |> Expect.stringContains "says sub-agents share the member" "Sub-agents"
+      text |> Expect.stringContains "points to a token of its own" "mint_member"
+    }
+
+    testTask "WHY — a member that left is told when, and that its claims were orphaned, and one that never joined is told to join" {
+      let! ctx, _ = scene ()
+      let! _ = McpCohortTools.leaveCohort ctx "bob" wd
+      let! afterLeaving = McpCohortTools.acquireClaim ctx "bob" "file:src/B.fs" "edit B" wd
+      let left = refused "a claim by a member that left" afterLeaving
+      left |> Expect.stringContains "says it left, and when" "left this cohort at"
+      left |> Expect.stringContains "says what leaving cost" "orphaned"
+      let! stranger = McpCohortTools.acquireClaim ctx "zed" "file:src/Z.fs" "edit Z" wd
+      refused "a claim by a stranger" stranger |> Expect.stringContains "says it never joined" "has not joined"
+    }
+
+    test "WHY — a stale fence says the claim moved on and how to take the scope again, with no advice to retry the fence" {
+      let text =
+        match CohortErrorMapping.toSageFsError (Cohort.CohortError.StaleClaimFence(ClaimId "c-1", 1L<Measures.fence>, 2L<Measures.fence>)) with
+        | SageFsError.CohortRefused(CohortFailureKind.StaleClaimFence, reason, suggestion) -> reason + " " + suggestion
+        | other -> failtestf "expected CohortRefused(StaleClaimFence), got %A" other
+      text |> Expect.stringContains "says it was released, cleared or handed on" "released, cleared"
+      text |> Expect.stringContains "says where to see the holder" "get_cohort_status"
+      text |> Expect.stringContains "says how to take the scope" "acquire_claim"
+      text.Contains "retry with" |> Expect.isFalse "a fence that moved on is never right again"
+    }
+
+    test "WHY — a pruned claim and a pruned landing say they finished and when, never that they do not exist" {
+      let at = DateTime(2026, 11, 11, 1, 0, 0, DateTimeKind.Utc)
+      for err in [ Cohort.CohortError.PrunedClaim(ClaimId "c-1", ClaimPruneReason.ReleasedPastRetention at); Cohort.CohortError.PrunedLanding(LandingId "l-1", at) ] do
+        match CohortErrorMapping.toSageFsError err with
+        | SageFsError.CohortRefused(_, reason, _) ->
+          reason |> Expect.stringContains "says when" "2026-11-11 01:00:00Z"
+          reason.Contains "exist" |> Expect.isFalse "it existed"
+        | other -> failtestf "expected CohortRefused, got %A" other
+    }
+  ]

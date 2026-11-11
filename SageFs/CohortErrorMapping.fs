@@ -38,12 +38,20 @@ module CohortErrorMapping =
         "This is not a permission problem and no amount of retrying will clear it. Run get_cohort_status: if it names a different scope than the one you are working in, you are addressing a different cohort and need to join THAT one. A conductor seat belongs to the scope it was taken in."
     | Cohort.CohortError.DuplicateJoin who ->
       failed
-        (sprintf "%s is already a member of this cohort." (mid who))
-        "Run get_cohort_status to see your current role; there is no need to join again."
-    | Cohort.CohortError.MemberNotPresent who ->
+        (sprintf "%s is already a member of this cohort. Sub-agents that share one MCP connection are one member, whatever agentName each passes." (mid who))
+        "If you are a sub-agent of the agent that joined, you already act as that member: do not join or leave for it. For a member of your own, ask the conductor to mint_member a token for you. Otherwise get_cohort_status shows your role."
+    | Cohort.CohortError.MemberNotPresent(who, Cohort.MemberAbsence.NeverJoined) ->
       failed
-        (sprintf "%s is not a present member of this cohort." (mid who))
-        "Run join_cohort before acting in the cohort."
+        (sprintf "%s has not joined this cohort." (mid who))
+        "Call join_cohort with the same working_directory you pass here, then repeat the call."
+    | Cohort.CohortError.MemberNotPresent(who, Cohort.MemberAbsence.DepartedAt since) ->
+      failed
+        (sprintf
+          "%s left this cohort at %s: it called leave_cohort, or its lease lapsed after %d minutes with no call. Every claim it held was orphaned then, and a conductor seat it held went vacant."
+          (mid who)
+          (since.ToString "u")
+          (int Cohort.leaseWindow.TotalMinutes))
+        "Call join_cohort again with the same working_directory. get_cohort_status then lists any claim still orphaned under your name: the conductor hands it back with reassign_claim, or clears it so you can acquire_claim the scope again."
     | Cohort.CohortError.ClaimConflict(scope, holder) ->
       failed
         (sprintf "The scope %s is already claimed by %s." (scopeStr scope) (mid holder))
@@ -87,8 +95,12 @@ module CohortErrorMapping =
         "Retry the acquire; claim ids are minted per acquire_claim."
     | Cohort.CohortError.StaleClaimFence(Cohort.ClaimId cid, presented, current) ->
       failed
-        (sprintf "Your fence for claim %s is stale — you presented %d but the current fence is %d." cid (int64 presented) (int64 current))
-        "Re-read get_cohort_status and retry with the claim's current fence."
+        (sprintf
+          "Claim %s has moved on since your fence %d: its fence is now %d, so it was released, cleared by the conductor or handed to another member, and it is no longer yours to release."
+          cid
+          (int64 presented)
+          (int64 current))
+        "Run get_cohort_status: it shows who holds the scope now. If nobody does, acquire_claim it again and use the new claim's fence."
     | Cohort.CohortError.InvalidPurpose reason ->
       failed
         (sprintf "The claim purpose is invalid: %s" reason)
@@ -212,6 +224,25 @@ module CohortErrorMapping =
       failed
         (sprintf "The cohort owner did not answer within %.0f seconds, so this command may or may not have been applied." waited.TotalSeconds)
         "Run get_cohort_status before you repeat the command, so you do not claim a scope or request a landing twice. If get_cohort_status does not answer either, tell the person who runs the daemon: the cohort owner is stuck in a step that never returns."
+    | Cohort.CohortError.PrunedClaim(Cohort.ClaimId cid, why) ->
+      let window = int Cohort.settledRetention.TotalMinutes
+      failed
+        (match why with
+         | Cohort.ClaimPruneReason.ReleasedPastRetention at ->
+           sprintf "Claim %s was released at %s and dropped from the cohort %d minutes later, so there is nothing left to act on." cid (at.ToString "u") window
+         | Cohort.ClaimPruneReason.OrphanedPastRetention since ->
+           sprintf "Claim %s was orphaned at %s (its holder left) and dropped from the cohort %d minutes later." cid (since.ToString "u") window
+         | Cohort.ClaimPruneReason.SupersededBy(Cohort.ClaimId newer) ->
+           sprintf "Claim %s was orphaned and then dropped, because claim %s over the same scope replaced it." cid newer)
+        "Run get_cohort_status for the claims that exist now. To work on the scope, acquire_claim it and use the new claim's id and fence."
+    | Cohort.CohortError.PrunedLanding(Cohort.LandingId lid, settledAt) ->
+      failed
+        (sprintf
+          "Landing %s finished at %s and was dropped from the cohort %d minutes later; nothing is pending on it."
+          lid
+          (settledAt.ToString "u")
+          (int Cohort.settledRetention.TotalMinutes))
+        "get_cohort_status shows what the trunk did with recent landings. For more work, request_landing a new one."
 
   // ── Member tokens (Capability.fs) ───────────────────────────────────────
 

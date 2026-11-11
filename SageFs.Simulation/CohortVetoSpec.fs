@@ -575,7 +575,7 @@ module CohortVetoSpec =
   let faultRosterOmitted : Decide =
     fun clk ent state command ->
       match Cohort.decide clk ent state command with
-      | Error(CohortError.DelegateTargetAbsent(target, _)) -> Error(CohortError.MemberNotPresent target)
+      | Error(CohortError.DelegateTargetAbsent(target, _)) -> Error(CohortError.MemberNotPresent(target, MemberAbsence.NeverJoined))
       | outcome -> outcome
 
   /// Each twin with the rule it exists to be caught by.
