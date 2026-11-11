@@ -65,7 +65,7 @@ let tests =
 
     testCase "WHY — the timing toggle is named by its word and says whether the detail is open" <| fun _ ->
       let html =
-        renderEvalStats { Count = 3; AvgMs = 1.0; MinMs = 1.0; MaxMs = 2.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+        renderEvalStats FixtureStats.threeQuickEvals
         |> renderNode
       html |> Expect.stringContains "the name opens with the word on the button" (sprintf "aria-label=\"%s\"" timingButtonName)
       timingButtonName.StartsWith "Timing" |> Expect.isTrue "the name starts with the visible word"
