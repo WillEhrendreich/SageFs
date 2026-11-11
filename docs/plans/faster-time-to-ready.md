@@ -2,6 +2,61 @@
 
 Roadmap item: `faster-time-to-ready` (Exploring, REPL). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read at that commit; the "What exists today" section below still carries the 59a8692c numbers (`createFsiSession` was at 719 then and is at 673 now, and so on).
+
+### 1. Outcome
+
+First deliverable: a stage table that says where create-to-Ready goes on a big solution, from numbers the product reports itself. The roadmap sentence "opening namespaces is 60 to 90 percent" is an estimate from before anything was measured (`docs/fsi warmup.md:47`, `docs/warmup-design-next.md:14-16` say so; `docs/plans/README.md:189` lists it as resting on a cumulative clock). Second deliverable, only after the table: a speedup aimed at the largest stage, with nothing a user can observe about the ready session changed (same names in scope, same `FailedOpens`). Gate for any change to how names are opened: a host-tier scope-equivalence test (the matrix in "What done looks like"). Speed is recorded in `docs/repl-loop-benchmarks.md` with the commit and machine, never asserted in a test. Linux desktop only; a slower machine is `scripts/machine-bench-tiers.fsx`'s job.
+
+### 2. Where the code is today
+
+The path. `createFsiSession` at `SageFs.Core/AppState.fs:673`; one `Stopwatch` `sw` at 676 that is never restarted. Then: FSI create (log "FSI session created in %dms" at 730, cumulative); embedded `base.fsx` 733-754; `resolveWarmupReplayPlan` call 775 (defined 376; `discoverWarmupReplayPlan` 403); `scanPhaseMs = sw.ElapsedMilliseconds` 790; `assemblyPhaseMs` 793, three lines later, so the "asm" phase is about zero; the opens `WarmUp.openWithRetryRichBatched 5 WarmUp.DefaultOpenBatchSize` at 875 (batch size 8, `WarmUp.fs:196`), with its own `openSw` at 821 and 853; `openPhaseMs` 879; the log "Opened %d/%d namespaces/modules in %dms" at 882 prints the cumulative `sw`; the milestones record at 934; "Warm-up complete in %dms (scan=%dms, asm=%dms, open=%dms)" at 936; the two operator restores at 948-949, after the total.
+
+The numbers. `WarmupPhaseTiming` is `SageFs.Core/WarmUp.fs:151-154`. `WarmupMilestones` (`ScanDoneMs`, `AssembliesDoneMs`, `OpensDoneMs`, cumulative) is `SageFs.Core/WarmupContext.fs:42-46`, turned into phases by `phaseTimingFromMilestones` at 52-57: `ScanSourceFilesMs = ScanDoneMs`, so it contains FSI create, `base.fsx`, startup files and the plan. `TotalMs = OpensDoneMs`. The same numbers go out as `phaseTiming` in `SageFs/SseEvent.fs:148-156`, on the dashboard as "Scan source files" and "Scan assemblies" and "Open namespaces" at `SageFs/DashboardFragments.fs:3991-3993`, in MCP text at `SageFs/McpAdapter.fs:247`, and over `GET /api/sessions/{sid}/warmup-context` (`SageFs.Core/EndpointContracts.fs:59`, proxied at `SageFs/DaemonMode.fs:1112`). `SageFs.Tests/TestTimeouts.fs:1016` has a fixture builder for the record.
+
+The bench. `scripts/machine-bench.fsx` (816 lines) reads those log lines by regex (597-625: "Creating FSI session", "FSI session created in", "Warm-up complete in") and adds `daemon_up`, `create_request`, `worker_boot`, `project_load`, `host_prep`, `ready_total` (rows named at 725-732). Its fixture is a two-project solution it writes itself (245-316). There is no `--fixture-dir`. `SageFs.Core/FsiHostBuild.fs:6` says a cold host build is 7 to 11 s. `MachineProfile.fs:185-186` says `WorkerReady` includes test discovery.
+
+Sibling. `sessions-learn-the-load-order` is stopped (its plan: "the premise was not borne out", 2026-11-07). The references below to it landing or waiting are stale: the eval counter (test 3) is added here or not at all.
+
+Tests. `WarmupContextTests.fs` (fsproj line 452) has no stage test; `WarmupBatchedOpenTests.fs` (459) has three cases; `WarmupSimTests.fs` (189); `WarmupOutcomeIntegrationTests.fs` (205, `Integration.hostList`). `Mono.Cecil` is already a Core reference (`SageFs.Core.fsproj:769`), so option C adds no package.
+
+### 3. Steps
+
+0. Measure with what exists, no code. (a) `dotnet fsi scripts/machine-bench.fsx --sagefs <dir holding SageFs.dll> --runs 5 --cold-runs 3 --out /tmp/bench-small.json` for the small fixture: that gives every stage outside the FSI host. (b) For a big solution, `create_solution_session` on `~/Work/SageTech` through MCP, then `get_session_status` until Ready and note the wall time; `curl http://localhost:37749/api/sessions/<sid>/warmup-context` and read `phaseTiming`, remembering `scanSourceFilesMs` is cumulative to the plan; and read the worker's log for the four cumulative lines (730, 789, 792, 936) and subtract: FSI create = line 730; base plus startup plus plan = 789 minus 730; opens = `open=`. Where the worker log lands on disk is `[not verified]`; `get_daemon_status` and the dashboard session page show it. Write the table into this plan under "Measure first" with the date. If opens are under 40 percent of Ready on SageTech, the item's premise changes and step 5 aims elsewhere.
+1. RED in `SageFs.Tests/WarmupContextTests.fs`: "WHY - the plan segment excludes FSI creation" with marks (created 4000, base 4100, plan 4200, opens 9000, post 9100) expecting `FsiCreateMs = 4000`, `PlanMs = 100`, `OpensMs = 4800`, and the property that stages sum to the last mark. It fails because `WarmupMilestones` has three fields. Then `WarmupStageTimes` (the record in "Design") beside the old fields in `WarmupContext.fs:42-57`, marks in `AppState.fs` at 730, 754, 790, 879 and after 949, the cumulative log at 882 corrected, and the new fields added to `SseEvent.fs:148`, `McpAdapter.fs:247`, `DashboardFragments.fs:3991`. Domain (the builder) plus edge (the marks). Additive wire, `apiVersion` stays 4, trailer `Plugin: n/a, added fields on warmup-context that no editor reads`; `docs/sse-events.md` gets the fields.
+2. Docs: retract the 60 to 90 claim in `docs/fsi warmup.md:47` and `docs/warmup-design-next.md:14-16`, note R2R is partly done (`SageFs.Host/ReadyToRun.targets`), and that `open WarmupPrecompiled` cannot work as written. Parallel with 3.
+3. `scripts/machine-bench.fsx`: `--fixture-dir <path>` (skip `writeFixture` and `buildFixture` when given) and rows from `warmup-context` instead of the regexes. Glue only; the logic stays in the product.
+4. M1 to M7 on the desktop, results into `docs/repl-loop-benchmarks.md` with the commit.
+5. DECISION with Will from the table, then one option at a time, each with its own RED test and sim invariant as "Tests" says. A (`OpenBatching.fs`, pure) and B (`AppState.fs` create region) are file-disjoint and can run together.
+
+### 4. How to check it
+
+- Inner loop: a SageFs session on `SageFs.Tests`; the builder is pure, so `send_fsharp_code` the marks and read the record.
+- `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Filtered: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary --filter-test-list "WarmupContext"`.
+- Acceptance: unfiltered `--summary` on net11 and the net10 lane (the SSE payload is JSON, so both frameworks matter); `--integration-host --summary` for the scope-equivalence gate when an option lands.
+
+### 5. Traps in this repo
+
+- `TimeoutLiteralsTests`: stopwatch marks are not durations, but the test's fixture marks are `int64` literals; put them in `TestTimeouts.fs` next to the existing warmup fixture (line 1016).
+- `JsonCentralizationTests`: `SseEvent.fs` writes through the shared profile; do not build options.
+- Logic in projects, not scripts: `machine-bench.fsx` stays glue.
+- `DashboardTypes.fs` is on the `Plugin:` trailer list; the label edit is in `DashboardFragments.fs`, not there.
+- No wall-clock assertions. The host cases wait on Ready through the existing ready-wait path.
+- Do not run `dotnet restore -p:TargetFramework=net10.0` in the tree (AGENTS.md).
+
+### 6. Size and order
+
+Steps 0 to 4: S, two to four days, most of it running the benchmarks. The first option after that is S to M. Step 0 is the first thing to do and needs no commit; the first commit is step 1.
+
+### 7. Not now
+
+- Option C (`AutoOpen` assembly) and D (first-run crossgen2 for the published tool) until M4 and M5 point at them; both are M to L and C has a user-visible failure mode.
+- Opening in the background after Ready: rejected. Ready means the namespaces are open.
+- The learned open order: stopped on measurement; its branch is `archive/2026-11-07/rescue-load-order`.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -79,7 +134,7 @@ Wire and client impact beyond Phase 0: none for A, B, C, D. Token cost: no MCP t
 RED first.
 1. `WarmupContextTests.fs`: "the plan segment excludes FSI creation": call the new builder with marks (created 4000 ms, base 4100, plan 4200, opens 9000, post 9100) and expect `FsiCreateMs = 4000`, `PlanMs = 100`, `OpensMs = 4800`, `ScanSourceFilesMs = PlanMs`. It fails today because `completeWarmup` has no such inputs.
 2. Same file, property: for any non-decreasing marks, every stage is non-negative and the stages sum to the last mark minus the first.
-3. `WarmupBatchedOpenTests.fs`: "OpenEvals counts batch and single evals" (extends the traced result from the sibling plan `sessions-learn-the-load-order`; if that has not landed, add the counter here and let it rebase).
+3. `WarmupBatchedOpenTests.fs`: "OpenEvals counts batch and single evals". The counter is added here: the sibling plan `sessions-learn-the-load-order` was stopped on 2026-11-07 and its code stays on an archive branch.
 4. Phase 2, per option, RED before code. A: "a failing name inside a chunk of 32 costs at most ceil(log2 32) + 1 extra evals and is reported with its own diagnostics". B: "plan resolution starts before the FSI create completes" asserted on an event order log from fakes. C: scope-equivalence cells of the outcome gate; "an AutoOpen DLL with a missing namespace reports the name that failed".
 5. Property tests over a pure `OpenBatching.plan` (names, per-interaction cost model in, chunk list out): chunks are a partition of the names in order; chunk count never exceeds `ceil(N / minChunk)`; progress points between chunks never leave a silent gap larger than the tier's allowance.
 
@@ -91,7 +146,7 @@ No wall-clock waits in tests: host cases wait for the session's Ready transition
 
 ## Steps
 
-1. RED tests 1 and 2, then `WarmupStageTimes` and the call-site changes in `AppState.fs` (stopwatch marks around create, base, plan, opens, post) and the cumulative-time log line fix. Owns `WarmupContext.fs`, `WarmUp.fs` (the record), the warmup region of `AppState.fs`, `SseEvent.fs`, `McpAdapter.fs`, `DashboardFragments.fs` (labels). Lands first; `sessions-learn-the-load-order` waits for it.
+1. RED tests 1 and 2, then `WarmupStageTimes` and the call-site changes in `AppState.fs` (stopwatch marks around create, base, plan, opens, post) and the cumulative-time log line fix. Owns `WarmupContext.fs`, `WarmUp.fs` (the record), the warmup region of `AppState.fs`, `SseEvent.fs`, `McpAdapter.fs`, `DashboardFragments.fs` (labels). Lands first.
 2. Update `docs/fsi warmup.md` and `docs/warmup-design-next.md` status notes: R2R partly done, opens-share claim retracted until M2, the `open WarmupPrecompiled` design cannot work as written. Docs only; parallel with 3.
 3. `machine-bench.fsx`: `--fixture-dir`, rows from `warmup-context`. Owns only that script. Parallel with 2.
 4. Run the experiments M1 to M7 below. Output: a results table in the PR and a short "where the time goes" section in `docs/repl-loop-benchmarks.md`.
