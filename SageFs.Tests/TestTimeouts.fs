@@ -206,15 +206,15 @@ module TestTimeouts =
   /// second (a type-check and an eval), so this is several times that; only a restore that changes nothing
   /// ever waits it out.
   let liveTestingRestoreProbe = secs 5.
-  /// Regression bound on the 95th percentile of keystroke-to-verdict. First measurement: p95 742ms over
-  /// 20 edits on a 16-thread Ryzen 7 5800XT, Linux, a daemon owned by the runner and other jobs running
-  /// on the same machine. The bound is about four times that, because a cold or shared CI runner is slower
-  /// and a gate that flakes gets deleted; it still fails on the regressions that matter, which cost whole
-  /// seconds (a build or a worker restart on the keystroke path).
-  let liveTestingKeystrokeP95Bound = secs 3.
-  /// Regression bound on the 95th percentile of save-to-green. First measurement: p95 709ms over 20 saves
-  /// on the same machine and in the same conditions. Four times that, for the same reason.
-  let liveTestingSaveToGreenP95Bound = secs 3.
+  /// Regression bound on the 95th percentile of keystroke-to-verdict: about twice the worst p95 the release
+  /// gate has recorded. Its `integration-lt` logs under ~/.local/share/sagefs-gate/*.tiers/ hold three runs,
+  /// each 20 edits on a 16-thread Ryzen 7 5800XT, Linux, with other jobs on the machine: p95 884ms
+  /// (checkout-41322401, 2026-10-04), 657ms (2026-11-08) and 667ms (checkout-8431b56a, 2026-11-10). The old
+  /// bound was 3 s, so a threefold slowdown passed. Twice the worst still leaves room for the slowest run seen.
+  let liveTestingKeystrokeP95Bound = secs 1.8
+  /// Regression bound on the 95th percentile of save-to-green: about twice the worst recorded p95, from the
+  /// same logs: 750ms (2026-10-04), 429ms (2026-11-08) and 460ms (2026-11-10).
+  let liveTestingSaveToGreenP95Bound = secs 1.5
   /// Regression bound on the 95th percentile of hot reload save-to-served (a patched save: the first byte
   /// of the write to the first response carrying the new body, polled every `pollTight`). Measured: p95 298
   /// to 353ms over eight runs of 20 saves each (372ms with eight busy loops beside it) on a 16-thread Ryzen
