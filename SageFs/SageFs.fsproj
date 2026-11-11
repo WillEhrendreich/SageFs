@@ -155,6 +155,8 @@
         <Compile Include="DashboardNewSession.fs" />
         <Compile Include="CohortInspector.fs" />
         <Compile Include="SettingsPanel.fs" />
+        <!-- Before Dashboard: the pure decisions and sentences its page-level handlers use (an Evaluate refusal, the landing fallback, the shell's inputs). -->
+        <Compile Include="DashboardRequests.fs" />
         <Compile Include="Dashboard.fs" />
         <Compile Include="McpPushNotifications.fs" />
         <Compile Include="McpStateHandlers.fs" />
@@ -164,6 +166,7 @@
         <Compile Include="EvalSequence.fs" />
         <Compile Include="EvalProgress.fs" />
         <Compile Include="McpSessionRouting.fs" />
+        <Compile Include="McpSessionState.fs" />
         <Compile Include="McpRouteError.fs" />
         <Compile Include="CreateSessionUx.fs" />
         <Compile Include="SessionStatusPayload.fs" />

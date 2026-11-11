@@ -269,6 +269,7 @@
         <Compile Include="DashboardTelemetrySendTests.fs" />
         <Compile Include="DashboardTestStatusGridTests.fs" />
         <Compile Include="DashboardLandingTests.fs" />
+        <Compile Include="DashboardEvalRefusalTests.fs" />
         <Compile Include="DashboardHealthVerdictRenderingTests.fs" />
         <Compile Include="DashboardUxDefectTests.fs" />
         <Compile Include="DashboardWorkflowSwitchTests.fs" />

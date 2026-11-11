@@ -49,6 +49,7 @@ open SageFs.Utils
 open SageFs.Server.DashboardPanelContext
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
+open SageFs.Server.DashboardRequests
 open SageFs.Server.CohortInspector
 open SageFs.Features.FrictionSqlite
 
@@ -2046,61 +2047,52 @@ let createEvalHandler
         match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
-      match String.IsNullOrWhiteSpace code with
-      | true ->
+      match EvalRequest.decide { Code = code; ViewingSessionId = sessionIdStr } with
+      | Result.Error refusal ->
+        // The code signal is left alone: the box keeps what the person typed, and the page says why nothing ran.
+        Response.sseStartResponse ctx |> ignore
+        do! ActionResult.patch ctx (ActionOutcome.Failure(EvalRefusal.describe refusal))
+      | Result.Ok(sessionId, codeWithTerminator) ->
+        let! result = evalCode sessionId codeWithTerminator
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-      | false ->
-        match WorkerProtocol.SessionId.validate sessionIdStr with
-        | Error _ ->
-          Response.sseStartResponse ctx |> ignore
-          do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-        | Ok sessionId ->
-          let codeWithTerminator =
-            let trimmed = code.TrimEnd()
-            match trimmed.EndsWith(";;") with
-            | true -> code
-            | false -> sprintf "%s;;" trimmed
-          let! result = evalCode sessionId codeWithTerminator
-          Response.sseStartResponse ctx |> ignore
-          do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-          // The action response owns this interaction. Render the freshly
-          // committed snapshot here so Datastar cannot drop an overlapping
-          // long-lived stream morph while this POST is still resolving.
-          let! built =
-            buildDashboardSnapshot
-              { Queries = q
-                Infra = infra
-                CurrentSessionId = sessionId
-                LastSessionId = sessionId
-                LastWorkingDir = q.GetSessionWorkingDir sessionId
-                LastThemeName = defaultThemeName
-                Answers = WorkerAnswers.Fetch
-                Sessions = []
-                FrictionOptIn = frictionOptInFor (clientIdFromSignals doc)
-                Look = pageLookOf (clientIdFromSignals doc) }
-          let snapRaw = built.Snapshot
-          // Same panel visibility the stream uses, so this morph and the next
-          // stream push agree on which panels exist.
-          let facts = panelFactsFor q infra (Some sessionId) (clientIdFromSignals doc)
-          let snap =
-            PanelVisibility.apply facts snapRaw
-            |> DashboardNewSession.apply (clientIdFromSignals doc)
-          // DIAGNOSTIC: log output panel HTML to verify content is present.
-          // Render once — the node built here is reused for the patch below.
-          let mainNode = renderMainContentIn (paneLayoutViewFor q (Some sessionId) facts) snap
-          let mainHtml = renderNode mainNode
-          Log.info "[eval-POST] mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
-          do! ssePatchNode ctx mainNode
-          let displayResult, cssClass =
-            match result with
-            | Ok msg -> msg, "output-line output-result"
-            | Error err ->
-              err
-                .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
-                .Replace("Evaluation failed: ", Glyphs.lead Glyph.Warn),
-              "output-line output-error"
-          do! ssePatchNode ctx (evalResultShown cssClass displayResult)
+        // The action response owns this interaction. Render the freshly
+        // committed snapshot here so Datastar cannot drop an overlapping
+        // long-lived stream morph while this POST is still resolving.
+        let! built =
+          buildDashboardSnapshot
+            { Queries = q
+              Infra = infra
+              CurrentSessionId = sessionId
+              LastSessionId = sessionId
+              LastWorkingDir = q.GetSessionWorkingDir sessionId
+              LastThemeName = defaultThemeName
+              Answers = WorkerAnswers.Fetch
+              Sessions = []
+              FrictionOptIn = frictionOptInFor (clientIdFromSignals doc)
+              Look = pageLookOf (clientIdFromSignals doc) }
+        let snapRaw = built.Snapshot
+        // Same panel visibility the stream uses, so this morph and the next
+        // stream push agree on which panels exist.
+        let facts = panelFactsFor q infra (Some sessionId) (clientIdFromSignals doc)
+        let snap =
+          PanelVisibility.apply facts snapRaw
+          |> DashboardNewSession.apply (clientIdFromSignals doc)
+        // DIAGNOSTIC: log output panel HTML to verify content is present.
+        // Render once — the node built here is reused for the patch below.
+        let mainNode = renderMainContentIn (paneLayoutViewFor q (Some sessionId) facts) snap
+        let mainHtml = renderNode mainNode
+        Log.info "[eval-POST] mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
+        do! ssePatchNode ctx mainNode
+        let displayResult, cssClass =
+          match result with
+          | Ok msg -> msg, "output-line output-result"
+          | Error err ->
+            err
+              .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
+              .Replace("Evaluation failed: ", Glyphs.lead Glyph.Warn),
+            "output-line output-error"
+        do! ssePatchNode ctx (evalResultShown cssClass displayResult)
     with
     | :? RequestTooLargeException -> ()  // 413 already written by readSignalsJsonSized
     | :? System.IO.IOException -> ()
