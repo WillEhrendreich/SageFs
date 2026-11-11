@@ -167,6 +167,10 @@ let private genIntent =
     2, Gen.map IFastForward (Gen.choose (0, 10))
     1, Gen.map2 (fun a l -> IWithdraw(a, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
     1, Gen.map2 (fun b l -> IVeto(b, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
+    // A clear, so properties 1, 2, 3, 6 and 7 meet a claim the conductor took away, including under a live landing. The seat
+    // commands (ISeat, IReplace, IDelegate) stay in `genDelegatingIntent`/`genReplacingIntent`: property 21 is about
+    // histories with no seat move, and both of those generators include every intent here, landings among them.
+    1, Gen.map2 (fun b c -> IClear(b, c)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
   ]
 
 let private genIntents =
@@ -558,6 +562,8 @@ let private claimFenceOf =
   | CohortEvent.ClaimReleased(cid, _, f) -> Some(cid, f)
   | CohortEvent.ClaimOrphaned(cid, _, f) -> Some(cid, f)
   | CohortEvent.ClaimReassigned(cid, _, f) -> Some(cid, f)
+  // A clear moves the fence too; without this arm a clear that forgot to bump it passed property 3.
+  | CohortEvent.ClaimCleared(cid, _, _, _, f) -> Some(cid, f)
   | _ -> None
 
 let private fencesStrictlyIncreasePerClaim (h: Harness) =
