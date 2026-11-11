@@ -277,6 +277,15 @@ type internal HeapSizes =
     Blob: int
     Guid: int }
 
+/// What the baseline has for the text that names a field.
+[<RequireQualifiedAccess>]
+type internal FieldLookup =
+  | Found of token: int
+  /// More than one field of the type folds to the text (`x@10` and `x@20` both read `x@_`), so which one a body
+  /// means cannot be told.
+  | Ambiguous of typeName: string * candidates: string list
+  | Missing
+
 /// What the baseline assembly already has, by what each row names. Built on first use, because most saves
 /// touch a handful of rows out of tens of thousands.
 [<Sealed>]
@@ -313,19 +322,27 @@ type internal BaselineIndex(baseline: PeImage) =
   let memberRefs = tableOf TableIndex.MemberRef (fun row -> baseline.Describe(MetadataTokens.EntityHandle(TableIndex.MemberRef, row)))
   let methodSpecs = tableOf TableIndex.MethodSpec (fun row -> baseline.Describe(MetadataTokens.EntityHandle(TableIndex.MethodSpec, row)))
   // Fields by the text that names them. Two fields that fold to one name (`x@10` and `x@20` in one type) cannot be
-  // told apart, so neither is found, and a body that uses one is refused.
+  // told apart, so neither is found: the lookup names the type and every field that folds to the name, and a body
+  // that uses one is refused with them.
   let fields =
     lazy
-      (let found = Dictionary<string, int>()
-       let ambiguous = HashSet<string>()
+      (let byKey = Dictionary<string, ResizeArray<FieldDefinitionHandle>>()
        for handle in reader.FieldDefinitions do
-         let entity = MetadataTokens.EntityHandle(TableIndex.Field, MetadataTokens.GetRowNumber handle)
-         let key = baseline.Describe entity
-         match found.TryAdd(key, MetadataTokens.GetToken entity) with
-         | true -> ()
-         | false -> ambiguous.Add key |> ignore
-       for key in ambiguous do
-         found.Remove key |> ignore
+         let key = baseline.Describe(MetadataTokens.EntityHandle(TableIndex.Field, MetadataTokens.GetRowNumber handle))
+         match byKey.TryGetValue key with
+         | true, handles -> handles.Add handle
+         | false, _ -> byKey[key] <- ResizeArray [ handle ]
+       let found = Dictionary<string, FieldLookup>()
+       for KeyValue (key, handles) in byKey do
+         match List.ofSeq handles with
+         | [ only ] ->
+           found[key] <- FieldLookup.Found(MetadataTokens.GetToken(MetadataTokens.EntityHandle(TableIndex.Field, MetadataTokens.GetRowNumber only)))
+         | many ->
+           let first = reader.GetFieldDefinition(List.head many)
+           found[key] <-
+             FieldLookup.Ambiguous(
+               baseline.TypeKey(first.GetDeclaringType()),
+               many |> List.map (fun h -> reader.GetString((reader.GetFieldDefinition h).Name)))
        found)
   let assemblies =
     lazy
@@ -355,7 +372,7 @@ type internal BaselineIndex(baseline: PeImage) =
   member _.TypeSpec(text: string) : int voption = (match typeSpecs.Value.TryGetValue text with | true, t -> ValueSome t | false, _ -> ValueNone)
   member _.MemberRef(text: string) : int voption = (match memberRefs.Value.TryGetValue text with | true, t -> ValueSome t | false, _ -> ValueNone)
   member _.MethodSpec(text: string) : int voption = (match methodSpecs.Value.TryGetValue text with | true, t -> ValueSome t | false, _ -> ValueNone)
-  member _.Field(text: string) : int voption = (match fields.Value.TryGetValue text with | true, t -> ValueSome t | false, _ -> ValueNone)
+  member _.Field(text: string) : FieldLookup = (match fields.Value.TryGetValue text with | true, found -> found | false, _ -> FieldLookup.Missing)
   member _.Assembly(name: string) : int voption = (match assemblies.Value.TryGetValue name with | true, t -> ValueSome t | false, _ -> ValueNone)
   member _.LocalSignature(text: string) : int voption = (match localSignatures.Value.TryGetValue text with | true, t -> ValueSome t | false, _ -> ValueNone)
   member _.RowCount(table: TableIndex) : int = reader.GetTableRowCount table
@@ -600,8 +617,9 @@ type DeltaChain private (state: ChainState) =
       | 0x04 ->
         let text = next.Describe(MetadataTokens.EntityHandle token)
         match state.Index.Field text with
-        | ValueSome mapped -> mapped
-        | ValueNone -> raise (RudeCauseRaised (RudeCause.FieldsChanged text))
+        | FieldLookup.Found mapped -> mapped
+        | FieldLookup.Ambiguous (typeName, candidates) -> raise (RudeCauseRaised (RudeCause.FieldNameAmbiguous (typeName, candidates)))
+        | FieldLookup.Missing -> raise (RudeCauseRaised (RudeCause.FieldsChanged text))
       | 0x01 ->
         let text = next.Describe(MetadataTokens.EntityHandle token)
         match state.Index.TypeRef text, Map.tryFind text ledger.Value.TypeRefs with

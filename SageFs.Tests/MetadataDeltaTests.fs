@@ -435,7 +435,8 @@ let metadataDeltaTests =
           RudeCause.AddedMethodUnsupported ("T", "m", "why")
           RudeCause.StaticInitializerChanged ("T", "m")
           RudeCause.ClosureMatchAmbiguous "T"
-          RudeCause.UnreadableBody ("T", "m", IlRefusal.CalliNotSupported) ]
+          RudeCause.UnreadableBody ("T", "m", IlRefusal.CalliNotSupported)
+          RudeCause.FieldNameAmbiguous ("T", [ "x@10"; "x@20" ]) ]
       causes |> List.map RudeCause.caseName |> List.distinct |> List.length |> Expect.equal "one name per case" causes.Length
       causes |> List.map RudeCause.describe |> List.distinct |> List.length |> Expect.equal "one wording per case" causes.Length
       let numberOfCases = Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<RudeCause>).Length
@@ -566,6 +567,44 @@ let metadataDeltaTests =
         | PrepareOutcome.Refused causes ->
           causes |> List.map RudeCause.caseName |> List.contains "MethodRemoved" |> Expect.isTrue "the refusal names MethodRemoved"
         | other -> failtestf "removing a method should be refused, and this said %A" other
+      finally
+        removeQuietly directory
+
+    testCase "WHY - a body that uses one of two fields whose names fold to one is refused for the ambiguity, naming both, and never told its type's fields changed" <| fun _ ->
+      let directory = scratch ()
+      try
+        // A type with `x@10` and `x@20`, which both read `x@_`, and a method that reads the first. The edit changes
+        // only the constant the method adds, so the type is the same in both builds.
+        let build (path: string) (addend: int) =
+          let assembly = AssemblyDefinition.CreateAssembly(AssemblyNameDefinition("Amb", System.Version(1, 0, 0, 0)), "Amb", ModuleKind.Dll)
+          let main = assembly.MainModule
+          let t = TypeDefinition("Gen", "T", TypeAttributes.Public ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed, main.TypeSystem.Object)
+          main.Types.Add t
+          let first = FieldDefinition("x@10", FieldAttributes.Static ||| FieldAttributes.Assembly, main.TypeSystem.Int32)
+          t.Fields.Add first
+          t.Fields.Add(FieldDefinition("x@20", FieldAttributes.Static ||| FieldAttributes.Assembly, main.TypeSystem.Int32))
+          let read = MethodDefinition("read", MethodAttributes.Public ||| MethodAttributes.Static ||| MethodAttributes.HideBySig, main.TypeSystem.Int32)
+          let il = read.Body.GetILProcessor()
+          il.Emit(OpCodes.Ldsfld, first)
+          il.Emit(OpCodes.Ldc_I4, addend)
+          il.Emit(OpCodes.Add)
+          il.Emit(OpCodes.Ret)
+          t.Methods.Add read
+          writeAssembly assembly path
+          assembly.Dispose()
+        let baseline = Path.Combine(directory, "a.dll")
+        let edited = Path.Combine(directory, "b.dll")
+        build baseline 1
+        build edited 2
+        match (DeltaChain.Start(PeImage.OfFile baseline, ProbeStripping.KeepEveryInstruction)).Prepare(Guid.NewGuid(), PeImage.OfFile edited) with
+        | PrepareOutcome.Refused [ RudeCause.FieldNameAmbiguous (typeName, candidates) as cause ] ->
+          typeName |> Expect.equal "the type is named as the metadata spells it" "Gen.T"
+          candidates |> List.sort |> Expect.equal "both fields are named" [ "x@10"; "x@20" ]
+          let text = RudeCause.describe cause
+          text |> Expect.stringContains "the text names one candidate" "x@10"
+          text |> Expect.stringContains "and the other" "x@20"
+          text.Contains "changed, which changes the layout" |> Expect.isFalse "and does not claim the fields changed"
+        | other -> failtestf "an ambiguous field should be refused as FieldNameAmbiguous, and this said %A" other
       finally
         removeQuietly directory
 

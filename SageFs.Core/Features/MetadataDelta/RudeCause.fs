@@ -76,6 +76,10 @@ type RudeCause =
   | ClosureMatchAmbiguous of typeName: string
   /// A method body the emitter cannot read.
   | UnreadableBody of typeName: string * methodName: string * refusal: IlRefusal
+  /// The edited body uses a field of a type with two or more fields whose compiler-made names fold to one (`x@10` and
+  /// `x@20` both read `x@_`, so a line added above one does not rename it). Nothing changed in the type; the emitter
+  /// cannot tell which of them the body means. Renaming one of the bindings makes them distinct.
+  | FieldNameAmbiguous of typeName: string * candidates: string list
 
 [<RequireQualifiedAccess>]
 module RudeCause =
@@ -97,6 +101,11 @@ module RudeCause =
     | RudeCause.StaticInitializerChanged (t, m) -> sprintf "%s.%s runs at startup and a delta never runs it again" t m
     | RudeCause.ClosureMatchAmbiguous t -> sprintf "the closures of %s changed in number, so they cannot be matched to the running ones" t
     | RudeCause.UnreadableBody (t, m, refusal) -> sprintf "%s.%s cannot be patched: %s" t m (IlRefusal.describe refusal)
+    | RudeCause.FieldNameAmbiguous (t, candidates) ->
+      sprintf
+        "the edited code uses a field of %s whose name the emitter cannot tell apart from another (%s fold to one name); the type did not change, and renaming one of those bindings lets the edit patch"
+        t
+        (String.concat ", " candidates)
 
   /// A stable token to branch on or grep for, one per case.
   let caseName (cause: RudeCause) : string =
@@ -116,3 +125,4 @@ module RudeCause =
     | RudeCause.StaticInitializerChanged _ -> "StaticInitializerChanged"
     | RudeCause.ClosureMatchAmbiguous _ -> "ClosureMatchAmbiguous"
     | RudeCause.UnreadableBody _ -> "UnreadableBody"
+    | RudeCause.FieldNameAmbiguous _ -> "FieldNameAmbiguous"
