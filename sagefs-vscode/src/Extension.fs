@@ -508,6 +508,22 @@ let getStatusBar () =
     statusBarItem <- Some s
     s
 
+/// Write one status to the session item: text, tooltip and accessible name together, so no site sets one alone.
+let applyStatus (sb: StatusBarItem) (view: StatusBarPure.StatusBarView) =
+  sb.text <- view.Text
+  sb.tooltip <- Some view.Tooltip
+  sb?accessibilityInformation <- createObj [ "label" ==> view.AccessibleName ]
+
+let private notNullPaths (arr: string array) =
+  match jsIsNullOrUndefined (box arr) with
+  | true -> [||]
+  | false -> arr |> Array.filter (fun p -> not (jsIsNullOrUndefined (box p)))
+
+/// The project a session shows in the session menu, the pick lists and the status bar: the Sessions
+/// tree's own label, so the loaded project wins over the declared list everywhere.
+let sessionProjectLabel (s: Client.SessionInfo) : string =
+  SessionsTreePure.labelOf s.status (notNullPaths s.projects) (notNullPaths s.loadedProjects)
+
 let getWorkingDirectory () =
   match Workspace.workspaceFolders () with
   | Some fs when fs.Length > 0 -> Some fs.[0].uri.fsPath
@@ -764,6 +780,7 @@ let updateEvalPerfBar (stats: VscTimelineStats) =
         | _ -> None
       sb.text <- t
       sb.backgroundColor <- bg
+      sb?accessibilityInformation <- createObj [ "label" ==> StatusBarPure.evalPerfAccessibleName stats.Count stats.P50Ms ]
       sb.tooltip <- Some (
         [ sprintf "Eval Performance Timeline (%d evals)" stats.Count
           stats.P50Ms |> Option.map (sprintf "P50: %.1f ms") |> Option.defaultValue ""
@@ -900,9 +917,7 @@ let refreshStatus () =
           | _ -> ()
         | false -> ()
         wasRunning <- false
-        sb.text <- "$(circle-slash) SageFs: offline"
-        sb.tooltip <- Some "SageFs is not running — click for session menu"
-        sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: offline" ]
+        applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.Offline)
         sb.backgroundColor <- None
         sb.show ()
         releaseWindowSession ()
@@ -948,10 +963,6 @@ let refreshStatus () =
           setContext "sagefs:hasSession" (ContextKeysPure.hasSessionContext sessions.Length)
           match session with
           | Some s ->
-            let notNullPaths (arr: string array) =
-              match jsIsNullOrUndefined (box arr) with
-              | true -> [||]
-              | false -> arr |> Array.filter (fun p -> not (jsIsNullOrUndefined (box p)))
             let row: SessionsTreePure.SessionRowInput =
               { Id = s.id
                 Status = s.status
@@ -973,18 +984,12 @@ let refreshStatus () =
                   RestartCount = restartCount
                   SessionCount = sessions.Length
                   Health = s.health }
-            sb.text <- view.Text
-            sb.tooltip <- Some view.Tooltip
-            // `$(zap)` renders as a glyph in `text` but its NAME leaks into the
-            // accessible name unless it is overridden — screen readers were
-            // reading the status bar as "zap SageFs: ...".
-            sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
+            // `$(zap)` renders as a glyph in `text` but its NAME leaks into the accessible name unless
+            // `applyStatus` overrides it with the view's own sentence.
+            applyStatus sb view
           | None ->
             releaseWindowSession ()
-            let view = StatusBarPure.noSessionView supervisedFlag restartCount
-            sb.text <- view.Text
-            sb.tooltip <- Some view.Tooltip
-            sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
+            applyStatus sb (StatusBarPure.noSessionView supervisedFlag restartCount)
           sb.backgroundColor <- None
           let activeId = activeSessionId
           HotReload.setSession c activeId
@@ -995,24 +1000,9 @@ let refreshStatus () =
           setContext "sagefs:hasSession" false
           match warmupPhase with
           | Some phase ->
-            let phaseLabel =
-              match phase with
-              | "creating_fsi" -> "Creating FSI..."
-              | "scanning_sources" -> "Scanning sources..."
-              | "loading_assemblies" -> "Loading assemblies..."
-              | "opening_namespaces" ->
-                match warmupDetail with
-                | Some d -> sprintf "Opening namespaces (%s)" d
-                | None -> "Opening namespaces..."
-              | "finalizing" -> "Finalizing..."
-              | _ -> "Warming up..."
-            sb.text <- sprintf "$(loading~spin) SageFs: %s" phaseLabel
-            sb.tooltip <- Some (sprintf "SageFs: %s" phaseLabel)
-            sb?accessibilityInformation <- createObj [ "label" ==> sprintf "SageFs: %s" phaseLabel ]
+            applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.WarmingUp (Some (StatusBarPure.warmupPhaseLabel phase warmupDetail))))
           | None ->
-            sb.text <- "$(loading~spin) SageFs: warming up..."
-            sb.tooltip <- Some "SageFs: warming up..."
-            sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: warming up" ]
+            applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.WarmingUp None))
           sb.backgroundColor <- None
         | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Down ->
           setContext "sagefs:hasSession" false
@@ -1020,9 +1010,7 @@ let refreshStatus () =
           // shared daemon is somebody else's fault in this window's error dialog.
           match windowSessionFault session status.error with
           | Some err ->
-            sb.text <- "$(error) SageFs: session error"
-            sb.tooltip <- Some (describeSessionError err)
-            sb?accessibilityInformation <- createObj [ "label" ==> sprintf "SageFs: session error — %s" err.message ]
+            applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.SessionFault (Some err.message, Some (describeSessionError err))))
             match sessionErrorPromptShown with
             | true -> ()
             | false ->
@@ -1046,9 +1034,7 @@ let refreshStatus () =
               | Some "Show Output" -> showOutputPanel ()
               | _ -> ()
           | None ->
-            sb.text <- "$(error) SageFs: session error"
-            sb.tooltip <- Some "SageFs: session error"
-            sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: session error" ]
+            applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.SessionFault (None, None)))
           sb.backgroundColor <-
             Some (newThemeColor "statusBarItem.errorBackground")
         | Some st when st = noSessionForThisWorkspaceStatus ->
@@ -1057,29 +1043,18 @@ let refreshStatus () =
           SessionCtx.setSession c None
           Sessions.setSession c None
           setContext "sagefs:hasSession" false
-          let view = StatusBarPure.noSessionView supervisedFlag restartCount
-          sb.text <- view.Text
-          let tooltip =
-            sprintf "SageFs — ready, but none of the daemon's %d session(s) is for this workspace — click for session menu" sessions.Length
-          sb.tooltip <- Some tooltip
-          sb?accessibilityInformation <- createObj [ "label" ==> tooltip ]
+          applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.NoSessionForWorkspace (sessions.Length, supervisedFlag, restartCount)))
           sb.backgroundColor <- None
         | Some "no session" ->
           setContext "sagefs:hasSession" false
-          sb.text <- "$(circle-slash) SageFs: no session"
-          sb.tooltip <- Some "SageFs: no session — click for session menu"
-          sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: no session" ]
+          applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.NoSession)
           sb.backgroundColor <- None
         | _ ->
-          sb.text <- "$(loading~spin) SageFs: starting..."
-          sb.tooltip <- Some "SageFs: starting..."
-          sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: starting" ]
+          applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.Starting None))
         sb.show ()
     with ex ->
       c.log (sprintf "[warn] refreshStatus: %O" ex)
-      sb.text <- "$(circle-slash) SageFs: offline"
-      sb.tooltip <- Some "SageFs: offline — click for session menu"
-      sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: offline" ]
+      applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.Offline)
       sb.show ()
       setContext "sagefs:daemonRunning" false
       setContext "sagefs:hasSession" false
@@ -1134,8 +1109,7 @@ let rec startDaemon () =
           out.appendLine (sprintf "[SageFs spawn error] %s" msg)
           daemonStderr <- daemonStderr + msg + "\n"
           isStarting <- false
-          let sb = getStatusBar ()
-          sb.text <- "$(error) SageFs: spawn failed"
+          applyStatus (getStatusBar ()) (StatusBarPure.statusView StatusBarPure.DaemonStatus.SpawnFailed)
         )
         // FAIL FAST. `spawn` runs through a shell ("shell" ==> true above), so
         // a missing `sagefs` binary does NOT raise onProcError — the shell
@@ -1160,7 +1134,7 @@ let rec startDaemon () =
             startupSettled <- true
             intervalId |> Option.iter jsClearInterval
             let sb = getStatusBar ()
-            sb.text <- "$(error) SageFs: offline"
+            applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.StartFailed)
             sb.show ()
             let stderrSnippet =
               match daemonStderr.Trim() with
@@ -1196,13 +1170,13 @@ let rec startDaemon () =
         unref proc
         daemonProcess <- Some proc
         let sb = getStatusBar ()
-        sb.text <- "$(loading~spin) SageFs starting..."
+        applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.Starting None))
         sb.show ()
         let mutable attempts = 0
         let id =
           jsSetInterval (fun () ->
             attempts <- attempts + 1
-            sb.text <- sprintf "$(loading~spin) SageFs starting... (%ds)" attempts
+            applyStatus sb (StatusBarPure.statusView (StatusBarPure.DaemonStatus.Starting (Some attempts)))
             promise {
               let! ready = Client.isRunning c
               if ready then
@@ -1229,7 +1203,7 @@ let rec startDaemon () =
                 | Some "Show Full Output" -> showOutputPanel ()
                 | Some "Reinstall SageFs" -> installCli ()
                 | _ -> ()
-                sb.text <- "$(error) SageFs: offline"
+                applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.StartFailed)
             } |> promiseIgnoreLog (fun msg -> out.appendLine msg)
           ) 1000
         intervalId <- Some id
@@ -1895,11 +1869,7 @@ let configureWarmupAutoOpenCmd () =
   }
 
 let private formatSessionLabel (s: Client.SessionInfo) =
-  let proj =
-    match s.projects with
-    | [||] -> "no project"
-    | ps -> ps |> String.concat ", "
-  sprintf "%s (%s) [%s]" s.id proj s.status
+  sprintf "%s (%s) [%s]" s.id (sessionProjectLabel s) s.status
 
 let sessionPickCommand (prompt: string) (action: Client.SessionInfo -> Client.Client -> JS.Promise<Client.ApiOutcome>) (onSuccess: Client.SessionInfo -> unit) =
   withClient (fun c ->
@@ -2062,18 +2032,7 @@ let sessionMenu () =
               match activeSessionId with
               | Some id -> id = s.id
               | None -> false
-            let proj =
-              match s.projects with
-              | [||] -> "no project"
-              | ps ->
-                ps
-                |> Array.map (fun p ->
-                  let parts = p.Split([|'/'; '\\'|])
-                  let name = parts |> Array.last
-                  match name with
-                  | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
-                  | n -> n)
-                |> String.concat ", "
+            let proj = sessionProjectLabel s
             // The id is in the row, and the pick resolves by it (see SessionScopePure.sessionMenuLabel).
             items.Add (SessionScopePure.sessionMenuLabel isActive proj s.status s.evalCount s.id)
           items.Add "──────────"
@@ -3536,7 +3495,7 @@ let activate (context: ExtensionContext) =
       evalWatchdogTimer <- None
       match statusBarItem with
       | Some sb ->
-        sb.text <- "$(check) SageFs: connected"
+        applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.Connected)
         sb.backgroundColor <- None
         sb.show ()
       | None -> ()
@@ -3546,7 +3505,7 @@ let activate (context: ExtensionContext) =
       c.log "SSE disconnected — reconnecting..."
       match statusBarItem with
       | Some sb ->
-        sb.text <- "$(sync~spin) SageFs: reconnecting..."
+        applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.Reconnecting)
         sb.backgroundColor <- Some (newThemeColor "statusBarItem.warningBackground")
         sb.show ()
       | None -> ()
@@ -3667,7 +3626,7 @@ let activate (context: ExtensionContext) =
         with ex ->
           out.appendLine (sprintf "SSE connection error: %s" (string ex))
           match statusBarItem with
-          | Some sb -> sb.text <- "$(warning) SageFs: SSE error"; sb.show ()
+          | Some sb -> applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.StreamError); sb.show ()
           | None -> ()
       | false ->
         match autoStart with
@@ -3686,7 +3645,7 @@ let activate (context: ExtensionContext) =
       out.show false
       match statusBarItem with
       | Some sb ->
-        sb.text <- "$(error) SageFs: activation failed"
+        applyStatus sb (StatusBarPure.statusView StatusBarPure.DaemonStatus.ActivationFailed)
         sb.show ()
       | None -> ()
   } |> promiseIgnoreLog logToOutput

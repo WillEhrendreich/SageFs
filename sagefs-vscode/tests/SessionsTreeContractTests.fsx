@@ -85,6 +85,25 @@ let tests =
       (renderRow (session "a" "Ready" [||] [||] 0)).Label
       |> Expect.equal "honest empty" "(no project loaded)"
 
+    // WHY — roast-5 finding 5: the session quick pick labelled from the declared list with the word
+    // "no project" while the tree showed the loaded project. Both now call labelOf.
+    testCase "WHY - the quick pick label is the tree label, because they were computed twice and disagreed" <| fun _ ->
+      for (status, declared, loaded) in
+        [ "Ready", [||], [| "/w/Real.fsproj" |]
+          "Ready", [| "/w/Declared.fsproj" |], [||]
+          "Ready", [||], [||]
+          "Starting", [||], [||]
+          "Ready", [||], [| "/w/A.fsproj"; "/w/B.fsproj"; "/w/C.fsproj" |] ] do
+        labelOf status declared loaded
+        |> Expect.equal "same text" (label (session "a" status declared loaded 0))
+
+    testCase "WHY - a session with a loaded project and no declared one is never 'no project' in the quick pick" <| fun _ ->
+      labelOf "Ready" [||] [| "/w/Real.fsproj" |] |> Expect.equal "loaded wins" "Real"
+
+    testCase "WHY - Extension.fs has one project label for sessions and says 'no project' nowhere" <| fun _ ->
+      let source = System.IO.File.ReadAllText(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "src", "Extension.fs"))
+      Expect.isFalse "no literal" (source.Contains "\"no project\"")
+
     testCase "WHY - a session still starting says so instead of claiming it has no project" <| fun _ ->
       (renderRow (session "a" "Starting" [||] [||] 0)).Label
       |> Expect.equal "not yet known" "(loading…)"

@@ -178,11 +178,21 @@ let private projectNames (projects: string array) =
   | false ->
     sprintf "%s +%d more" (names |> Array.take projectNamesInLabel |> String.concat ", ") (names.Length - projectNamesInLabel)
 
-let label (input: SessionRowInput) : string =
-  match effectiveProjects input with
-  | [||] when not (isSettled input.Status) -> "(loading…)"
+/// The project label of a session from the three facts it is made of. The Sessions tree, the status
+/// bar and the session quick pick all call this one, because each of them once worked it out alone
+/// and the quick pick said "no project" for a session whose loaded project the tree showed.
+let labelOf (status: string) (declared: string array) (loaded: string array) : string =
+  let projects =
+    match loaded with
+    | [||] -> declared
+    | _ -> loaded
+  match projects with
+  | [||] when not (isSettled status) -> "(loading…)"
   | [||] -> "(no project loaded)"
   | projects -> projectNames projects
+
+let label (input: SessionRowInput) : string =
+  labelOf input.Status input.DeclaredProjects input.LoadedProjects
 
 /// The last two folders of a working directory, written with `/` whatever the platform spelled it with.
 let directoryTail (workingDirectory: string) : string =

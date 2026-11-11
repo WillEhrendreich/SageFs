@@ -118,6 +118,56 @@ let tests =
       System.IO.File.ReadAllText(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "src", "Extension.fs"))
       |> Expect.stringContains "assigned from the pure constant" "esb.command <- Some StatusBarPure.evalPerfCommand"
 
+    // WHY — roast-5 finding 8: status text written outside refreshStatus set `text` with no accessible
+    // label, so a screen reader said "error SageFs offline" (the codicon name leaks) or nothing useful.
+    // Every status now builds (text, accessible name, tooltip) in one place; these pin all three for each.
+    testCase "WHY - every status has text, an accessible name and a tooltip, because a site used to set only the text" <| fun _ ->
+      for status in daemonStatusSamples do
+        let view = statusView status
+        Expect.isNotEmpty (sprintf "text of %A" status) view.Text
+        Expect.isNotEmpty (sprintf "accessible name of %A" status) view.AccessibleName
+        Expect.isNotEmpty (sprintf "tooltip of %A" status) view.Tooltip
+
+    testCase "WHY - an accessible name is a sentence: starts with SageFs, three or more words, ends with a full stop, no codicon token" <| fun _ ->
+      let views =
+        [ yield! daemonStatusSamples |> List.map statusView
+          yield sessionView (input "SageTech" "REPL" 12 true 3 2)
+          yield sessionView { input "S" "REPL" 0 false 0 1 with Health = SessionHealth.Degraded "nothing loaded" }
+          yield noSessionView false 0 ]
+      for view in views do
+        let name = view.AccessibleName
+        Expect.isTrue (sprintf "starts with SageFs: %s" name) (name.StartsWith "SageFs")
+        Expect.isTrue (sprintf "ends with a full stop: %s" name) (name.EndsWith ".")
+        Expect.isFalse (sprintf "no double stop: %s" name) (name.Contains "..")
+        Expect.isGreaterThanOrEqual (sprintf "three words: %s" name) (name.Split(' ').Length, 3)
+        Expect.isFalse (sprintf "no codicon token: %s" name) (containsCodiconToken name)
+        Expect.isFalse (sprintf "no tooltip token: %s" view.Tooltip) (containsCodiconToken view.Tooltip)
+
+    testCase "WHY - the text of an errored or spinning status carries its icon and the accessible name does not name it" <| fun _ ->
+      let view = statusView DaemonStatus.StartFailed
+      view.Text |> Expect.stringContains "icon in text" "$(error)"
+      Expect.isFalse "icon name not read aloud" (view.AccessibleName.Contains "error SageFs")
+
+    testCase "WHY - the warm-up phase wording is one function, so the status bar and its label cannot disagree" <| fun _ ->
+      warmupPhaseLabel "opening_namespaces" (Some "Foo") |> Expect.equal "detail" "Opening namespaces (Foo)"
+      warmupPhaseLabel "opening_namespaces" None |> Expect.equal "no detail" "Opening namespaces..."
+      warmupPhaseLabel "mystery" None |> Expect.equal "unknown phase" "Warming up..."
+      (statusView (DaemonStatus.WarmingUp (Some "Scanning sources..."))).AccessibleName
+      |> Expect.equal "sentence" "SageFs is warming up the session. Scanning sources."
+
+    testCase "WHY - the eval-performance item has an accessible name, because its text is sparkline blocks read glyph by glyph" <| fun _ ->
+      evalPerfAccessibleName 12 (Some 140.4)
+      |> Expect.equal "with median" "SageFs eval performance, 12 evaluation(s), median 140 milliseconds. Click to open the dashboard."
+      evalPerfAccessibleName 3 None
+      |> Expect.equal "without median" "SageFs eval performance, 3 evaluation(s). Click to open the dashboard."
+
+    testCase "WHY - no status bar text is set from a literal in Extension.fs, because each literal skipped the accessible name" <| fun _ ->
+      let source = System.IO.File.ReadAllText(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "src", "Extension.fs"))
+      let literalTexts =
+        source.Split('\n')
+        |> Array.filter (fun line -> System.Text.RegularExpressions.Regex.IsMatch(line, "(^|[^a-z])sb\\.text <- (sprintf )?\"\\$\\("))
+      literalTexts |> Expect.isEmpty "no literal status text"
+
     testCase "WHY - no verdict on the wire renders the historical bolt, not an invented warning" <| fun _ ->
       (sessionView { input "SageTech" "REPL" 0 false 0 1 with Health = SessionHealth.Unknown }).Text
       |> Expect.equal "unchanged for an older daemon" "$(zap) SageFs: SageTech [REPL]"
