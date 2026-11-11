@@ -2,6 +2,67 @@
 
 Roadmap item: `run-tests-reuses-proven-results` (Later, Live testing). Plan written 2026-10-26 against master `59a8692c`.
 
+## Work order
+
+Written 2026-11-11 against master `8975e898`. The plan below is sound; its line numbers have moved and one of its dependencies has landed. Corrections: the landing gate's key construction is at `SageFs/DaemonMode.fs:3543-3562` (the plan says 3020 to 3085; `filesEvaluatedOverBuild` is also called at `:3026` and `:3173`); the `run_tests` tool is `SageFs/McpTools.fs:2384` with the "never counted" sentence at `:2381`; the effect handler arm is `SageFs/SageFsEffectHandler.fs:1012`; `TestRunRequest` moved to `SageFs.Core/Features/LiveTestingRequests.fs:99`; `LiveTestingTypes.fs` is now budgeted at 3487 and `SageFsApp.fs` at 2455 (`SageFs.Tests/RatchetBudgets.fs:198,232`). `markers-on-expecto-cases` has landed `SourceCase.Body` and `CategoryEvidence` (`SageFs.Core/Features/ExpectoCases.fs`), so the per-case body scan this plan called a soft dependency is available.
+
+### 1. Outcome
+
+An agent calls `run_tests` twice with nothing changed and the second receipt says how many lines were reused, from which run, and why the rest ran; the verdict stays `AllPassed` only when every line is a pass on an `InSync` source. Change a covered file and exactly the tests that cover it run. Anything the cache cannot vouch for runs: no coverage, a prior failure, a property or integration test, an evaluated result, a stale source. Gate: the pure `RunReuse` tests and the simulation in the default suite, and the journey on the FromCSharp sample under `--integration-lt` asserting the receipt and what ran from the `/events` stream. Linux today; the logic is pure and runs anywhere the daemon does.
+
+### 2. Where the code is today
+
+- Cache and key: `SageFs.Core/Features/TestRunKey.fs` (`InputHash.compute` `:44`, `TestRunKey` `:65`, private-constructor `TestResultCache` `:89` with `lookup` `:94`, `insert` `:96`, `count` `:99`). `SageFs.Core/Features/LandingCache.fs` (`partition` `:29`, `failingOfCached` `:53`, `record` `:64`, `verify` `:100`; `verify` synthesizes `Passed TimeSpan.Zero` / `Failed "failed in a prior cached run"` at `:122-131`, so it cannot feed a receipt). Trust: `SageFs.Core/Features/InputHashCoverage.fs` (`toolchainFingerprint` `:122`, `trustBeyond` `:189`, refusals `NoInstrumentation`/`BitmapDoesNotMatchMap`/`CoversNothing` `:7-11`).
+- The one caller: `SageFs/DaemonMode.fs:3543-3562` builds `toolchain`, `blind` and `inputHashOf` inline and calls `cohortLandingCacheOwner.Verify` (owner started at `:2522`; `SageFs.Core/Features/CohortOwner.fs:616` `LandingCacheOwner`).
+- Receipt: `SageFs.Core/Features/TestRunReceipt.fs` (`ReceiptLine` `:42`, `RanReceipt` `:71`, `RunReceipt` `:84`, `lineOutcome` `:136` reads `ResultGenerations`, `observe` `:173`, `plan` `:229`, `summarize` `:263`, `toJson` `:297`). Generation stamping: `SageFs.Core/Features/RequestedRuns.fs` (`request` `:37`, `started` `:72`, `stampResults` `:85`).
+- Entry point: `SageFs/McpRunTests.fs:170` `runTests`; `RunTestsRequest` `:20-27` (no `fresh` field); the dispatch of `TuiEvent.RunTestsRequested (Some sid, dispatchCases, Some requestId)` at `:206`; `TuiEvent.fs:357` defines it as a tuple.
+- The empty-run hole the plan names: `SageFs/SageFsApp.fs:1822-1823` returns `cycle, []` for an empty test array, and `SageFsEffectHandler.fs:1019-1020` does nothing for empty `Tests`. The first RED test (plan test 6) targets exactly this.
+- State the plan needs: `LiveTestingTypes.fs` `LastResults` `:1734`, `FlakyHistory` `:1748`, `TestCoverageBitmaps` `:1751`, `ResultGenerations` `:1774`, `Provenances` `:1776`; `ResultProvenance` `:424-432` (`Compiled | Evaluated | VerifiedByBuild | BuildDisagrees`); `SourceState` at `SageFs.Core/Features/SourceState.fs:70`.
+- Existing tests: `TestRunKeyTests.fs`, `LandingCacheTests.fs`, `InputHashCoverageTests.fs`, `TestRunReceiptTests.fs` (lists at `:85,98,180`), `CohortLandingCacheOwnerTests.fs`.
+- Nothing of the design exists: no `RunReuse.fs`, no `RunKeys.fs`, no `RunReuseSim.fs` (checked).
+
+### 3. Steps
+
+1. **RED** `SageFs.Tests/RunReusePlanTests.fs` (plan tests 1 to 3): a stored pass under the current key is reused; no prior result and a prior failure run, with `NoPriorResult` and `PriorWasNotAPass`. Compile-red. **Green**: `SageFs.Core/Features/RunReuse.fs` with `NotReusable`, `RunFreshness`, `ReuseDecision`, `ReusePlan`, `plan`. Add after `LandingCache.fs` in `SageFs.Core.fsproj` (`:310`); the test after `LandingCacheTests.fs` in `SageFs.Tests.fsproj` (`:1176`). Pure.
+2. **RED** the property (plan test 4) and the mutants (plan test 5, `MutationTestingFramework`). **Green**: `record` and the bounded owner (`RunReuseOwner`, a `MailboxProcessor` like `LandingCacheOwner`), `maxEntries` named with its reason. Pure core, edge owner.
+3. **Refactor, behaviour unchanged**: lift `DaemonMode.fs:3543-3556` into `SageFs.Core/Features/RunKeys.fs` (`keyOf : blind -> toolchain -> readFile -> maps -> bitmaps -> TestId -> HashTrust`) with its own tests; the gate's existing tests are the guard. `DaemonMode.fs` shrinks, which the budget (`:341`, 5529) allows.
+4. **RED** receipt tests (plan test 7) in `TestRunReceiptTests.fs`. **Green**: `ReceiptLine.Origin = RanNow | ReusedFrom of DateTimeOffset`, `RanReceipt.Reused: int`, JSON `counts.reused` and per-line `origin`, `summarize` text; the `McpTools.fs:2381` sentence rewritten. Pure.
+5. **RED** `McpRunTestsReuseTests.fs` (plan test 6): all-reusable run starts and completes with nothing to run, receipt `AllPassed` with `reused = n`. **Green**: `TuiEvent.RunTestsRequested` becomes a record with `Reused: TestRunResult array` (every in-repo dispatcher updated in the same commit); `TestRunRequest` gains `Reused` (`LiveTestingRequests.fs:99`); `SageFsApp.fs:1822` stops short-circuiting when `Reused` is non-empty (net zero lines, move a block out if needed); the effect handler dispatches start, the reused batch, the rest, complete. Edge. DECISION: `fresh` parameter default (below).
+6. `McpRunTests.runTests` computes the plan after `Preflight.Dispatch` (`:201`) using step 3's `keyOf`, the session's bitmaps and maps, `Provenances`, `FlakyHistory`, `QuarantinedTests`, and `SourceCase.Body` where `TestLocationsApplied` placed the case (for `ReadsOutsideTheKey`); records the settled receipt into the owner. `fresh` parsed at the edge (`McpTools.fs:2384`, a new optional `[<Description>]` parameter). Edge.
+7. **RED** `SageFs.Simulation/RunReuseSim.fs` with the plan's ops, invariants and four twins, tests in `SageFs.Tests/RunReuseSimTests.fs` (model `ExpectoCasesSimTests.fs`); then the journey `RunReuseJourneyTests.fs` under `--integration-lt` using `LiveTestingJourneyTests.journey` (`:63`) and `LtStream`, added to `LiveTestingShards.tree` (`LiveTestingShards.fs:27-36`).
+8. Docs (`docs/mcp-tools.md`, `docs/how-live-testing-works.md` receipt paragraph), landmark `SageFs.Core/Features/RunReuse.fs` at `RoadmapItems.fs:435`, `gen-roadmap.fsx`, Status Done.
+
+### 4. How to check it
+
+- REPL: session on `SageFs.Tests`; prove `RunReuse.plan` by `send_fsharp_code` with hand-built `TestResultCache` values; `run_tests` with `pattern=RunReuse`.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets` (tool-list budget and file sizes).
+- Inner loop: `--summary --filter-test-list "RunReuse"`; read `ran=`.
+- Acceptance: unfiltered `--summary`, then `--integration-lt --summary`.
+
+### 5. Traps in this repo
+
+- SAGE-005: `keyOf` takes `blind: string list` and `toolchain: string` next to a `readFile`; wrap `toolchain` (`ToolchainFingerprint of string`) so two strings cannot swap.
+- `RatchetBudgets.toolList` (`:462`, 38,286) only goes down: `fresh` adds about 100 characters, so pay for it in the same commit by shortening another `run_tests` sentence, and check with `ToolListBudgetTests` before committing.
+- `SageFsApp.fs` (2455) and `LiveTestingTypes.fs` (3487) are at budget; `DaemonMode.fs` (5529) and `McpTools.fs` (3173) are near theirs.
+- `CohortCommand` corpus fixtures: `TuiEvent.RunTestsRequested` is no cohort command; still, grep `RunTestsRequested` across `SageFs.Tests` before changing its shape, because every constructor site moves in one commit.
+- Wire change: the receipt JSON gains fields and `run_tests` gains a parameter. Trailer `Plugin: n/a, run_tests is an MCP tool for agents; the editors read test_results_batch`, and `docs/mcp-tools.md` in the same commit.
+- No timing-sensitive tests: the owner tests use `Started.asTask`; the journey waits on `awaitReceipt` and frames.
+- Commit `SageFs.Core.fsproj`, `SageFs.Tests.fsproj`, `SageFs.Simulation.fsproj` whole, by pathspec.
+
+### 6. Size and order
+
+Steps 1 to 3 are three days, two of them pure, and 1 and 3 touch different files. Step 4 a day. Step 5 and 6 are the delicate week (generation logic in `SageFsApp.fs` and the effect handler). Step 7 two days. About three weeks of one person. First commit: step 1's RED.
+
+### 7. Not now
+
+- Persistence across a daemon restart (decision 2 below): a `.sagetc` version bump, later.
+- "Run tests inside the live session once I know a redefinition changes what your compiled tests call": belongs to `mutants-in-the-live-session`'s first experiment.
+- Reusing results across sessions on the same checkout: the key already carries `SessionId`; widening it is a trust decision.
+
+### DECISIONs for Will (this section's additions)
+
+- `fresh` default: on (reuse off) until step 6's measurement shows the reusable fraction and `ReadsOutsideTheKey` is decided per case from `SourceCase.Body`. Recommendation unchanged: off by default in v1, then on for `Unit` only.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
