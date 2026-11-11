@@ -2,6 +2,117 @@
 
 Roadmap item: `browser-refresh-beyond-pages` (Later, hot reload). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read on that commit; the older numbers in the plan
+under "Resume here" have drifted (the two `WorkerMain.fs` matches are now at `:1968` and `:2358`).
+
+### 1. Outcome
+
+Today only `.fs`, `.fsx` and `.fsproj` saves reach the page. Afterwards: a `wwwroot/*.css` save restyles the open page in
+place (typed input, scroll and JS state kept); a script, image, font or static HTML save reloads the page once; a `.cshtml`
+or `.razor` save shows an overlay message saying SageFs does not patch it and what to do; a file under `bin/`, `obj/`,
+`node_modules/` or `.git/` does nothing; an F# save plus a CSS save in one burst reloads at most once and never while the app
+restarts.
+
+Outcome gate: a Playwright journey in a new `SageFs.Tests/AssetReloadBrowserTests.fs`, registered with
+`Integration.register (Integration.Dedicated "--integration-browser")` on each case (the pattern is
+`SageFs.Tests/DashboardNarrowLayoutBrowserTests.fs:147`). Matrix: app started by `run_app` (and by an FSI-started app if
+measurement 3 says the web root is the same) by file kind (css, js, png, html, razor, a file under `node_modules`) by page
+state (typed input plus a JS marker). The browser tier is net11 and Linux only; Windows and macOS watcher behavior is unproven
+and inherits whatever `hot-reload-on-windows-and-macos` finds.
+
+### 2. Where the code is today
+
+- `SageFs.Core/FileWatcher.fs`: `WatchConfig.Extensions:32`, `excludedDirNames:104`, `defaultWatchConfig:224` with
+  `Extensions = [".fs"; ".fsx"; ".fsproj"]` at `:226`, `FileChangeAction:234` (`Reload | SoftReset | RecoverFromOverflow |
+  Ignore`), `fileChangeAction:253` (the "extension ... not watched" debug line at `:266`), `shouldTriggerRebuild:317`,
+  `startPrunedWatcherUnder:470` with `watcher.Filters.Add` at `:508`, `startPrunedWatcher:551`.
+- Consumers of `FileChangeAction`: `SageFs.Host/WorkerMain.fs:1968` (`beginChange`) and `:2358` (`ApplySaves`, answering
+  `TrunkFollow.FileOutcome.NotWatched`, `NeedsRebuild`, `NoVerdict`); `SageFs.Simulation/WatcherLifecycleSim.fs:208`;
+  `WatcherLifecycleInvariants.fs:71,94`. A new DU case breaks all four at compile time.
+- `SageFs.Core/DevReload.fs`: `DevReloadEvent:280-301`, `refreshes:312` (true for `Applied`, `Restarted`), `payloadJson:387`,
+  `LastReload.record:447`, the `broadcast*` functions `:558-601`. `Features/ReloadBroadcast.fs:205` `broadcastEvent`,
+  `compilerBusy:278`, `watcherOverflow:294`.
+- `devreload.js`: two tracked copies, `SageFs.Host/Resources/devreload.js` and `SageFs/Resources/devreload.js`, byte-identical
+  on 2026-11-11 (same md5). `safeReload` at `:38`, `RELOAD_GUARD_THRESHOLD` at `:40`, the `msg.type` switch at `:164-263`
+  (`compiling`, `noeffect`, `restarted`, `pending`). No test pins the two copies.
+- `SageFs.Host/DevReloadMiddleware.fs:16` loads the embedded script; `:79` sets `Cache-Control: no-store` on rewritten HTML.
+- `SageFs.Core/SessionReload.fs:145` `ofPayloadJson`, `UnknownEventType:82` returned at `:193`; consumed at
+  `SageFs/DaemonMode.fs:3777`.
+- `SageFs.Core/AppRun.fs:166` `contentRootVar = "ASPNETCORE_CONTENTROOT"`, `planLaunch:177`.
+- `Timeouts.fileWatchDebounce` at `SageFs.Core/Timeouts.fs:612` (200 ms).
+- `sagefs.nvim/lua/sagefs/reload_state.lua:229-243` (`M.parse`): an unknown `type` with no `outcome` and not `compiling`
+  returns `nil`, so the plugin ignores an `asset` event. `Plugin: n/a` holds; measurement 4 is answered.
+- Tests today: `SageFs.Tests/FileWatcherTests.fs:206` (`testList "fileChangeAction"`), `DevReloadTests.fs` (lists at `:77`,
+  `:168`, `:297`, `:465`), `SessionReloadTests.fs:35` (`:77` checks `UnknownEventType "mystery"`),
+  `HotReloadBrowserTests.fs` (registered `--integration-hr`, `:194`), `WatcherLifecycleSimTests.fs`.
+- No fixture has a `wwwroot` (searched `SageFs.Tests/fixtures` and `samples`). `fixtures/WebAppFixture/` is the F# web app
+  the hot-reload journeys use; it gets one.
+- `[not verified]`: how an FSI-started app resolves `WebRootPath`; whether a Chromium `location.reload()` serves a stale
+  `wwwroot` script.
+
+### 3. Steps
+
+One commit each. New test files are `<Compile Include>` lines in `SageFs.Tests/SageFs.Tests.fsproj` before `Program.fs`
+(`:1194`); `FileWatcherTests.fs` is at `:210`, `DevReloadTests.fs` at `:393`. Sim files go in
+`SageFs.Simulation/SageFs.Simulation.fsproj` beside `WatcherLifecycleSim.fs` (`:286`).
+
+1. Guard (green today): `SageFs.Tests/DevReloadScriptTests.fs`, "WHY - the two committed devreload.js are byte-identical".
+   Edge-free. Commit before touching either script.
+2. RED, domain: `FileWatcherTests.fs` "fileChangeAction" list: a css under `wwwroot` is `Asset (path, AssetKind.Stylesheet)`,
+   a `.cshtml` is `Asset (_, CompiledView)`, a css under `node_modules` is `Ignore`. Compile-red.
+3. `AssetKind` DU and `AssetKind.ofExtension`/`describe` in `DevReload.fs` (it is compiled into the FSI host, so no Core
+   dependencies); `DevReloadEvent.AssetChanged`; `payloadJson` case; `LastReload.record` ignores it like `Compiling`.
+   RED first in `DevReloadTests.fs` ("payloadJson of AssetChanged has type, kind, path, sequence; record leaves the last
+   verdict alone"). Domain.
+4. `FileChangeAction.Asset` in `FileWatcher.fs`; `defaultWatchConfig.Extensions` grows; fix the four consumers with a no-op
+   arm (edge). Step 2 goes green.
+5. RED, domain: `SageFs.Tests/AssetReloadTests.fs` for `SageFs.Core/AssetReload.fs` `decide : Standing -> Input -> Standing *
+   Action list` (states and rules under "Design"). Property: never a `ReloadPage` while `SaveInFlight`, at most one per burst.
+   Then the sim `SageFs.Simulation/AssetReloadSim.fs` with invariants A1 to A5 and the three twins.
+6. RED, domain: `SessionReloadTests.fs` "an asset payload is `NotASaveEvent`, a different case from `UnknownEventType`";
+   add `ReloadPayloadError.NotASaveEvent`; `DaemonMode.fs:3777` logs it at debug.
+7. Edge: `devreload.js` `msg.type === 'asset'` branch in both copies (step 1 keeps them equal); fixture `wwwroot/site.css`
+   and a route serving it in `fixtures/WebAppFixture`; the css row of the journey. Measurement 1 runs here.
+8. Edge: `WorkerMain.fs:1968` handles `Asset` before the compile lock and folds through `AssetReload.decide`;
+   `:2358` answers a new `TrunkFollow.FileOutcome.AssetSignalled`; broadcast. css row green on `run_app`.
+9. Journey rows js, png, html, razor, ignored. Cache header branch in `DevReloadMiddleware.fs` only if measurement 1 says stale.
+10. Docs: `docs/hot-reload.md`, `docs/how-hot-reload-works.md` comparison row.
+
+`DECISION:` Razor and Blazor: message only (recommend) or a C# edit-and-continue route. `DECISION:` images and fonts: full
+reload now (recommend), swap later. `DECISION:` treat a Tailwind watcher's output css like a hand save (recommend yes).
+
+### 4. How to check it
+
+- Inner loop: SageFs session on `SageFs.Tests`; eval `AssetReload.decide` folds and `FileWatcher.fileChangeAction` directly;
+  `run_tests` filtered to `fileChangeAction`, `AssetReload`, `DevReload`.
+- Lane: `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Journey inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-browser --summary --filter-test-list "asset reload"`.
+- Acceptance: unfiltered `--summary` and unfiltered `--integration-browser --summary`; read `ran=` on the `TRUST` line.
+
+### 5. Traps in this repo
+
+- `DevReload.fs` is embedded into the FSI host build (`SageFs.Core.fsproj`, `FsiHostBuild.fs`): nothing from Core may be opened
+  there.
+- SAGE-005: `AssetChanged of kind * urlPath: string * sequence: int64` is fine; do not add a second string.
+- `Refresh` is a two-case DU, not a bool; `AssetKind.describe` is the one to-string.
+- Wire: the browser SSE payload gains a `type`. `ReloadBroadcast.fs` and `DevReload.fs` changes carry `Plugin: n/a, reload_state.lua
+  ignores an unknown type without an outcome`.
+- No sleeps: the journey waits on computed style or `WaitForFunction`; the sim has no clock. Do not add a debounce constant until measured.
+- Linux only; the watcher's per-extension filters have not been counted on a big `wwwroot/lib` (measurement 2).
+
+### 6. Size and order
+
+S to M, four to seven days. Steps 1 to 4 first (a day), 5 and 7 in parallel, 8 after both, 9 and 10 last. First commit: step 1's
+guard test plus step 2's red test.
+
+### 7. Not now
+
+- Razor and Blazor compilation (needs Roslyn EnC for a C# project SageFs does not build): a separate L item.
+- In-place image and font swap: flicker is the only cost, revisit if it annoys.
+- Reporting asset events through `/events` or MCP: nothing asked for it.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -38,7 +149,7 @@ nothing. The browser tier runs on net11 only, as the repo does for every browser
   `FileWatcher.shouldTriggerRebuild` filters `bin/`, `obj/` and temp files; `excludedDirNames` prunes `bin obj .git .vs .idea
   node_modules .runs artifacts`.
 - The consumers of `FileChangeAction` are the worker's `beginChange` and the landing path (`ApplySaves`) in
-  `SageFs.Host/WorkerMain.fs` (the two matches near lines 1904 and 2271), plus `SageFs.Simulation/WatcherLifecycleSim.fs` and
+  `SageFs.Host/WorkerMain.fs` (the two matches at lines 1968 and 2358 on 2026-11-11), plus `SageFs.Simulation/WatcherLifecycleSim.fs` and
   `WatcherLifecycleInvariants.fs`. A new DU case breaks all four at compile time, which is the safety net.
 - The browser is told through `SageFs.Core/DevReload.fs`: `DevReloadEvent` is `Compiling | Applied | Patched | NeverEntered |
   Restarted | NotApplied | CompilationFailed`. `DevReloadEvent.refreshes` answers true for `Applied` and `Restarted` only.
@@ -190,7 +301,8 @@ First week: steps 1 to 5, ending with the CSS row green on `run_app`. The first 
 3. Where Falco and plain ASP.NET apps started from FSI get their web root. Start the WebLive sample and print
    `app.Environment.WebRootPath`. If it is not the project's `wwwroot`, `urlPath` mapping needs the app's own value, which the
    worker can ask the agent for.
-4. How `sagefs.nvim` treats an unknown `type` on the reload stream (read `lua/sagefs/reload_state.lua`).
+4. How `sagefs.nvim` treats an unknown `type` on the reload stream. Answered 2026-11-11: `lua/sagefs/reload_state.lua:229-243`
+   returns `nil` for a payload whose `type` is unknown and carries no `outcome`, so an `asset` event is ignored. `Plugin: n/a`.
 
 ## Risks and dependencies
 
