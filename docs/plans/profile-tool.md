@@ -103,7 +103,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Shipped in 0.6.944 (`18e39403`). The outcome gate ran green in the 0.6.945 release gate (`--integration-host[3/5]`, Trusted, 2026-11-11). What is left is in "Work order" above: close the roadmap item, measure attach cost, widen the GC-wait label, say when another eval shared the recording, macOS limit, Windows stop. |
+| Status | In progress. Shipped in 0.6.944 (`18e39403`). The outcome gate ran green in the 0.6.945 release gate (`--integration-host[3/5]`, Trusted, 2026-11-11). What is left is in "Work order" above: close the roadmap item, measure attach cost, widen the GC-wait label, say when another eval shared the recording, macOS limit, Windows stop. |
 | Size | M for the CPU report, S for the allocation report once a trace reader exists (both done) |
 | Branch and worktree | none: work is on master |
 | Last green commit | the commit that carries this block (2026-11-10, on top of master 75f8a696) |

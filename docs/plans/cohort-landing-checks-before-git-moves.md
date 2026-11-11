@@ -72,3 +72,17 @@ About a day. Steps 1 and 2 first and together (they are the RED), then 3, then t
 ### 7. Not now
 
 The roast's I9 (a ledger JSON profile apart from the worker wire) is related to durability, not to this ordering.
+
+## Resume here
+
+This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
+
+| Field | Now |
+|:--|:--|
+| Status | Not started |
+| Size | About a day (section 6) |
+| Branch and worktree | none yet |
+| Last green commit | none yet |
+| Next action | Steps 1 and 2 together, run red: the `GIT-AGREES-WITH-LEDGER` invariant in `SageFs.Simulation/CohortLandingSim.fs`, and the fixed history next to `clearHistory` in `SageFs.Tests/CohortPropertyTests.fs`. |
+| Decisions made | none yet (step 4, what `FastForwardCompleted` does once git has moved, is open; the plan recommends (c) plus (b)) |
+| Surprises | The owner-restart half of the same roast (C3) landed in the 2026-11-11 pass. This half was left because it moves a check that property 11, the exhaustive spec and the landing sim all pin at `FastForwardCompleted`. |

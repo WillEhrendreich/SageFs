@@ -350,6 +350,16 @@ let items : Item list =
       [ "docs/mcp-tools.md"; "docs/plans/big-landings-pass-the-verifier.md" ]
       "The cohort's landing gate used to give up two and a half minutes after it asked, and the executor cancelled the run two minutes after it started, so a run that was still reporting was cut: one cohort run asked for 19067 tests and 18529 never reported. The wait now ends when the count of reported tests stops rising for a stall window (`RunStall`), in the gate and in the worker, and names how many reported and how many did not; a test that never reported still fails the landing. A project file change is read into a closed set of changes: anything but the compile list runs the whole suite, and a compile-list edit selects the tests that cover the files whose meaning it can have changed, read from the file texts, so two test files inserted in the middle of 1096 select two files and not 935. Timed in a session at a load of 45 against a daemon that does not run the fix, 18886 tests were cut at the old cap with 17193 unreported. Still open: no real landing has gone through a daemon running this build, and a whole run through the verifier has not been timed to its end."
 
+    item "cohort-landing-checks-before-git-moves" "A landing is checked before git moves" Agents Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md"; "docs/plans/cohort-landing-checks-before-git-moves.md" ]
+      "When a claim is cleared or the conductor moves the integration head while a landing's tests run, the check happens after git has already moved the branch. The ledger then says the landing did not land, git sits ahead of the cohort, and every later landing fails its fast-forward three times until the conductor runs `set_integration_ref`; I want both checks to run before git is touched."
+
+    item "delta-route-carries-more-edits" "A save that touches private code stays a delta" HotReload Next
+      NoLandmarkYet
+      [ "docs/how-hot-reload-works.md"; "docs/decisions.md"; "docs/plans/delta-route-carries-more-edits.md" ]
+      "A run_app save to a handler that reads an unedited `let mutable private` value, or calls a private function of its own file, restarts the app today and loses every live value. The planner refuses those edits for reasons that only hold for the FSI patch, and the metadata delta rebuilds the app's own assembly, so I want the route to send them there and the counter to survive the save."
+
     // ---- Later: months to a year ----
 
     item "type-change-keeps-state" "Type changes keep your running state" HotReload Later

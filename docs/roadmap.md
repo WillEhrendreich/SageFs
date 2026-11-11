@@ -11,9 +11,9 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 19, Exploring 20. Already built: 64.
+On the page today: Now 0, Next 8, Later 19, Exploring 20. Already built: 64.
 
-## Next (6)
+## Next (8)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -24,11 +24,16 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### Hot reload
 
 - [ ] **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes, and it is now driven end to end against a running run_app app in our own tests. The eval writes the declaration back, the file change reaches the worker, and the running app serves the new code. Measured here, the whole route takes about 5.6 seconds, most of it the build. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built. ([how-hot-reload-works.md](how-hot-reload-works.md), [repl-eval-reaches-the-running-app.md](plans/repl-eval-reaches-the-running-app.md))
+- [ ] **A save that touches private code stays a delta.** A run_app save to a handler that reads an unedited `let mutable private` value, or calls a private function of its own file, restarts the app today and loses every live value. The planner refuses those edits for reasons that only hold for the FSI patch, and the metadata delta rebuilds the app's own assembly, so I want the route to send them there and the counter to survive the save. ([how-hot-reload-works.md](how-hot-reload-works.md), [decisions.md](decisions.md), [delta-route-carries-more-edits.md](plans/delta-route-carries-more-edits.md))
 
 ### The REPL
 
 - [ ] **Check the whole project with a file replaced, without building.** FsiMcp has `check_project`: it type-checks a whole project with some files replaced by text you send, without a build and without touching the REPL session, so an agent can ask "does this still compile" before it lands an edit. SageFs has `check_fsharp_code` for a snippet and a build for the project, which costs minutes on a loaded machine. The check itself is written, minus the tool: a pure core (`ProjectCheckCore.fs`) with its tests and a simulation, and an effect module (`CheckProject.fs`) that gets the compiler arguments from a child `dotnet msbuild` run, keeps them until the project file, `Directory.Build.props`, `Directory.Build.targets` or `Directory.Packages.props` changes, builds a stale referenced project once, stops when the client cancels, and returns diagnostics with path, line, column, severity, code and message. Overlays are written as stable files under the temp folder and the compiler is given those paths. The tool registration is a patch file in `docs/plans` that waits for the tool-list work, and nothing has run the design-time MSBuild path against `SageFs.Tests.fsproj` on a quiet machine, so the cost per check is not measured. ([mcp-tools.md](mcp-tools.md), [project-check-with-overlays.md](plans/project-check-with-overlays.md))
 - [ ] **One rule decides what a worker's report writes into the registry.** Reading a session's status writes to the registry. `get_session_status` takes the worker's report and, when it differs, stores it so `list_sessions` agrees. The 5 second health probe writes too, by a different rule. The read's rule can store a transient: while a level or a reset replaced the FSI host in place, a read left Starting in the registry for a worker that was Ready, and the level reported Leveled while the daemon held the old host's tests. The probe now retires that within 5 seconds and the symptom is fixed, but the second rule is still there. I would have both ask one pure function, so a read only moves the registry toward settled. The other answers are a read-only read, with `list_sessions` up to 5 seconds behind, or leaving it. It is your decision. ([decisions.md](decisions.md), [session-status-reads-write-the-registry.md](plans/session-status-reads-write-the-registry.md))
+
+### Agents and cohorts
+
+- [ ] **A landing is checked before git moves.** When a claim is cleared or the conductor moves the integration head while a landing's tests run, the check happens after git has already moved the branch. The ledger then says the landing did not land, git sits ahead of the cohort, and every later landing fails its fast-forward three times until the conductor runs `set_integration_ref`; I want both checks to run before git is touched. ([mcp-tools.md](mcp-tools.md), [cohort-landing-checks-before-git-moves.md](plans/cohort-landing-checks-before-git-moves.md))
 
 ### Dashboard
 
