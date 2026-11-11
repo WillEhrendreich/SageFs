@@ -174,7 +174,19 @@ module HiddenBecause =
     | HiddenBecause.LiveTestingOff -> "Live testing is off for this session, so no tests re-run as you edit. Choose Mode: Live Testing in the top bar to turn it on."
     | HiddenBecause.NoCohortRunning ->
       "No cohort is running (a cohort is several agents working on one project together)."
-    | HiddenBecause.NotCheckedYet what -> sprintf "Diagnostics: %s have not been checked yet." what
+    | HiddenBecause.NotCheckedYet what -> sprintf "No session is open, so %s have not been checked yet. They are checked once a session is in view." what
+
+  /// The one line that is always on the page for a panel that is not drawn: the panel's name and its state, decided by the
+  /// same reason the sentence above says. It used to be chosen by the panel alone ("Hot reload: off"), so with no session it
+  /// said a mode was off while the sentence one click away said there was no session to have a mode.
+  let headline (because: HiddenBecause) : string =
+    match because with
+    | HiddenBecause.NoSessionSelected panel -> sprintf "%s: no session selected" (ContextPanel.sentenceName panel)
+    | HiddenBecause.SessionInReplMode
+    | HiddenBecause.SessionInLiveTestingMode -> "Hot reload: off"
+    | HiddenBecause.LiveTestingOff -> "Live testing: off"
+    | HiddenBecause.NoCohortRunning -> "Agent team: none running"
+    | HiddenBecause.NotCheckedYet _ -> "Diagnostics: not checked yet"
 
 module QuietBecause =
   let text (because: QuietBecause) : string =
@@ -284,7 +296,7 @@ module PanelContext =
     | ContextPanel.Friction -> frictionPresence facts.Friction
     | ContextPanel.Diagnostics ->
       match facts.Diagnostics with
-      | DiagnosticsCheck.NotChecked -> PanelPresence.Hidden(HiddenBecause.NotCheckedYet "diagnostics", NextStep.NoNextStep)
+      | DiagnosticsCheck.NotChecked -> PanelPresence.Hidden(HiddenBecause.NotCheckedYet "diagnostics", NextStep.UseControl "Quick Start in the session picker, or + New in the sidebar")
       | DiagnosticsCheck.Checked 0 -> PanelPresence.Quiet QuietBecause.NoDiagnostics
       | DiagnosticsCheck.Checked _ -> PanelPresence.Shown
     | ContextPanel.FailureNarratives ->

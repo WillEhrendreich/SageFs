@@ -1778,7 +1778,9 @@ module PanelVisibility =
     | ContextPanel.FailureNarratives -> DomIds.HiddenReasonFailureNarratives
     | ContextPanel.Alarms -> DomIds.HiddenReasonAlarms
 
-  /// The one line that is always there: the name and the state. The sentence that says why is a click away.
+  /// A panel's line when no decision is at hand, keyed by the panel alone. It is only right for a panel that is on the page for
+  /// a session; the line a hidden panel really shows is `HiddenBecause.headline`, which follows the decision. The Panels menu
+  /// still asks this one (`PaneMenuView.relevanceOf` drops the reason it matched), so it says "off" there with no session.
   let reasonName (panel: ContextPanel) : string =
     match panel with
     | ContextPanel.HotReload -> "Hot reload: off"
@@ -1827,7 +1829,7 @@ module PanelVisibility =
       [ Attr.id (reasonId panel)
         Attr.class' "panel panel-hidden-reason"
         Ds.preserveAttr "open" ]
-      [ Elem.summary [ Attr.class' "panel-hidden-name" ] [ Text.raw (reasonName panel); nextStepButton next ]
+      [ Elem.summary [ Attr.class' "panel-hidden-name" ] [ Text.raw (HiddenBecause.headline because); nextStepButton next ]
         Elem.div [ Attr.class' "panel-hidden-why"; Attr.create "role" "status" ] [
           Text.raw (HiddenBecause.text because)
           nextStepNote next
