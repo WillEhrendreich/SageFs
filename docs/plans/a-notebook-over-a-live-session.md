@@ -2,6 +2,67 @@
 
 Roadmap item: `a-notebook-over-a-live-session` (Exploring, REPL). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read at that commit. The plan below is sound; this section pins it to the tree and fixes two stale locations.
+
+### 1. Outcome
+
+Open the dashboard on a session, pick an `.fsx`, and see its cells as rows: source, a status chip (never run, fresh, edited since it ran, upstream edited, running, failed with the reason, session reset), the last output, and a value tree for each name the cell bound. Edit the file in any editor and the chips move without a reload; run a cell from the editor or from an agent and its tree updates in place, because it is one session. Slice 1 has no browser editing and no auto-run. Gate: a Playwright.NET journey `SageFs.Tests/DashboardNotebookBrowserTests.fs` over {editor buffer edit, save on disk, agent `send_fsharp_code`} x {the cell, a dependent, an unrelated cell} x {Ready, restarted mid-way}, zero console or Datastar errors, no cell skipped. It registers the way `DashboardLiveBindingsDockBrowserTests.fs:632` does: `Integration.register (Integration.Dedicated "--integration-browser")`. Headless Chromium on Linux is the only proven browser; nothing else is claimed.
+
+### 2. Where the code is today
+
+- Cells are evals, with no file position. `SageFs.Core/Features/CellDependencyGraph.fs:5-17` (`CellId = int`, `CellInfo`, `CellGraph`), `producedNames` at 41, identifier matching through `IdentifierScan` at 21. `SageFs.Core/Features/EvalStore.fs`: an entry has `Code` (47) and `Timestamp` (50), `StoredCell` 108, `Store` 138, `materializeGraph` 425. No file path anywhere in it.
+- Staleness: `EvalProvenance.fs:8-10` (`Fresh | StaleUpstream`), computed by `Diagnostician.fs:69-77` and 201-215.
+- MCP: `SageFs/McpTools.fs:2178` (`plan_ripple`), 2230 (`suggest_next_cell`), 2268 (`export_notebook`), 2481 (`get_cell_dependencies`); answers in `SageFs/McpAnalysis.fs:486-495`. SSE `cell_dependencies` at `SageFs.Core/SseWriter.fs:500`.
+- A file position exists for one call: `/exec` at `SageFs/McpServer.fs:2756`, `block_start_line` read at 2773, stored in `LastEvalContext` at 2784 (type at 2531).
+- New since the plan was written: `SageFs.Core/Features/Tweak/EvalWriteBack.fs`. Its `decide` maps `file_path` plus `block_start_line` to the declaration in the file that contains that line and writes the eval back (`McpTools.fs:789-791` documents the rule). That is a second, tested locator from a line to a declaration. The cell model should reuse it rather than add a third.
+- Unsaved buffers reach the daemon: route `SageFs.Core/EndpointContracts.fs:57`, handler `McpServer.fs:3970`, dispatch at 3991, message `SageFs/SageFsApp.fs:191`, handled at 2121 (live testing only today).
+- Value tree: `SageFs.Core/Features/LiveValueTree.fs` `WalkMode` 20, `LiveValueNode` 77, `LiveBindingValue` 91, `LiveValueSnapshot` 98, `MaxDepth = 6` 108, `MaxChildren = 50` 109, `MaxNodes = 10000` 117. Pushed as `live_bindings` by `SseWriter.fs:421-432`. `SageFs.Core/Features/LiveBindingsPane.fs` (new) holds the pane's walk-mode state. The dashboard renders in `SageFs/LiveBindingsDock.fs`.
+- Panes: `SageFs/DockPanes.fs:15-17` (`LiveBindings | AppOutput`). `renderMainContent` is `SageFs/DashboardFragments.fs:2775` and `renderMainContentIn` 2539; the plan said `Dashboard.fs`, which only calls them.
+- Cell boundaries, three client rules now: `sagefs-vscode/src/CodeBlocks.fs:17` (`getBlockBounds`), `sagefs.nvim/lua/sagefs/cells.lua:8` (`is_boundary_line`), and `sagefs.nvim/lua/sagefs/treesitter_cells.lua` (AST-based, new). Markers: `NotebookExport.fs:13,22` and `sagefs.nvim/lua/sagefs/notebook.lua:29`, different layouts.
+- `samples/from-jupyter/notebook.fsx:22-23` still promises a pre-warmed swap and a 200 ms reset. Both are false (`docs/plans/README.md:190` lists it).
+- Tests that exist: `EvalStoreTests.fs`, `LiveValueTreeTests.fs`, `DockPanesTests.fs`, `NotebookExportTests.fs`, `DiagnosticianTests.fs`, `EvalProvenanceTests.fs` (fsproj lines 652, 665, 1132, 644).
+
+### 3. Steps
+
+The order in "Steps" below holds. Registration, so nobody has to guess:
+
+1. `SageFs.Tests/LiveNotebookTests.fs`, listed in `SageFs.Tests/SageFs.Tests.fsproj` right after `NotebookExportTests.fs` (line 644). RED: `CellSplitter.split` on `;;` and blank-line files, with fixtures in `SageFs.Tests/fixtures/notebook-cells/`. Then `SageFs.Core/Features/LiveNotebook.fs`, listed in `SageFs.Core/SageFs.Core.fsproj` right after `CellDependencyGraph.fs`. Domain. DECISION: one rule for cells. Options: (a) `;;` if present, else blank lines, the rule `CodeBlocks.fs` and `cells.lua` share; (b) the tree-sitter rule `treesitter_cells.lua` uses. Recommend (a) for slice 1, because the daemon has no parser for (b) and the fixtures make a later switch safe.
+2. `CellAlign` properties. Same files. Domain.
+3. `update` and `CellState`. Same files. Domain. Reuse `EvalWriteBack`'s locator for "which cell does `block_start_line` fall in".
+4. Sim `SageFs.Simulation/LiveNotebookSim.fs` in `SageFs.Simulation.fsproj`, `SageFs.Tests/LiveNotebookSimTests.fs`. Domain.
+5. Edge: `SageFs/LiveNotebookWiring.fs` subscribing to `BufferContentChanged` (`SageFsApp.fs:2121`), `/exec` completion (`McpServer.fs:2784`) and the `live_bindings` push; one call in the Elm loop.
+6. Pane `SageFs/LiveNotebookPane.fs`, one line in `renderMainContent` (`DashboardFragments.fs:2775`). DECISION 2 below (main-area tab; recommended).
+7. Browser journey, `--integration-browser`.
+8. Docs and the sample fix (`notebook.fsx:22-23`).
+
+### 4. How to check it
+
+- Inner loop: a SageFs session on `SageFs.Tests`; eval the splitter on `samples/from-jupyter/notebook.fsx`, `samples/getting-started.fsx` and `samples/from-koans/*.fsx` (that is the first "Measure first" row, and it runs the moment step 1 compiles).
+- `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Filtered: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary --filter-test-list "LiveNotebook"`.
+- Acceptance: the unfiltered `--summary` (pure and sim), then `--integration-browser --summary` for step 7. Headless only; never a headed browser on this desktop.
+
+### 5. Traps in this repo
+
+- Falco.Markup and Falco.Datastar builders only in the pane, no attribute strings; one `#main` morph (the dashboard taste notes in `CLAUDE.md`).
+- `DashboardTypes.fs` is on the `Plugin:` trailer list. Slice 1 adds no wire, so keep the model in new files and leave that file alone.
+- No new MCP tool (`RatchetBudgets.toolList`, `SageFs.Tests/RatchetBudgets.fs:462`). If an agent should read the notebook, extend `get_cell_dependencies`.
+- Durations: a debounce for re-splitting goes in `Timeouts` with a name, never a literal (`TimeoutLiteralsTests`).
+- Relative units in the pane CSS (`DashboardTypeScaleTests`); monochrome glyphs only (`DashboardGlyphTests`).
+- The browser tier is heavy: run it alone, check free memory first.
+
+### 6. Size and order
+
+M for slice 1, two to three weeks for one person. Steps 1 to 3 are serial and small (a day or two together). Step 4 and steps 5 to 6 run in parallel once step 3's types are fixed. First commit: step 1, `feat(notebook): CellSplitter splits an .fsx into cells the way the editors do, with fixtures`.
+
+### 7. Not now
+
+- Editor chips (`cell_status` SSE) and the Jupyter view: wire work that waits for slice 1 to be accepted; the plugin goes first when it comes.
+- Auto-run of stale cells: slice 2, Off by default.
+- Replacing the clients' cell rules with the daemon's: only after the fixtures run in all three repos.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -27,10 +88,10 @@ Outcome gate: a Playwright.NET journey in the dashboard browser tier (Expecto, `
 The pieces exist separately. What is missing is the thing that ties a cell to a place in a file.
 
 - A cell in the daemon is an eval, not a file range. `SageFs.Core/Features/CellDependencyGraph.fs` defines `CellInfo { Id: CellId (int); Source; Produces; Consumes }`, built from eval history (`EvalStore.materializeGraph`). `EvalStore.fs` records code and output and keeps no file path or line (I grepped it for `FilePath`: no match). `producedNames` reads the `val` lines of FSI output.
-- Staleness exists for eval cells: `EvalProvenance.Staleness = Fresh | StaleUpstream of CellId list` (`Features/EvalProvenance.fs`), computed by `Diagnostician` (`Diagnostician.fs:76, 204`) from the graph and a set of changed cells. `EvalRipple.RipplePlan` orders a cascade re-eval. MCP exposes them as `get_cell_dependencies`, `plan_ripple`, `suggest_next_cell`, `export_notebook` (`SageFs/McpTools.fs:2040-2210`); the `cell_dependencies` SSE event carries the graph.
-- A place in a file is known only for a moment: `/exec` accepts `file_path` and `block_start_line` (`McpServer.fs:2484`), emits `eval_started` / `eval_result` SSE with them, stores them in `rctx.LastEvalContext`, and nothing keeps them afterwards.
+- Staleness exists for eval cells: `EvalProvenance.Staleness = Fresh | StaleUpstream of CellId list` (`Features/EvalProvenance.fs`), computed by `Diagnostician` (`Diagnostician.fs:76, 204`) from the graph and a set of changed cells. `EvalRipple.RipplePlan` orders a cascade re-eval. MCP exposes them as `get_cell_dependencies`, `plan_ripple`, `suggest_next_cell`, `export_notebook` (`SageFs/McpTools.fs:2178-2481` at 8975e898); the `cell_dependencies` SSE event carries the graph.
+- A place in a file is known only for a moment: `/exec` accepts `file_path` and `block_start_line` (`McpServer.fs:2756`, read at 2773), emits `eval_started` / `eval_result` SSE with them, stores them in `rctx.LastEvalContext`, and nothing keeps them afterwards.
 - Cell boundaries are decided twice by clients, never by the daemon: `sagefs-vscode/src/CodeBlocks.fs` (`getBlockBounds`: `;;` delimiters if the file has any, else blank-line blocks) and `sagefs.nvim/lua/sagefs/cells.lua` (`is_boundary_line` and friends). `NotebookExport.fs` (F#) and `sagefs.nvim/lua/sagefs/notebook.lua` both read and write `(* @sagefs-cell[...] *)` markers, with different layouts (`@sagefs-cell[0] label:x deps:1` against `@sagefs-cell[1]: duration_ms=..`). I did not test whether one parses the other's output.
-- Unsaved edits reach the daemon: `POST /api/sessions/{sid}/buffer-changed` dispatches `SageFsMsg.BufferContentChanged (Some sid, filePath, content)` into the Elm loop (`McpServer.fs:3444`). VS Code and Neovim post it for live testing as you type.
+- Unsaved edits reach the daemon: `POST /api/sessions/{sid}/buffer-changed` dispatches `SageFsMsg.BufferContentChanged (Some sid, filePath, content)` into the Elm loop (`McpServer.fs:3970-3991`). VS Code and Neovim post it for live testing as you type.
 - The value tree: `Features/LiveValueTree.fs` (`LiveValueSnapshot`, `LiveBindingValue`, `LiveValueNode`, walk modes Safe / Everything / Off, caps `MaxDepth` 6, `MaxChildren` 50, `MaxNodes` 10000) pushed as the `live_bindings` SSE event after every eval; there is no GET. The dashboard renders it in `SageFs/LiveBindingsDock.fs` (pinning, filter by name, a flash on the value that changed, click-to-run for held getters). VS Code consumes the event (`LiveTestingListener.fs:626`), Neovim renders it in `bindings_view.lua`. Jupyter does not.
 - Panes: `SageFs/DockPanes.fs` has `DockPane = LiveBindings | AppOutput` with a pure decision; the dashboard has a single `#main` morph (AGENTS taste: every state is a full `renderMainContent`).
 - `samples/from-jupyter/notebook.fsx` says a crashed session swaps for "a pre-warmed one". The standby pool was removed (`docs/decisions.md`, "No standby worker pool"), so that sample line is false and `hard_reset_fsi_session in 200ms` is unmeasured. Fix the sample when this ships its own copy of the pitch.
