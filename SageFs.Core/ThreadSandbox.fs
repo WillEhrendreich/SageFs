@@ -109,6 +109,10 @@ module Seccomp =
   // socket, connect, accept, sendto, sendmsg, bind, listen, socketpair, accept4, sendmmsg.
   let private networkSyscalls = [ 41u; 42u; 43u; 44u; 46u; 49u; 50u; 53u; 288u; 307u ]
 
+  // io_uring_setup 425, io_uring_enter 426, io_uring_register 427. One submission opens for write, writes, unlinks,
+  // renames, connects and sends without issuing any syscall this filter names, so it is refused under every policy.
+  let private ioUringSyscalls = [ 425u; 426u; 427u ]
+
   // truncate 76, ftruncate 77, rename 82, mkdir 83, rmdir 84, creat 85, link 86, unlink 87, symlink 88,
   // chmod 90, fchmod 91, chown 92, fchown 93, lchown 94, mknod 133, mkdirat 258, mknodat 259, fchownat 260,
   // unlinkat 263, renameat 264, linkat 265, symlinkat 266, fchmodat 268, renameat2 316,
@@ -223,7 +227,7 @@ module Seccomp =
     | Allowed
 
   let private x86_64Body (threads: ThreadCreation) (policy: SandboxPolicy) : Insn list =
-    let network = denyEach networkSyscalls
+    let network = denyEach (networkSyscalls @ ioUringSyscalls)
     // clone3 answers ENOSYS (its flags sit in a struct the filter cannot read), so glibc falls back to clone, which it can read.
     // The flag test leaves the argument in the accumulator, so the syscall number is loaded again after it.
     let threadCreation =

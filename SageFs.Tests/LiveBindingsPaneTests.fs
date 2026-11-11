@@ -88,6 +88,13 @@ let containmentTests =
       | LiveBindingsPane.LineSays text -> text |> Expect.stringContains "the filter" "ran under a syscall filter"
       | other -> failtestf "expected a line, got %A" other
 
+    // The filter is on the getter's own thread. A pool thread that already existed does not carry it, so work the getter
+    // queued (a Task, the continuation of an await) ran without it, and nothing records whether any did.
+    testCase "WHY - the filtered line says work handed to the thread pool ran outside the filter, because the pool's threads do not carry it" <| fun _ ->
+      match LiveBindingsPane.containmentLine (LiveBindingsPane.ClickAnswered(shown (ContainedBy SandboxPolicy.NoNetworkNoWritesNoSpawn))) with
+      | LiveBindingsPane.LineSays text -> text |> Expect.stringContains "names the pool" "thread pool ran outside it"
+      | other -> failtestf "expected a line, got %A" other
+
     testCase "a getter that ran with no filter says there is no I/O containment, and why" <| fun _ ->
       match LiveBindingsPane.containmentLine (LiveBindingsPane.ClickAnswered(shown (NotContained NotLinux))) with
       | LiveBindingsPane.LineSays text ->

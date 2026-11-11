@@ -129,6 +129,10 @@ let private nrExit = 60
 /// socket, connect, accept, sendto, sendmsg, bind, listen, socketpair, accept4, sendmmsg.
 let private networkNrs = [ 41; 42; 43; 44; 46; 49; 50; 53; 288; 307 ]
 
+/// io_uring_setup, io_uring_enter, io_uring_register. A submission queue entry opens, writes, unlinks, connects and sends
+/// without issuing any of those syscalls, so a filter that allows io_uring allows all of them.
+let private ioUringNrs = [ 425; 426; 427 ]
+
 /// truncate, ftruncate, rename, mkdir, rmdir, creat, link, unlink, symlink, chmod, fchmod, chown, fchown,
 /// lchown, mknod, mkdirat, mknodat, fchownat, unlinkat, renameat, linkat, symlinkat, fchmodat, renameat2,
 /// openat2, fchmodat2, then the spawn calls fork, vfork, execve, execveat.
@@ -159,7 +163,7 @@ let private model (policy: SandboxPolicy) (d: SeccompData) : Expected =
   | false, _ -> ExpectAllow
   | true, true -> ExpectErrno eperm
   | true, false ->
-    match List.contains d.Nr networkNrs with
+    match List.contains d.Nr networkNrs || List.contains d.Nr ioUringNrs with
     | true -> ExpectErrno eperm
     | false ->
       match d.Nr with
@@ -193,7 +197,7 @@ let private allArchitectures = [ X86_64; Aarch64 ]
 /// Syscall numbers weighted toward the ones the filter has an opinion about, plus the x32 range.
 let private genNr : Gen<int> =
   let interesting =
-    networkNrs @ deniedOutrightNrs
+    networkNrs @ ioUringNrs @ deniedOutrightNrs
     @ [ nrOpen; nrOpenat; nrClone; nrClone3; nrRead; nrWrite; nrMmap; nrFutex; nrMadvise; nrGetpid; nrExit ]
   Gen.frequency
     [ 4, Gen.elements interesting
@@ -438,6 +442,11 @@ let seccompProgramTests =
     testCase "WHY — no policy lets the filtered thread make a thread, because a thread it made would inherit the filter for the life of the process" <| fun _ ->
       for policy in allPolicies do
         verdictIs policy nrClone [ cloneThread ] |> Expect.equal (sprintf "clone with CLONE_THREAD under %A" policy) (VErrno eperm)
+
+    testCase "WHY - io_uring is refused under every policy, because one submission can open for write, unlink or connect without any syscall the rest of the filter names" <| fun _ ->
+      for policy in allPolicies do
+        for nr in ioUringNrs do
+          verdictIs policy nr [] |> Expect.equal (sprintf "syscall %d under %A" nr policy) (VErrno eperm)
 
     testCase "WHY — NoNetworkNoWritesNoSpawn refuses a clone without CLONE_THREAD too, so it makes no process either" <| fun _ ->
       verdictIs NoNetworkNoWritesNoSpawn nrClone [ 0UL ] |> Expect.equal "clone without CLONE_THREAD" (VErrno eperm)

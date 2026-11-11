@@ -62,7 +62,9 @@ module LiveBindingsPane =
     | ClickAnswered outcome ->
       match outcome with
       | MemberShown(_, ContainedBy _, guards) ->
-        LineSays(withGuards "ran under a syscall filter (no network, no file writes, no new processes)" guards)
+        // The filter is on the getter's own thread only: a pool thread that already existed does not carry it, and nothing
+        // records whether the getter queued work there, so the line says so instead of claiming the whole call was contained.
+        LineSays(withGuards "ran under a syscall filter (no network, no file writes, no new processes) on its own thread; work it handed to the thread pool ran outside it" guards)
       | MemberShown(_, NotContained why, guards) ->
         LineSays(withGuards (sprintf "no I/O containment here: %s" (SandboxUnavailable.describe why)) guards)
       | MemberRefused refusal -> LineSays(sprintf "not run: %s" (MemberClick.describeRefusal refusal))
