@@ -105,7 +105,7 @@ let warmupDiagnostics (diagnostics: Diagnostics.Diagnostic array) : WarmUp.Warmu
     ({ Message = d.Message
        Severity =
          match d.Severity with
-         | Diagnostics.DiagnosticSeverity.Blocking -> WarmUp.WarmupSeverity.Error
+         | Diagnostics.DiagnosticSeverity.Blocking -> WarmUp.WarmupSeverity.Blocking
          | Diagnostics.DiagnosticSeverity.Warning -> WarmUp.WarmupSeverity.Warning
          | Diagnostics.DiagnosticSeverity.Info
          | Diagnostics.DiagnosticSeverity.Hidden -> WarmUp.WarmupSeverity.Info

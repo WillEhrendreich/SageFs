@@ -3952,7 +3952,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
                       for d in f.Diagnostics do
                         let sevClass =
                           match d.Severity with
-                          | WarmUp.WarmupSeverity.Error -> "diag-error"
+                          | WarmUp.WarmupSeverity.Blocking -> "diag-error"
                           | WarmUp.WarmupSeverity.Warning -> "diag-warning"
                           | WarmUp.WarmupSeverity.Info -> "diag"
                         Elem.li [ Attr.class' sevClass; Attr.style "margin: 0.15em 0;" ] [

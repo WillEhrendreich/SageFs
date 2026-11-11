@@ -208,7 +208,7 @@ let private oneWarmup : WarmupContext =
           Kind = WarmUp.OpenableKind.Module
           ErrorMessage = "err"
           Diagnostics =
-            [ { Message = "m"; Severity = WarmUp.WarmupSeverity.Error; ErrorNumber = 39; FileName = Some "f.fs"; StartLine = 1; EndLine = 2; StartColumn = 3; EndColumn = 4 }
+            [ { Message = "m"; Severity = WarmUp.WarmupSeverity.Blocking; ErrorNumber = 39; FileName = Some "f.fs"; StartLine = 1; EndLine = 2; StartColumn = 3; EndColumn = 4 }
               { Message = "n"; Severity = WarmUp.WarmupSeverity.Warning; ErrorNumber = 40; FileName = None; StartLine = 5; EndLine = 6; StartColumn = 7; EndColumn = 8 } ]
           RetryCount = 1
           DurationMs = FixtureDurations.instantOpenMs } ]

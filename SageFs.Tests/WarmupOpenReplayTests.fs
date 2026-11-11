@@ -263,7 +263,7 @@ let warmupFcsDiagnosticFormattingTests =
     test "WHY — a diagnostic with no file omits the location entirely instead of printing a fake 'unknown' placeholder" {
       let d: WarmupFcsDiagnostic = {
         Message = "The namespace or module 'WaitForGraph' is not defined."
-        Severity = WarmupSeverity.Error; ErrorNumber = 39; FileName = None
+        Severity = WarmupSeverity.Blocking; ErrorNumber = 39; FileName = None
         StartLine = 0; EndLine = 0; StartColumn = 0; EndColumn = 0
       }
       let line = WarmupFcsDiagnostic.formatLine d
@@ -273,7 +273,7 @@ let warmupFcsDiagnosticFormattingTests =
 
     test "WHY — a diagnostic WITH a file still renders its location" {
       let d: WarmupFcsDiagnostic = {
-        Message = "boom"; Severity = WarmupSeverity.Error; ErrorNumber = 39
+        Message = "boom"; Severity = WarmupSeverity.Blocking; ErrorNumber = 39
         FileName = Some "Foo.fs"; StartLine = 3; EndLine = 3; StartColumn = 5; EndColumn = 9
       }
       WarmupFcsDiagnostic.formatLine d
@@ -283,7 +283,7 @@ let warmupFcsDiagnosticFormattingTests =
     test "WHY — the real first-error diagnostic message is preferred over FSI's generic cascade wrapper" {
       let diagnostics : WarmupFcsDiagnostic list = [
         { Message = "The namespace or module 'WaitForGraph' is not defined."
-          Severity = WarmupSeverity.Error; ErrorNumber = 39; FileName = None
+          Severity = WarmupSeverity.Blocking; ErrorNumber = 39; FileName = None
           StartLine = 0; EndLine = 0; StartColumn = 0; EndColumn = 0 }
       ]
       WarmupFcsDiagnostic.pickErrorMessage "Operation could not be completed due to earlier error(s)" diagnostics
