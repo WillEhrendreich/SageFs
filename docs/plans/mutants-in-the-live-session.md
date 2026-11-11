@@ -1,6 +1,71 @@
 # Mutation testing in the live session
 
-Roadmap item: `mutants-in-the-live-session` (Exploring, Live testing). Plan written 2026-10-26 against master `59a8692c`.
+Roadmap item: `mutants-in-the-live-session` (Exploring, Live testing). Plan written 2026-10-26 against master `59a8692c`. Work order added 2026-11-11 against master `8975e898`; every `path:line` below was read on that tree.
+
+## Work order
+
+### 1. Outcome
+
+Today nobody knows whether a mutant patched into the running host is cheaper than a build per mutant, and nothing in SageFs mutates user code. The first deliverable is that number, from a throwaway spike with its stop condition fixed before the first run. If the spike passes, the feature is: in a session with live testing on, ask which mutants of the function or file you just saved survive your tests, and get the survivors on their source lines in seconds. The outcome gate for the feature is `MutantJourneyTests` in the host tier (`--integration-host`, registered with `Integration.hostListConcurrent` per `HostRuntime`, the pattern at `SageFs.Tests/HotReloadStateOutcomeTests.fs:471`), on a fixture with a hand-listed set of mutants: reported survivors equal the baseline's for every supported cell, every unsupported cell names its reason, and `GET /api/live-testing/entries` shows the same verdicts after the run as before it. Linux x64 on net10 and net11 is the matrix the host tier runs. Windows and macOS are unproven, and the Harmony route depends on the patched MonoMod (`docs/how-hot-reload-works.md`), so a Windows result is not implied by a Linux one.
+
+### 2. Where the code is today
+
+- Mutation of SageFs's own tests: `SageFs.Tests/MutationTestingFramework.fs:25` (`Mutant<'a>`), `:91` (`computeMutationScore`); the `--mutation-score` tier is `SageFs.Tests/Program.fs:60`. It mutates a function handed to a test, never IL or source.
+- IL patching in the host, reversible: `SageFs.Core/Features/GuardPatcher.fs:17` (`GuardLease` with `Release`), `:80` (`GuardTranspiler.Weave`), `:106` (`PatchRegistry`), `:138` (`Release`), `:153` (`ReleaseBeforeDetour`). Refusals: `GuardCoverage.fs:10` (`SkipReason`), `:81` (`describe`). Pure IL model: `GuardIl.fs`. What hot reload re-pointed: `DetourLedger.fs`. These files are compiled into the FSI host too: `SageFs.Core/SageFs.Core.fsproj:137-143` (Compile), `:172-176` (EmbeddedResource), `SageFs.Core/FsiHostBuild.fs:40-44` (the embed list), and `SageFs.FsiHost/FsiHost.fsproj`. A new patcher file needs all four entries.
+- Runaway containment: `SageFs.Core/Features/GuardRuntime.fs:77` (`Guard.Check`), `:32` (`GuardCell.RequestStop`).
+- Per-test coverage: `SageFs.Core/Features/CoverageInstrumenter.fs:383` (`instrumentShadowSolution`), `SageFs.Core/Features/LiveTestingTypes.fs:599` (`InstrumentationMap`), `:750` (`CoverageBitmap`), `:897` (`findCoverageAffected`), `:921` (`narrowByLines`), `:1751` (`TestCoverageBitmaps`).
+- Detours: `SageFs.Core/Middleware/HotReloadCore.fs:310` (`detourMethodObserved`), `:369` (`detourMethod`), `:783-784` (`CreateNativeDetour`, and the comment that nothing undoes one).
+- Build flags: `SageFs.Core/SessionBuild.fs:122` (`-p:Optimize=false`), `SageFs.Core/ProjectLoading.fs:1542` (`--multiemit-`), `:1550` (`--optimize-`).
+- Running tests in a worker: `SageFs.Core/WorkerRoute.fs:48-49` (`RunTests`, `RunTestsStream`), `SageFs.Core/WorkerProtocol.fs:383` (`WorkerMessage.RunTests of tests * maxParallelism * replyId`).
+- The throwaway worker the old plan waited on EXISTS. `confirm-builds-without-restarting-the-worker` is Done: `SageFs.Core/ConfirmationVenue.fs` (pure), `SageFs/ConfirmWorkers.fs:12-40` (`ThrowawayWorker`, `ThrowawaySpec`, `StartedThrowaway` with `AwaitReady` and `Retire`), `:164` (`start (ports: ThrowawayPorts)`), `SageFs.Simulation/ConfirmThrowawaySim`. The stopgap (pause and lease) and decision 3 below are moot.
+- Bounds: `SageFs.Core/Timeouts.fs:288` (`perTestDefault`). Pause: `LiveTestingTypes.fs:239` (`LivePause`).
+- Surfaces: `coverage_intel` is `SageFs/McpTools.fs:2077`; `apiVersion = 4` at `SageFs.Core/EndpointContracts.fs:38`.
+- Stryker.NET: its Introduction and Mutations pages (read 2026-11-11) say nothing about F#; every mutator example is C#. Route B is a plain build per mutant unless the person finds F# support somewhere else `[not verified]`.
+- No mutation fixture exists: `SageFs.Tests/fixtures/` has `LiveTestingSample` and `LiveTesting`, `samples/` has none.
+
+### 3. Steps
+
+The spike (steps 1 to 3) is thrown away. Nothing from it is committed except the write-up and this block.
+
+1. **Spike, non-vacuity, route A.** In a REPL session on `SageFs.Tests/fixtures/LiveTestingSample` (or a 30-line Expecto project in the scratchpad with `let add a b = a + b` and one test): reflect the `MethodInfo` of `add`, build a Harmony transpiler that swaps the one `add` opcode for `sub`, patch, run the covering test in-process through Expecto, unpatch, run it again. Required: fail, then pass, `git diff` clean. **Stop condition:** Harmony refuses the method, or the test does not fail under the mutant. Either one is written as `Stopped: <why>` in Resume here and the item ends. Half a day. Pure spike, no product code.
+2. **Spike, route C.** In a HotReload-workflow session on the same fixture, eval `let add a b = a - b`, then `run_tests` the compiled test. Did its verdict flip? Yes means a REPL redefinition reaches compiled tests, which `docs/hot-reload.md` and `run-tests-reuses-proven-results` both wait to know. No means route C is dead; record it, keep going with A. Half a day.
+3. **Spike, agreement and timing.** New fixture `SageFs.Tests/fixtures/MutationFixture` (four modules, about 150 lines, tests weak on purpose at a third of the sites) with `mutants.md` beside it listing 40 mutants and the expected verdict each. Run all 40 by B and by A (and C if alive). Record per mutant: verdict and apply, run, revert, total milliseconds; machine and load as `LatencyStats.reportLine` prints them. **Stop condition (the decision rule, fixed now):** build the feature only if A agrees with B on at least 95 percent of the mutants both can run with every disagreement explained, costs under one twentieth of B per mutant including revert, and runs at least 70 percent of B's sites. Anything else: table into `docs/decisions.md`, Status `Stopped`, roadmap text rewritten by Will. One day.
+4. **Feature, pure planner.** RED `SageFs.Tests/MutantPlanTests.fs` (module `SageFs.Tests.MutantPlanTests`; add `<Compile Include="MutantPlanTests.fs" />` to `SageFs.Tests/SageFs.Tests.fsproj` before `Program.fs`): a method with an `add` and a covering test yields one `Mutant` at that site with that test; an uncovered line yields `NoCoveringTest`; an `inline` function yields `Unsupported Inlined`. Then `SageFs.Core/Features/Mutants.fs` (after `LiveTestingTypes.fs` and `GuardIl.fs` in the fsproj) with the types in Design and `plan`, `score`. Pure domain. Property tests on `score` (test 3 below) and the mutation cases (test 4) in the same file.
+5. **Feature, IL rewrite.** RED `MutantRewriteTests.fs`: each operator changes exactly one instruction; apply then undo is the identity on the `IlInstruction` list; a branch rewrite keeps `Marks`/`Opens`/`Closes`. Code in `Mutants.fs` beside `GuardIl.fs`'s rules. Pure. Parallel with 4 after the types land.
+6. **Feature, the lease.** `SageFs.Core/Features/MutantPatcher.fs`, `MutantLease` with the same `Release` discipline as `GuardLease`; refusals reuse `SkipReason` and add the `Inlined`, `ModuleInitialiser`, `ClosureNotReachable` cases as a closed DU with one describe. Four fsproj/embed entries (see above). Edge code; the test is the host-tier journey.
+7. **Feature, the run in a throwaway worker.** `DECISION:` how the daemon tells the worker to apply a mutant. Options: (a) a new `WorkerRoute` pair `Mutate`/`Unmutate` with a typed body; (b) ride on `Eval` with generated F#. Recommend (a): the route is daemon-to-worker wire, both ends ship in one package, `Plugin: n/a`. Spawn with `ConfirmWorkers.start` and a `ThrowawaySpec` for the session's targets, run covering tests with `WorkerMessage.RunTests`, `Retire` after. The session's own worker is never touched. Edge code.
+8. **Simulation.** `SageFs.Simulation/MutantRunSim.fs` folding the real `Mutants.plan` and the lease step; invariants and twins as in Tests item 5. Tests in `SageFs.Tests/MutantRunSimTests.fs`.
+9. **Route, event, surface.** `POST /api/live-testing/mutants` in `SageFs.Core/EndpointContracts.fs`, one SSE event per outcome, a `mutants` view on `coverage_intel`. `apiVersion` 4 to 5. sagefs.nvim lands first (a mark and a command); the commit carries `Plugin: done ...`.
+10. **Journey.** `MutantJourneyTests.fs`, `Integration.hostListConcurrent` per runtime, cells from the matrix in "What done looks like", no skip cells.
+
+### 4. How to check it
+
+- Spike: `create_project_session` on the fixture, `send_fsharp_code` for each step, `run_tests` for the compiled side. Route B is `dotnet build -p:Optimize=false` then `dotnet test --no-build --filter <covering test>` in a scratch copy, timed with `Stopwatch` from an `.fsx` run through the session.
+- Inner loop: `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --filter-test-list "Mutant" --summary` (list names, so `--filter-test-list`; read the `TRUST` line's `ran=`).
+- Ratchets after every edit: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Acceptance: unfiltered `--summary`, then `--integration-host --summary` for the journey (`SAGEFS_HOST_SHARDS=5` on this machine).
+
+### 5. Traps in this repo
+
+- SAGE-005: `plan` must not take two `int`s or two `string`s side by side; `MutantId`, `IlSite`, `MethodKey` are single-case wrappers.
+- Budgets only go down: `SageFs.Host/WorkerMain.fs` is at its line budget (2503, `RatchetBudgets.fileSize`), so the worker-side apply goes in a new file, with one call from `WorkerMain.fs`. A new test file has a `skipSites` budget of zero.
+- `RatchetBudgets.toolList`: the `coverage_intel` description grows by about 80 tokens; run `--ratchets`, and if it is over, that is a `--tighten` conversation with Will, never a hand edit.
+- `ModuleNameUniquenessTests`: every new file has a module name used nowhere else.
+- No timing tests: the run ends on the SSE completion event; per-mutant bounds come from `Timeouts.perTestDefault` and the guard deadline.
+- Wire change (route, event, `apiVersion`): plugin first, `Plugin:` trailer, every in-repo client in the same commit.
+- Commit `SageFs.Core.fsproj`, `FsiHost.fsproj`, `SageFs.Tests.fsproj` whole, with a pathspec.
+- Harmony and MonoMod are already referenced; no new NuGet package. Linux-only machine.
+
+### 6. Size and order
+
+Spike: two days (steps 1 to 3), one person, nothing in parallel. Feature if it pays: three to four weeks; steps 4 and 5 in parallel on disjoint new files, 6 after 5, 7 after 6, 8 with 7, 9 and 10 last. The first commit is the spike's write-up (`docs/decisions.md` and this block), whichever way it goes. If it goes ahead, the first code commit is the RED `MutantPlanTests.fs` with its fsproj line.
+
+### 7. Not now
+
+- `markers-on-expecto-cases`: per-case marks make a survivor's covering test visible, nice to have, not needed for the verdicts.
+- Persisting outcomes keyed by `InputHashCoverage`: v2, once there is a run to skip.
+- Comparing scores with Stryker: the population is IL-level, the doc says so, and no F# Stryker baseline exists to compare with.
+- Route C as a product mechanism: even if step 2 flips the verdict, the detour cannot be undone (`HotReloadCore.fs:784`), so the revert story has to be built before it is a route.
 
 ## Resume here
 
@@ -12,7 +77,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Size | S for the experiment, L for the feature |
 | Branch and worktree | none yet |
 | Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: apply a mutant, the covering test fails, revert, it passes. Then take the steps below in order. |
+| Next action | Work order step 1: the route A non-vacuity spike in a REPL session, with its stop condition. Then steps 2 and 3 (the table and the decision rule). Code only if the rule says go. |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
@@ -69,7 +134,7 @@ The experiment is iterated in a SageFs session on the fixture (the repo's rule i
 
 ### The feature, if it pays (the rest of this section is conditional)
 
-The run does not happen in the session's own host. A mutant is live in the process for as long as its tests run, and any other test run in that host (the live loop, a keystroke, `run_tests`) would judge the mutant instead of the code. So mutants run in a throwaway worker built from the saved files, the one `confirm-builds-without-restarting-the-worker` adds. That also keeps the session's FSI state. Until that item exists, the only safe alternative is pausing live testing for the run (`LivePause`) and holding the test-suite lease, and that is a stopgap the doc must label.
+The run does not happen in the session's own host. A mutant is live in the process for as long as its tests run, and any other test run in that host (the live loop, a keystroke, `run_tests`) would judge the mutant instead of the code. So mutants run in a throwaway worker built from the saved files, the one `confirm-builds-without-restarting-the-worker` added (`SageFs/ConfirmWorkers.fs`, Done as of 2026-11-11). That also keeps the session's FSI state. The pause-and-lease stopgap this paragraph used to describe is no longer needed.
 
 New slice `SageFs.Core/Features/Mutants.fs`, pure:
 
@@ -128,7 +193,7 @@ No wall-clock waits: the run's end is the SSE completion event; every per-mutant
 3. Routes B, A, C, agreement and timing, the write-up in `docs/decisions.md`. The rest of the day.
 4. If it pays: `Mutants.fs` plan and score with tests 1 to 4, new file only.
 5. The IL rewrite and `MutantLease` (file next to `GuardPatcher.fs`; the fsproj needs the same embedded-into-the-host entries `GuardPatcher.fs` has, `SageFs.Core.fsproj`, `FsiHostBuild.fs`, `FsiHost.fsproj`). Parallel with 4.
-6. The run in the throwaway worker. Needs `confirm-builds-without-restarting-the-worker` step 5 or the pause-and-lease stopgap.
+6. The run in the throwaway worker (`ConfirmWorkers.start`, exists).
 7. Route, SSE event, simulation (test 5), journey (test 6), `coverage_intel` view, `Plugin:` handoff with `apiVersion` 5, docs.
 
 First week: steps 1 to 3 on day one, the write-up on day two, steps 4 and 5 for the rest of the week only if the rule says go.
@@ -157,4 +222,5 @@ S for the experiment (one day plus a half-day write-up). L for the feature: an I
 
 1. Is the decision rule above the right bar? Recommendation: yes, set before the day. In particular the 95 percent agreement: a mutation score people cannot trust is worse than none.
 2. Surface: extend `coverage_intel`, or a new tool? Recommendation: extend it. Agents get survivors in the tool they already call for coverage, and the catalog does not grow.
-3. May the feature ship with the pause-and-lease stopgap before the throwaway worker exists? Recommendation: no. The stopgap blocks the live loop for the length of a mutation run, which is the thing live testing exists to avoid; wait for the throwaway worker.
+3. (Closed 2026-11-11: the throwaway worker exists, so no stopgap is needed.)
+4. How the daemon tells the worker to apply a mutant: a new `WorkerRoute` pair, or generated F# over `Eval`? Recommendation: the route, typed, `Plugin: n/a`.

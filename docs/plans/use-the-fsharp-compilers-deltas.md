@@ -1,6 +1,59 @@
 # Use the F# compiler's own deltas
 
-Roadmap item: `use-the-fsharp-compilers-deltas` (Exploring, hot reload). Plan written 2026-10-26 against master 59a8692c.
+Roadmap item: `use-the-fsharp-compilers-deltas` (Exploring, hot reload). Plan written 2026-10-26 against master 59a8692c. Work order added 2026-11-11 against master `8975e898`; every `path:line` below was read on that tree, and the upstream states were read with `gh` the same day.
+
+## Work order
+
+### 1. Outcome
+
+Nothing here changes what a user can do until the F# compiler ships its delta emitter in an SDK. What ships now is a tripwire that turns red the day the pinned SDK's `fsc` accepts `--test:HotReloadDeltas`, so the signal cannot be missed, plus a doc line that names the signals. Stage 2, after the signal: a save to a `run_app` app can take its delta from the compiler instead of SageFs's emitter, and the outcome gate is the existing `RunAppDeltaTests` rows (`SageFs.Tests/RunAppDeltaTests.fs:285`, `Integration.hostListConcurrent` per runtime) run once per delta source on net10 and net11, every row ending `Patched` with the new body served or in a restart naming the same cause. Linux x64 is where the host tier runs; the delta route on Windows and macOS is the `hot-reload-on-windows-and-macos` item's business.
+
+### 2. Where the code is today
+
+- Upstream, read 2026-11-11 with `gh pr view`: dotnet/fsharp #19941, #20025, #20027, #20030 and #20031 are all OPEN, last updated 2026-10-30/31; dotnet/sdk#55464 is OPEN. So S1, S2 and S3 below are all false today and stage 2 stays gated. `docs/how-hot-reload-works.md:19` and `:133` already carry the 2026-11-10 note on the `fsharp-watch` preview (`0.2.0-preview.20261027.*`), which needs an SDK that carries the compiler API and so is a fifth signal: a stock SDK it works on.
+- Our emitter: `SageFs.Core/Features/MetadataDelta/` (`PeImage.fs`, `IlCanon.fs`, `MethodDiff.fs`, `DeltaWriter.fs`, `DeltaApply.fs`, `DeltaSession.fs`, `RudeCause.fs`, `MetadataDeltaFlag.fs`). `DeltaPayload` is `DeltaWriter.fs:49`, `PrepareOutcome` `:417`, `DeltaChain.PrepareProbing` `:455`, `Commit` `:477`. `MetadataUpdater.ApplyUpdate` with an empty PDB delta: `DeltaApply.fs:272`. `Preparation`, `Refusal` (with `Unavailable of why`), `SaveDecision`: `DeltaSession.fs:28`, `:38`, `:46`. `RudeCause` is `RudeCause.fs:44`.
+- The caller: `SageFs.Host/RunAppDelta.fs:79` (`Session.Start`), `:97` (`Save`), `:109` (`SessionBuild.runBuildAsync`), `:125` (`current.PrepareProbing`).
+- The baseline is the Cecil-instrumented shadow copy: `CoverageInstrumenter.instrumentShadowSolution` (`SageFs.Core/Features/CoverageInstrumenter.fs:383`) called from `SageFs.Core/ActorCreation.fs:130` and `SageFs.Core/AppState.fs:1567`.
+- FSI runs `--multiemit-`: `SageFs.Core/ProjectLoading.fs:1542` (the old plan said 1462).
+- Wire: `ReloadOutcome.ByMetadataDelta` `SageFs.Core/Features/ReloadOutcome.fs:392`, `PatchMechanism` `:246`, `wireName` `:256`; the daemon reads `mechanism` at `SageFs.Core/SessionReload.fs:177` and writes it `:212`.
+- Simulation: `SageFs.Simulation/DeltaRouteSim.fs`; the twin "the chain advances before the runtime has answered" is `:142`, reproduced by `SageFs.Tests/DeltaRouteSimTests.fs:114`.
+- Fixture for the tripwire: `SageFs.Tests/fixtures/RunAppDeltaFixture`. Pinned SDK: `global.json` `11.0.100-rc.1.26425.128`, `rollForward: latestFeature`.
+- The compiler checkout `~/Work/fsharp-compiler-services` exists only on Will's machine; a clone has to fetch dotnet/fsharp itself.
+- `[not verified]`: that stock `fsc` warns FS1063 on `--test:HotReloadDeltas`. The plan takes that from dotnet/sdk#55464's text; the tripwire's first run proves or corrects it.
+
+### 3. Steps
+
+1. **Check the signals (ten minutes, repeat monthly and on every SDK bump).** `gh pr view 20030 --repo dotnet/fsharp --json state,mergedAt` and the same for 20031 and 19941; `gh issue view 55464 --repo dotnet/sdk --json state`. Write the date and states into "Measure first". All open: do steps 2 and 3 only.
+2. **RED `CompilerDeltaTripwireTests.fs`** (new file, module `SageFs.Tests.CompilerDeltaTripwireTests`, `<Compile Include=...>` in `SageFs.Tests/SageFs.Tests.fsproj` before `Program.fs`), registered with `Integration.hostList` so `--integration-host` runs it with no name filter. It runs `dotnet build SageFs.Tests/fixtures/RunAppDeltaFixture -p:OtherFlags=--test:HotReloadDeltas` under the pinned SDK (child process through `SpawnEnvironment.apply`) and asserts the build output carries the flag's warning (FS1063 is the expected id; the first run tells you the real one, and the assertion names it). Its failure message says "the pinned SDK accepts --test:HotReloadDeltas; read docs/plans/use-the-fsharp-compilers-deltas.md stage 2". No skip cell: a machine without the SDK fails and says so. Edge code; green on day one.
+3. **Doc commit.** In `docs/how-hot-reload-works.md`, after the #19941 paragraph (`:19`), one sentence that names the tripwire test and this plan's signal table. Parallel with 2.
+4. **The seam, gated on `DECISION:` 1.** RED `DeltaSourceTests.fs`: `OurEmitterSource.Prepare` on a Cecil-built before/after pair (generators in `SageFs.Tests/DeltaProgram.fs`) equals the mapped `PrepareOutcome` for every case. New `SageFs.Core/Features/MetadataDelta/DeltaSource.fs` compiled before `DeltaSession.fs`, `IDeltaSource` as in Design, `RunAppDelta.Session.Save` calls it at `:125`. Green when every `RunAppDeltaTests` and `DeltaRouteSimTests` case is unchanged. Pure type plus one edge call.
+5. **Sim extension.** `DeltaRouteSim` takes a modelled source (unavailable, stale generation, discards after prepare) with the invariants and the twin in Tests; cases in `DeltaRouteSimTests.fs`. After 4.
+6. **Stage 2 (gated on S3).** `CompilerSessionSource`, `deltaOrigin` additive on `lastReload` and `ReloadReported` with `DeltaOriginWireTests` golden on net10 and net11, the parameterised `RunAppDeltaTests` matrix, experiments 2 to 4. `Plugin: n/a, additive field neither client reads`.
+
+### 4. How to check it
+
+- Inner loop: `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary --filter-test-list "tripwire"` (read `ran=`); for the seam, `--filter-test-list "DeltaSource"` on the default run and `--filter-test-list "run_app metadata delta"` on the host tier.
+- `--ratchets` after each edit.
+- Acceptance: unfiltered `--summary` and `--integration-host --summary` (`SAGEFS_HOST_SHARDS=5`).
+
+### 5. Traps in this repo
+
+- A child-process test uses `SpawnEnvironment.apply`, or the daemon's environment leaks into the build.
+- No timing: the tripwire waits on process exit, nothing else; its bound is a `Timeouts` or `TestTimeouts` value, never a literal.
+- A seam with one implementation is speculative; budgets only go down, so do not add the seam unless decision 1 says so.
+- `RudeCause` is a closed set with one describe; a compiler diagnostic with no case becomes a new case, never a string.
+- Pinning `FSharp.Compiler.Service` to an SDK version would be a new dependency: discussion first.
+- Commit `SageFs.Tests.fsproj` whole, by pathspec. Linux-only machine.
+
+### 6. Size and order
+
+Steps 1 to 3: one day. Step 4 and 5: two to three days, only on decision 1. Stage 2: unsized until #20030 can be read. First commit: the tripwire test file with its fsproj line (step 2). Steps 2 and 3 are file-disjoint and parallel.
+
+### 7. Not now
+
+- Building the compiler checkout to try the session API before #20030 merges: the signatures are still moving.
+- The REPL host as a delta target: it reads coverage from the instrumented module and `--multiemit-` assemblies are reflection-emit (`DeltaApply.moduleGaps`, `CapabilityGap.ModuleIsDynamic`).
+- Rewriting the comparison table for `fsharp-watch`: that happens when a stock SDK carries the API, which is S3.
 
 ## Resume here
 
@@ -12,7 +65,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Size | S for the seam, M to L for the adapter |
 | Branch and worktree | none yet |
 | Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: the emitter wrapped as a source gives the answer `DeltaChain` gave. Then take the steps below in order. |
+| Next action | Work order step 1 (check the five signals with `gh`; all were open on 2026-11-11), then step 2, the tripwire test, and step 3, the doc line. The seam waits on decision 1. |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
@@ -34,7 +87,7 @@ What I read in the F# compiler checkout at `~/Work/fsharp-compiler-services` (ma
 
 - Foundations of #19941 have merged as internal infrastructure with no in-tree caller: #20017 (`ResetCompilerGeneratedNameState`), #20018 (Roslyn-format EnC custom debug info, `AbstractIL/EncMethodDebugInformation.fs`), #20019 (ECMA-335 delta writer, `AbstractIL/FSharpDeltaMetadataWriter.fs`, 992 lines), #20024 (synthesized-name replay), #20026 (`CodeGen/HotReloadBaseline.fs`, `FSharpEmitBaseline`). The merged files are only referenced from `FSharp.Compiler.Service.fsproj`.
 - I found no `HotReloadDeltas` switch and no `CreateHotReloadSession` or `FSharpHotReloadSession` anywhere in `src`. The user-visible part is not in main.
-- FSI multiemit: `docs/fsi-emit.md` says Reflection.Emit on .NET Core cannot write debug symbols, so FSI moved to multiple in-memory assemblies (`--multiemit+`, default on .NET Core). `fsi.fs` loads each with `Assembly.Load(bytes, pdbBytes)`. SageFs runs `--multiemit-` for hot reload (`SageFs.Core/ProjectLoading.fs` line 1462).
+- FSI multiemit: `docs/fsi-emit.md` says Reflection.Emit on .NET Core cannot write debug symbols, so FSI moved to multiple in-memory assemblies (`--multiemit+`, default on .NET Core). `fsi.fs` loads each with `Assembly.Load(bytes, pdbBytes)`. SageFs runs `--multiemit-` for hot reload (`SageFs.Core/ProjectLoading.fs:1542` on 2026-11-11).
 
 What GitHub says (read 2026-10-26): #19941 is open, `mergeable_state` dirty, now an umbrella for four open slices: #20025 (typed-tree differ and edit classification), #20027 (delta emitter and symbol matcher), #20030 (session and FCS service surface), #20031 (experimental flag-gated in-process compile). Its description: opt-in `--test:HotReloadDeltas`, metadata, IL and portable PDB deltas, `FSharpChecker.CreateHotReloadSession`, unsupported edits require a rebuild. dotnet/sdk#55464 (open, assigned) says the session API (`AddProject`, `EmitDelta`, `Commit`, `Discard`, `UpdateCapabilities`, `SetActiveStatements`, `Dispose`) is the cross-repo contract, that watch waits for its new architecture, and that stock `fsc` warns FS1063 on the flag today. I did not read that API's source; it is not in the checkout.
 
@@ -116,6 +169,9 @@ Signals, checked on the first of each month and on every SDK bump (the tripwire 
 | S2 | #20031 merged | A session can produce baseline and deltas from one compile, which removes the on-disk build as the floor. |
 | S3 | Tripwire red under a newer pinned SDK | A shipped `fsc` takes the flag. Go for stage 2. |
 | S4 | dotnet/sdk watch ships an F# provider | Microsoft's tools hot reload F#. The doc comparison table must be rewritten that day. |
+| S5 | `fsharp-watch` (NuGet, Nat Elkins) works on a stock SDK | Same meaning as S3 from the other side; `docs/how-hot-reload-works.md:19` tracks it. |
+
+Checked 2026-11-11 with `gh`: #19941, #20025, #20027, #20030, #20031 all OPEN (updated 2026-10-30/31); dotnet/sdk#55464 OPEN. S1 to S5 false.
 
 Experiments, cheapest first, none needing a shipped SDK:
 

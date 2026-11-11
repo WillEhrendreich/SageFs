@@ -1,6 +1,63 @@
 # Breakpoints in patched code
 
-Roadmap item: `breakpoints-in-patched-code` (Exploring, hot reload). Plan written 2026-10-26 against master 59a8692c.
+Roadmap item: `breakpoints-in-patched-code` (Exploring, hot reload). Plan written 2026-10-26 against master 59a8692c. Work order added 2026-11-11 against master `8975e898`; every `path:line` below was read on that tree.
+
+## Work order
+
+### 1. Outcome
+
+Piece A, which ships first and alone: after a hot reload save with a debugger attached, the reload report says whether a breakpoint in the new body will bind. Today it says nothing, and on the detour route the honest answer is no (the patch lives in a Reflection.Emit assembly with no PDB). Piece C: a save that lands while the debugger has the process stopped is held, reported as held with the stop location, and applied in order on continue; today the eval cannot run and the save is reported as whatever the timeout produces. Piece B, only if experiment E3 says a debugger can bind in an in-memory PDB: the new body is bindable. Outcome gate for A: `PatchSymbolsTests` on the wire plus a `HotReloadDebuggerTests` assertion that each of its four rows reports `NoSymbolsInPatch`. Gate for C: `DebugSaveSim` invariants plus a host-tier row that saves while stopped. Gate for B: `DebuggerBreakpointJourneyTests`, netcoredbg, the four rows times (breakpoint before save, after save) on net10 and net11, every cell stopping at the new line. Linux x64 only: the harness downloads `netcoredbg-linux-amd64` (`SageFs.Tests/HotReloadDebuggerTests.fs:44-59`) and refuses other platforms by name.
+
+### 2. Where the code is today
+
+- The attached-debugger journey: `SageFs.Tests/HotReloadDebuggerTests.fs:43-45` (netcoredbg 3.2.0-1092 pinned), `:50` (`rowNames`), `:86` (`fsiHostPid`), `:112` (`--interpreter=cli --attach`), `:139` (`Debugger.IsAttached` asked through `WorkerMessage.EvalCode`), `:151` (`waitUntilAttached`, still a `Task.Delay` poll), `:268` (`Integration.hostList`). It sets no breakpoint.
+- **A harness that sets breakpoints already exists** (the old plan said none did): `SageFs.Tests/DebugAttachJourneyTests.fs:95` (`DebuggerOutput`), `:325` (`send debugger "break <file>:<line>"`), `:329` (waits for the bind line), `:339` (`Output.Await ... "stopped, reason: breakpoint"`). It drives netcoredbg against a held TEST in the FSI host, not against a hot-reloaded method. Reuse `DebuggerOutput` and `Await` for E1 to E4; do not write a new poll.
+- What SageFs already says about symbols: `SageFs.Core/HostAgent.fs:313-318` (`SymbolSupport = CompiledWithSymbols | DefinedByEval`), pinned by `SageFs.Tests/TestDebugTests.fs`. Nothing on the reload report carries it.
+- The delta route refuses under a debugger: `SageFs.Core/Features/MetadataDelta/DeltaApply.fs:51` and `:76` (`DebuggerAttached` in `CapabilityGap` and `ApplyOutcome`), `:134` (the message), `:159`, `:269`. Empty PDB delta at `:272`.
+- FSI arguments: `SageFs.Core/ProjectLoading.fs:1520-1556` pass `--multiemit-` (`:1542`) and `--optimize-` (`:1550`) and no `--debug` flag of any kind, so E3's expectation is that the host emits no PDB for evaluated code today. The single-assembly constraint is `SageFs.Core/WorkflowTypes.fs:5`.
+- Detours: `SageFs.Core/Middleware/HotReloadCore.fs:310` (`detourMethodObserved`, with canary), `:1689` (`handleNewAsmFromRepl`, the pairing Piece B would break). Tiering off: `SageFs.Core/Middleware/ValueReadTracking.fs:1644` (`processEnvironment`).
+- Wire: `mechanism` read at `SageFs.Core/SessionReload.fs:177`, written `:212`; `PatchMechanism.wireName` `SageFs.Core/Features/ReloadOutcome.fs:256`. `apiVersion = 4`, `SageFs.Core/EndpointContracts.fs:38`.
+- Pure state-machine pattern to copy: `SageFs.Core/DebugTestRequest.fs` and `HostAgent.TestDebug.step`.
+- Budgets: `SageFs.Host/WorkerMain.fs` is at its `RatchetBudgets.fileSize` budget (2503 lines) and so is `HotReloadCore.fs` (1963). New logic goes in new files.
+- The `--integration-lt` tier is the list at `SageFs.Tests/LiveTestingShards.fs:28-36`; a journey joins it by being added to that list, so "registered by reference" there means editing the list.
+- `docs/hot-reload.md:228-235` is the debugger paragraph to rewrite from results.
+- `[not verified]`: whether netcoredbg can read an in-memory portable PDB (E3), whether it implements edit-and-continue (E5), what VS Code's C# extension uses on this machine.
+
+### 3. Steps
+
+1. **RED test 1, Piece A.** New `SageFs.Tests/PatchSymbolsTests.fs` (module `SageFs.Tests.PatchSymbolsTests`, `<Compile Include=.../>` in `SageFs.Tests/SageFs.Tests.fsproj` before `Program.fs`): the reload payload for a detour save carries `symbols` with the Reflection.Emit cause, and it round-trips through `SageFs.Json`. Compile-red. Then new `SageFs.Core/PatchSymbols.fs` with the `PatchSymbols` DU and one `wireName`; the worker puts it on the payload (one line in `WorkerMain.fs`, the building in the new file), the daemon reads it in `SessionReload.fs` beside `mechanism` (`:177`, `:212`). Additive field, `apiVersion` stays 4, trailer `Plugin: n/a, additive field; the plugin may show it later`. Pure plus two edge lines.
+2. **Assertion on the existing rows.** `HotReloadDebuggerTests.fs:268` list: each row's report says `NoSymbolsInPatch`. Edge; host tier.
+3. **Experiments E1 to E5** as `SageFs.Tests/DebuggerBreakpointExperiments.fs`, registered with `Integration.hostList` but printing, not asserting, built on `DebugAttachJourneyTests.DebuggerOutput` and the `HotReloadDebuggerTests` attach. Delete the file when the results are in the plan. Parallel with 1 and 2 (file-disjoint). Results into "Measure first" with the date, and `docs/hot-reload.md:228-235`.
+4. **RED test 2, Piece C pure.** `SageFs.Tests/DebugSaveTests.fs` and `SageFs.Core/Features/DebugSave.fs` (`DebuggerStand`, `HeldSave`, `step`). `SageFs.Simulation/DebugSaveSim.fs` with the invariants and the twin in Tests; `DebugSaveSimTests.fs`. Pure. Parallel with 1 to 3.
+5. **Piece C wire.** `DECISION:` 2 first. `POST /api/sessions/{id}/debugger-stand` in `SageFs.Core/EndpointContracts.fs`; the stand on `get_session_status` (`SageFs/McpTools.fs`) as one field; the fold per session in a new daemon file; the held-save gate in the worker's save path (new file, one call from `WorkerMain.fs`). Wire change: plugin first (`sagefs.nvim` nvim-dap `event_stopped`/`event_continued` listeners), then `sagefs-vscode` (a debug adapter tracker), `Plugin: done ...` on the commit. After 1 and 4.
+6. **Piece B or B2**, by E2, E3 and E5. RED test 3 (`DebuggerBreakpointJourneyTests.fs`, host tier). B compiles the patch with `--multiemit+ --debug+` only while a debugger is attached, behind one setting, with `HotReloadParityTests` run with the setting forced on. Do not start before step 3 reports.
+7. **Docs** from the measured results, dated.
+
+### 4. How to check it
+
+- Inner loop: `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --filter-test-list "PatchSymbols" --summary`, `--filter-test-list "DebugSave"`; host tier `--integration-host --summary --filter-test-list "managed debugger"` (read `ran=`).
+- `--ratchets` after each edit (file sizes, timeout literals, skip sites).
+- Acceptance: unfiltered `--summary`, `--integration-host --summary` (`SAGEFS_HOST_SHARDS=5`); for the stopped-save row, `--integration-lt --summary` if it joins `LiveTestingShards.tree`. Needs netcoredbg on this machine; `SAGEFS_REQUIRE_DEBUGGER=1` makes a machine without one fail instead of pass.
+
+### 5. Traps in this repo
+
+- `WorkerMain.fs` and `HotReloadCore.fs` are at their line budgets: new files, one call each.
+- No timing: wait on netcoredbg's output lines (`DebuggerOutput.Await`) and on the reload report; bounds from `TestTimeouts` (`debugAttach`, `patience`), never a literal. `waitUntilAttached`'s poll is the pattern not to copy.
+- SAGE-005: `StoppedAt of file: string * line: int` is fine; a function taking two strings (file and route) is not.
+- `StandUnknown` fails closed: the save proceeds as today and the report says it could not tell.
+- Wire change in step 5: plugin first, `Plugin:` trailer, dashboard and both editors in the same commit; `apiVersion` stays 4 (additive).
+- A new test file has a `skipSites` budget of zero; a platform refusal is a named failure, not a skip. Module names unique.
+- Commit `SageFs.Tests.fsproj` and `SageFs.Core.fsproj` whole, by pathspec. No new NuGet package. Linux-only machine.
+
+### 6. Size and order
+
+Piece A (steps 1, 2): two days. Experiments (step 3): two days, parallel. Piece C (steps 4, 5): a week here plus client work in two repos. Piece B: unsized until E3. First commit: the RED `PatchSymbolsTests.fs` with its fsproj line.
+
+### 7. Not now
+
+- Stepping through a frame that was running the old body when the save landed: a detour cannot move a running frame; only edit-and-continue proper (B2) could, and that waits on `use-the-fsharp-compilers-deltas` S3.
+- vsdbg: not licensed outside Microsoft products; netcoredbg is the only debugger tested.
+- Fixing `waitUntilAttached`'s poll in `HotReloadDebuggerTests.fs:151`: worth doing, separate commit, not this item's outcome.
 
 ## Resume here
 
@@ -12,7 +69,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Size | A is S, C is M, B is M to L |
 | Branch and worktree | none yet |
 | Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a detour save reports `NoSymbolsInPatch`. Then take the steps below in order. |
+| Next action | Work order step 1: RED `PatchSymbolsTests.fs`, a detour save reports `NoSymbolsInPatch`. Step 3 (experiments E1 to E5 on the `DebugAttachJourneyTests` harness) in parallel. |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
@@ -24,13 +81,13 @@ With a debugger attached to the process that runs a hot-reloaded app, a user set
 
 - `SageFs.Tests/HotReloadDebuggerTests.fs` attaches a pinned netcoredbg (3.2.0-1092, SHA-256 in the file) to the FSI host (`fsiHostPid`, `attach`, `waitUntilAttached`), asks the process `Debugger.IsAttached`, then saves the four rows and expects `Patched`. Its header says what it does not do: no breakpoint is set, nothing steps, nothing edits a method the debugger is stopped in. The harness starts netcoredbg with `--interpreter=cli` and writes commands to its stdin (`continue`).
 - `docs/decisions.md` ("The debugger row downloads a pinned debugger...") names this item as the reason to reopen the row: a detour rewrites the first bytes of the code a breakpoint may sit in.
-- The patch body lives in an FSI assembly that SageFs forces to single-assembly mode (`--multiemit-`, `SageFs.Core/ProjectLoading.fs` line 1462; `SageFs.Core/WorkflowTypes.fs` header explains the constraint). The compiler's own doc (`~/Work/fsharp-compiler-services/docs/fsi-emit.md`) says Reflection.Emit on .NET Core cannot write debug symbols for dynamic assemblies, which is why FSI moved to `--multiemit+` (separate in-memory assemblies loaded with `Assembly.Load(bytes, pdbBytes)`, `Interactive/fsi.fs` around line 1976). So a patched body has no PDB on today's route.
-- SageFs already says this for tests: `HostAgent.TestDebug.SymbolSupport` has `CompiledWithSymbols | DefinedByEval`, with the comment that evaluated code "lives in a dynamic assembly, which has no PDB: the debugger runs it but breakpoints in it do not bind" (`SageFs.Core/HostAgent.fs` line 300 to 306), pinned by `TestDebugTests.fs` ("a test an eval defined is held with DefinedByEval"). Nothing carries that fact on a reload report.
+- The patch body lives in an FSI assembly that SageFs forces to single-assembly mode (`--multiemit-`, `SageFs.Core/ProjectLoading.fs:1542` on 2026-11-11; `SageFs.Core/WorkflowTypes.fs:5` explains the constraint). The compiler's own doc (`~/Work/fsharp-compiler-services/docs/fsi-emit.md`) says Reflection.Emit on .NET Core cannot write debug symbols for dynamic assemblies, which is why FSI moved to `--multiemit+` (separate in-memory assemblies loaded with `Assembly.Load(bytes, pdbBytes)`, `Interactive/fsi.fs` around line 1976). So a patched body has no PDB on today's route.
+- SageFs already says this for tests: `HostAgent.TestDebug.SymbolSupport` has `CompiledWithSymbols | DefinedByEval`, with the comment that evaluated code "lives in a dynamic assembly, which has no PDB: the debugger runs it but breakpoints in it do not bind" (`SageFs.Core/HostAgent.fs:313-318` on 2026-11-11), pinned by `TestDebugTests.fs` ("a test an eval defined is held with DefinedByEval"). Nothing carries that fact on a reload report.
 - `SageFs.Core/DebugTestRequest.fs` and the `HostAgent.TestDebug.step` transition (Hold, HoldEvent, HoldEffect) are the house pattern for a pure state machine around an attached debugger; `DebugAttachJourneyTests.fs` (`--integration-lt`) runs a real attach end to end.
 - The delta route refuses under a debugger. `DeltaApply.moduleGaps` yields `CapabilityGap.DebuggerAttached` and `DeltaApply.apply` returns `ApplyOutcome.DebuggerAttached`; the save restarts and names it (`docs/hot-reload.md`, "A debugger on the app's process..."). The delta is applied with an empty PDB delta (`DeltaApply.fs` line 272).
 - Detours are MonoMod native detours through `HotReloadCore.detourMethodObserved`, with a canary that compares machine code before and after. The host runs with tiering off by default (`ValueReadTracking.processEnvironment`), and SageFs builds with `Optimize=false`, which stamps `DebuggableAttribute` (`SageFs.Core/SessionBuild.fs`, `BuildOptimization.fs`), so JIT output for project code is debuggable.
 
-What I could not find: any test or doc that binds a breakpoint in a hot-reloaded method, and any signal from an editor to the daemon saying the debuggee is stopped.
+What I could not find: any test or doc that binds a breakpoint in a hot-reloaded method, and any signal from an editor to the daemon saying the debuggee is stopped. (Update 2026-11-11: `SageFs.Tests/DebugAttachJourneyTests.fs:325-339` does bind a breakpoint with netcoredbg and waits on its `stopped, reason: breakpoint` line, against a test held in the FSI host. That is the harness to reuse; it still binds nothing in patched code.)
 
 ## Design
 
@@ -89,7 +146,7 @@ Simulation `DebugSaveSim` in `SageFs.Simulation`: seeded events (saves on severa
 
 Property test (FsCheck): any sequence of events leaves `HeldSave.Held []` empty after `StandChanged Running` followed by enough `SaveFinished`.
 
-Waiting: the journey waits on the debugger's stopped event line and on the daemon's reload report, never a sleep. `waitUntilAttached` already polls the process and is the pattern; replace its `Task.Delay TestTimeouts.pollService` loop for new code with a read of netcoredbg's output stream for the `stopped` marker.
+Waiting: the journey waits on the debugger's stopped event line and on the daemon's reload report, never a sleep. `DebugAttachJourneyTests.DebuggerOutput.Await` already reads netcoredbg's output stream for a marker line; use it. `waitUntilAttached` in `HotReloadDebuggerTests.fs:151` still polls with `Task.Delay` and is the pattern not to copy.
 
 ## Steps
 
