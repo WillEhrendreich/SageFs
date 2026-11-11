@@ -193,7 +193,7 @@ let toolBodyTests =
       let! _ = McpCohortTools.leaveCohort ctx "alice" wd
       let! result = McpCohortTools.delegateConductor ctx "bob" "vera" wd
       let text = refused "delegating from a vacant seat" result
-      text |> Expect.stringContains "says the seat is vacant" "VACANT"
+      text |> Expect.stringContains "says the seat is vacant" "seat is vacant"
       text |> Expect.stringContains "says why no member can fill it" "delegate_conductor"
     }
   ]

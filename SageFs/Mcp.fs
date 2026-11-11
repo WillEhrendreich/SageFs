@@ -3154,7 +3154,7 @@ module McpTools =
       let ownerForScope = CohortOwnerResolution.ownerForScope ctx.CohortSupport (Cohort.scopeOf cmd)
 
       match ownerForScope with
-      | None -> return Error(SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+      | None -> return Error SageFsError.CohortOwnerNotWired
       | Some owner ->
         let! result = owner.Commit cmd
         match result with

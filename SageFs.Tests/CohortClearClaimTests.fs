@@ -362,24 +362,24 @@ let clearRefusalTextTests =
     test "a holder that is here is named with how long it was silent and how long it must be" {
       let bobId = MemberId.Minted "bob"
       match CohortErrorMapping.toSageFsError (CohortError.ClearRefused(ClaimId "c-1", ClearRefusal.HolderActive(bobId, TimeSpan.FromTicks(silentAfter.Ticks / 4L), silentAfter))) with
-      | SageFsError.CohortActionFailed(reason, suggestion) ->
+      | SageFsError.CohortRefused(CohortFailureKind.ClearRefused, reason, suggestion) ->
         reason |> Expect.stringContains "who and how long" "30 s"
         reason |> Expect.stringContains "the window" "2 min"
         suggestion |> Expect.stringContains "the next action" "release_claim"
-      | other -> failwithf "expected CohortActionFailed, got %A" other
+      | other -> failwithf "expected CohortRefused(ClearRefused), got %A" other
     }
 
     test "an already released claim says who released it and that the scope is free" {
       match CohortErrorMapping.toSageFsError (CohortError.ClearRefused(ClaimId "c-1", ClearRefusal.AlreadyReleased(MemberId.Minted "bob", epoch))) with
-      | SageFsError.CohortActionFailed(reason, suggestion) ->
+      | SageFsError.CohortRefused(CohortFailureKind.ClearRefused, reason, suggestion) ->
         reason |> Expect.stringContains "who released it" "bob"
         suggestion |> Expect.stringContains "the scope is free" "acquire_claim"
-      | other -> failwithf "expected CohortActionFailed, got %A" other
+      | other -> failwithf "expected CohortRefused(ClearRefused), got %A" other
     }
 
     test "a claim held by someone else says the conductor can clear it when the holder is gone" {
       match CohortErrorMapping.toSageFsError (CohortError.NotClaimHolder(ClaimId "c-1", MemberId.Minted "carol")) with
-      | SageFsError.CohortActionFailed(_, suggestion) -> suggestion |> Expect.stringContains "the way out" "the conductor can clear it"
-      | other -> failwithf "expected CohortActionFailed, got %A" other
+      | SageFsError.CohortRefused(CohortFailureKind.NotClaimHolder, _, suggestion) -> suggestion |> Expect.stringContains "the way out" "the conductor can clear it"
+      | other -> failwithf "expected CohortRefused(NotClaimHolder), got %A" other
     }
   ]

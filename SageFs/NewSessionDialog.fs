@@ -177,6 +177,7 @@ module DaemonRefusal =
     | SageFsError.JsonParseError _
     | SageFsError.CohortActionFailed _
     | SageFsError.CohortRefused _
+    | SageFsError.CohortOwnerNotWired
     | SageFsError.SessionRestarting _
     | SageFsError.ToolFailed _
     | SageFsError.Unexpected _ -> DaemonRefusal.Other

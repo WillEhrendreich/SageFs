@@ -93,6 +93,8 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   // an internal failure.
   | SageFs.SageFsError.CohortActionFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | SageFs.SageFsError.CohortRefused _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  // The server the call reached cannot run cohort commands at all: an operation that failed, not a bad request.
+  | SageFs.SageFsError.CohortOwnerNotWired -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   // A restart in progress is the session coming back, the same wait as warmup.
   | SageFs.SageFsError.SessionRestarting _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
   // A failure a tool body only described in text: it failed, and the text names no finer family.

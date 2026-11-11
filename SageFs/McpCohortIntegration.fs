@@ -431,7 +431,7 @@ module McpCohortIntegration =
       // a frame from the first — "Members (0)" beside a join that plainly succeeded, which
       // reads as a broken join rather than a status read about the wrong cohort.
       match cohortOwnerFor ctx workingDirectory with
-      | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+      | None -> return Error (SageFsError.CohortOwnerNotWired)
       | Some owner ->
         // The daemon holds ONE integration, configured for the cohort of the repository `set_integration_ref` named. Reading it for
         // any other cohort would show a session and a trunk that this cohort's landings never touch.

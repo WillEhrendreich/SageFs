@@ -59,6 +59,7 @@ let private golden : (string * ErrorCategory) list =
     "JsonParseError", ErrorCategory.Client
     "CohortActionFailed", ErrorCategory.Client
     "CohortRefused", ErrorCategory.Client
+    "CohortOwnerNotWired", ErrorCategory.Internal
     "SessionRestarting", ErrorCategory.Overload
     "ToolFailed", ErrorCategory.Client
     "Unexpected", ErrorCategory.Internal ]

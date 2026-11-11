@@ -87,6 +87,6 @@ let joinReplyTests =
       | Result.Error err -> failtestf "the conductor could not leave: %s" (SageFsError.describeForAgent err)
       let! newcomer = joinText ctx "molina-newcomer" molinaRepo
       newcomer |> Expect.stringContains "says the seat is vacant" "vacant"
-      newcomer |> Expect.stringContains "says why" (McpCohortTools.vacancyWhy VacancyReason.ConductorLeft)
+      newcomer |> Expect.stringContains "says why" (CohortErrorMapping.vacancyWhy VacancyReason.ConductorLeft)
     }
   ]

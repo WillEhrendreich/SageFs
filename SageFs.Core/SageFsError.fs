@@ -297,6 +297,10 @@ type SageFsError =
   /// A refusal from the `Cohort.decide` core with its kind kept (`CohortFailureKind.ofError`), so the structured
   /// payload says WHICH refusal it was. `CohortActionFailed` stays for the shell's own refusals (tokens, authority).
   | CohortRefused of kind: CohortFailureKind * reason: string * suggestion: string
+  /// A cohort command reached an MCP server that has no cohort owner wired (`Wiring.Unwired`). The daemon wires one
+  /// before it starts serving (DaemonMode.fs), so this is a host built without cohort support or a daemon whose
+  /// startup did not get that far. It is not a project problem, which is what `SessionCreationFailed` advises on.
+  | CohortOwnerNotWired
   // ── MCP tool replies ──
   /// A tool body that could only hand back display text said it failed ("Error: ..." or a `describeForAgent`
   /// sentence). `McpTools.classifyEcho` reads that text once at the MCP seam so the call is still reported with
@@ -415,6 +419,8 @@ module SageFsError =
       sprintf "JSON parse error in %s: %s" context reason
     | SageFsError.CohortActionFailed(reason, _) -> reason
     | SageFsError.CohortRefused(_, reason, _) -> reason
+    | SageFsError.CohortOwnerNotWired ->
+      "This server has no cohort owner wired, so it cannot run a cohort command."
     // The route builds the whole sentence, session and lifecycle state included (Mcp.fs, the RestartInProgress arm).
     | SageFsError.SessionRestarting(_, reason) -> reason
     | SageFsError.ToolFailed(reason, _) -> reason
@@ -470,6 +476,7 @@ module SageFsError =
     | SageFsError.DaemonNotRunning -> LogLevel.Information
     | SageFsError.CohortActionFailed _ -> LogLevel.Information
     | SageFsError.CohortRefused _ -> LogLevel.Information
+    | SageFsError.CohortOwnerNotWired -> LogLevel.Warning
     | SageFsError.SessionRestarting _ -> LogLevel.Information
     | SageFsError.ToolFailed _ -> LogLevel.Warning
 
@@ -490,6 +497,7 @@ module SageFsError =
     // 409: 409 is reserved here for infrastructure conflicts (isInfraError).
     | SageFsError.CohortActionFailed _ -> 400
     | SageFsError.CohortRefused _ -> 400
+    | SageFsError.CohortOwnerNotWired -> 500
     // The text a tool body wrote carries no family of its own; a refused request is the common meaning.
     | SageFsError.ToolFailed _ -> 400
     // 409 Conflict
@@ -571,6 +579,7 @@ module SageFsError =
     | SageFsError.DaemonStartFailed _
     | SageFsError.AppRunFailed _
     | SageFsError.AppStopFailed _
+    | SageFsError.CohortOwnerNotWired
     | SageFsError.Unexpected _ -> ErrorCategory.Internal
     | SageFsError.WorkerCommunicationFailed _
     | SageFsError.FsiHostCrashed _
@@ -647,6 +656,8 @@ module SageFsError =
     | SageFsError.JsonParseError _ -> "Check request payload format"
     | SageFsError.CohortActionFailed(_, suggestion) -> suggestion
     | SageFsError.CohortRefused(_, _, suggestion) -> suggestion
+    | SageFsError.CohortOwnerNotWired ->
+      "Run get_daemon_status to confirm you are talking to the SageFs daemon. The daemon wires cohort support before it serves, so a running daemon that answers this has a startup fault: read its log and tell the person who runs the daemon, who is the one to restart it. A host that is not the daemon (an embedded or test server) has no cohort and cannot run these tools"
     | SageFsError.SessionRestarting _ ->
       "Wait: the restart is in progress. Call get_session_status with wait_seconds=60, which returns once the session is Ready, then retry. Do not run hard_reset_fsi_session or create a new session: either starts the restart over"
     | SageFsError.ToolFailed(_, suggestion) -> suggestion
@@ -714,6 +725,7 @@ module SageFsError =
     | SageFsError.JsonParseError _ -> "JsonParseError"
     | SageFsError.CohortActionFailed _ -> "CohortActionFailed"
     | SageFsError.CohortRefused _ -> "CohortRefused"
+    | SageFsError.CohortOwnerNotWired -> "CohortOwnerNotWired"
     | SageFsError.SessionRestarting _ -> "SessionRestarting"
     | SageFsError.ToolFailed _ -> "ToolFailed"
     | SageFsError.Unexpected _ -> "Unexpected"
@@ -849,6 +861,7 @@ module SageFsError =
       [ "kind", box (CohortFailureKind.label kind)
         "reason", box reason
         "suggestion", box suggestion ]
+    | SageFsError.CohortOwnerNotWired -> []
     | SageFsError.SessionRestarting(sessionId, reason) ->
       [ "sessionId", box sessionId
         "reason", box reason ]

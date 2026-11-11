@@ -104,7 +104,7 @@ module McpSeating =
       | Some _ -> return Result.Error(describe Refusal.CallerHoldsToken)
       | None ->
         match cohortOwnerFor ctx workingDirectory with
-        | None -> return Result.Error(SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+        | None -> return Result.Error(SageFsError.CohortOwnerNotWired)
         | Some owner ->
           let caller = memberIdFor agentName
           let frame = owner.ReadFrame()

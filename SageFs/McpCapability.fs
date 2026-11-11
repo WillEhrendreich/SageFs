@@ -113,7 +113,7 @@ module McpCapability =
         // mint outright with "no cohort owner is configured for this daemon" — a false
         // statement (one IS configured) that hid the real question.
         match cohortOwnerFor ctx workingDirectory with
-        | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+        | None -> return Error (SageFsError.CohortOwnerNotWired)
         | Some owner ->
           let minter = minterFor owner
           let requested = { Preset = preset; Scope = prefix; Route = route; NotAfter = now + lifetime }
@@ -169,7 +169,7 @@ module McpCapability =
       // one the revoke landed in, which is the whole bug this feature is about.
       let! wd = McpCohortTools.callerWorkingDirectory ctx agentName workingDirectory
       match cohortOwnerFor ctx wd with
-      | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+      | None -> return Error (SageFsError.CohortOwnerNotWired)
       | Some owner ->
         let text = if isNull memberText then "" else memberText.Trim()
         // Anything that is not `cap:<id>` is a capability id that does not exist, so the refusal names what was asked.

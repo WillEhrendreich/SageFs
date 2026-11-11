@@ -78,7 +78,7 @@ module CohortSeatRoute =
     match binding with
     | Cohort.ConductorBinding.Bound who -> sprintf "held by %s" (MemberTable.MemberId.display who)
     | Cohort.ConductorBinding.Vacant(former, since, why) ->
-      sprintf "vacant since %s (%s held it: %s)" (since.ToString "u") (MemberTable.MemberId.display former) (McpCohortTools.vacancyWhy why)
+      sprintf "vacant since %s (%s held it: %s)" (since.ToString "u") (MemberTable.MemberId.display former) (CohortErrorMapping.vacancyWhy why)
     | Cohort.ConductorBinding.NeverBound -> "never bound: no member has ever joined this cohort"
 
   let kindOf (binding: Cohort.ConductorBinding<MemberTable.MemberId>) : SeatKind =
@@ -199,9 +199,10 @@ module CohortSeatRoute =
   /// A refusal in the body the editors and `sagefs member mint` already parse.
   let edgeBodyOf (err: SageFsError) : McpMintRoute.EdgeBody =
     match err with
-    | SageFsError.CohortActionFailed(reason, suggestion) ->
+    | SageFsError.CohortActionFailed(reason, suggestion)
+    | SageFsError.CohortRefused(_, reason, suggestion) ->
       { Error = "cohort_refused"; Message = reason; Case = "cohort_refused"; SuggestedAction = suggestion }
-    | other -> { Error = "seat_failed"; Message = SageFsError.describe other; Case = "seat_failed"; SuggestedAction = "" }
+    | other -> { Error = "seat_failed"; Message = SageFsError.describe other; Case = "seat_failed"; SuggestedAction = SageFsError.suggestedAction other }
 
   /// The dashboard's Seat button: the cohort the panel shows, one member named as `get_cohort_status` prints it. The same
   /// rules as the command line (`commandFor`, then `Cohort.decide`), answered in a sentence for the person on the page.

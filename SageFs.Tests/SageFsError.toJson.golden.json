@@ -396,6 +396,12 @@
     "suggestedAction": "test"
   },
   {
+    "case": "CohortOwnerNotWired",
+    "fields": {},
+    "message": "This server has no cohort owner wired, so it cannot run a cohort command.",
+    "suggestedAction": "Run get_daemon_status to confirm you are talking to the SageFs daemon. The daemon wires cohort support before it serves, so a running daemon that answers this has a startup fault: read its log and tell the person who runs the daemon, who is the one to restart it. A host that is not the daemon (an embedded or test server) has no cohort and cannot run these tools"
+  },
+  {
     "case": "ToolFailed",
     "fields": {
       "reason": "test",

@@ -225,7 +225,7 @@ let seatCommandTests =
       CohortSeatRoute.refusalFor state epoch request (CohortError.SeatTargetAbsent(grace, [ ada ]))
       |> Expect.equal "the roster refusal is the mapping's" (CohortErrorMapping.toSageFsError (CohortError.SeatTargetAbsent(grace, [ ada ])))
       match CohortSeatRoute.refusalFor state epoch request (CohortError.ConductorHolderChanged(grace, state.Conductor)) with
-      | SageFsError.CohortActionFailed(reason, suggestion) ->
+      | SageFsError.CohortRefused(CohortFailureKind.ConductorHolderChanged, reason, suggestion) ->
         reason |> Expect.stringContains "a stale holder says who holds the seat now" (MemberId.display ada)
         suggestion |> Expect.stringContains "and the way on is to look again" "sagefs cohort seat"
       | other -> failwithf "expected a cohort refusal, got %A" other

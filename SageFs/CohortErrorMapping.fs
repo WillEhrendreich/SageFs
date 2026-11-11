@@ -1,7 +1,7 @@
 namespace SageFs
 
 /// Exhaustive, compiler-checked mapping from `Cohort.CohortError<MemberId>` onto
-/// `SageFsError.CohortActionFailed(reason, suggestion)` — the one boundary
+/// `SageFsError.CohortRefused(kind, reason, suggestion)` — the one boundary
 /// (roast §10) where the pure cohort module's error algebra crosses into the
 /// product's. Each case builds an accurate `reason` (what went wrong, naming the
 /// member/claim/landing) and an actionable `suggestion` (the next step), so an
@@ -27,7 +27,7 @@ module CohortErrorMapping =
       match scope with
       | Cohort.ClaimScope.File f -> sprintf "file:%s" f
       | Cohort.ClaimScope.Project p -> sprintf "project:%s" p
-    let failed reason suggestion = SageFsError.CohortActionFailed(reason, suggestion)
+    let failed reason suggestion = SageFsError.CohortRefused(CohortFailureKind.ofError err, reason, suggestion)
     match err with
     | Cohort.CohortError.WrongCohortScope(requested, cohort) ->
       failed

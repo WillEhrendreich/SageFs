@@ -162,15 +162,6 @@ module McpCohortTools =
   // line each: take the directory given, or `None` for the daemon's own scope. A helper that
   // answers the same question a second way is a helper someone will reach for again.
 
-  /// Why a conductor seat is empty, in words an agent can act on.
-  let vacancyWhy (why: Cohort.VacancyReason) : string =
-    match why with
-    | Cohort.VacancyReason.ConductorLeft -> "the conductor left"
-    | Cohort.VacancyReason.LeaseLapsed -> "the conductor's lease lapsed"
-    | Cohort.VacancyReason.Revoked -> "the conductor was revoked"
-    | Cohort.VacancyReason.NeverBound -> "no conductor was ever bound"
-    | Cohort.VacancyReason.Replaced -> "a person replaced the conductor"
-
   /// What a join says about the conductor seat, from the cohort's binding AFTER the join. Total, so a caller
   /// is always told which seat it holds. A rejoin that finds the caller still seated used to say nothing, and
   /// an agent could not tell whether its seat had lapsed.
@@ -179,7 +170,7 @@ module McpCohortTools =
     | Cohort.ConductorBinding.Bound holder when holder = who -> "You are the conductor."
     | Cohort.ConductorBinding.Bound holder -> sprintf "The conductor is %s." (MemberTable.MemberId.display holder)
     | Cohort.ConductorBinding.Vacant(_, _, why) ->
-      sprintf "The conductor seat is vacant (%s). Nobody holds conductor authority until a person appoints one." (vacancyWhy why)
+      sprintf "The conductor seat is vacant (%s). Nobody holds conductor authority until a person appoints one." (CohortErrorMapping.vacancyWhy why)
     | Cohort.ConductorBinding.NeverBound -> "This cohort has no conductor yet."
 
   /// Join the implicit per-daemon cohort as `role` (Implementer/Verifier/

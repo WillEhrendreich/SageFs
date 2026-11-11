@@ -3811,7 +3811,7 @@ let mapCohortSeatRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (a
       do! rawJsonResponse ctx (Json.serialize Json.camelCase body)
     }
   let noOwner =
-    SageFs.CohortSeatRoute.edgeBodyOf (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+    SageFs.CohortSeatRoute.edgeBodyOf (SageFsError.CohortOwnerNotWired)
   app.MapGet("/api/cohort/seat", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       match SageFs.McpMintRoute.verdictOf operatorAccess (authorizationOf ctx) with

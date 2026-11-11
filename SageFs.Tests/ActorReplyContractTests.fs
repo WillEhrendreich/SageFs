@@ -280,8 +280,8 @@ let actorReplyContractTests =
           |> List.map CohortErrorMapping.toSageFsError
           |> List.map (fun error ->
             match error with
-            | SageFsError.CohortActionFailed(reason, suggestion) -> reason, suggestion
-            | other -> failtestf "expected CohortActionFailed, got %A" other)
+            | SageFsError.CohortRefused(CohortFailureKind.ConductorVacant, reason, suggestion) -> reason, suggestion
+            | other -> failtestf "expected CohortRefused(ConductorVacant), got %A" other)
         for reason, suggestion in texts do
           let text = reason + " " + suggestion
           for shape in [ "Some"; "None"; "["; "{"; "\"alice\""; "LeaseLapsed"; "ConductorLeft"; "NeverBound" ] do
@@ -292,12 +292,15 @@ let actorReplyContractTests =
       }
 
       test "the owner-fault refusals say what happened and the next action" {
-        for error in [ CohortError.OwnerStepFailed "disk full"; CohortError.OwnerUnresponsive Timeouts.ownerReply ] do
+        for error, expectedKind in
+          [ CohortError.OwnerStepFailed "disk full", CohortFailureKind.OwnerStepFailed
+            CohortError.OwnerUnresponsive Timeouts.ownerReply, CohortFailureKind.OwnerUnresponsive ] do
           match CohortErrorMapping.toSageFsError error with
-          | SageFsError.CohortActionFailed(reason, suggestion) ->
+          | SageFsError.CohortRefused(kind, reason, suggestion) ->
+            kind |> Expect.equal "an agent can tell a failed step from a silent owner" expectedKind
             reason |> Expect.isNotEmpty "there is a reason"
             suggestion |> Expect.stringContains "the next action reads the cohort first" "get_cohort_status"
-          | other -> failtestf "expected CohortActionFailed, got %A" other
+          | other -> failtestf "expected CohortRefused, got %A" other
       }
     ]
 
