@@ -878,26 +878,6 @@ module CoverageBitmap =
       let bit = index % 64
       (bm.Bits.[word] &&& (1UL <<< bit)) <> 0UL
 
-  /// Fold `folder` over the index of every set probe below `limit`, in increasing order, a word at a time: a word with
-  /// no bit set is skipped whole, and a set bit is found with a trailing-zero count. Nothing is allocated per probe.
-  /// Probes at or past `bm.Count` do not exist, whatever the padding of the last word holds, and a `Bits` array shorter
-  /// than `Count` says nothing about the probes it does not reach, so the walk never reads out of range.
-  let foldSetBelow (limit: int) (folder: 's -> int -> 's) (state: 's) (bm: CoverageBitmap) : 's =
-    let bound = min limit (min bm.Count (bm.Bits.Length * 64))
-    let rec word (w: int) (acc: 's) : 's =
-      match w * 64 >= bound with
-      | true -> acc
-      | false -> word (w + 1) (bits (w * 64) bm.Bits.[w] acc)
-    and bits (baseIndex: int) (remaining: uint64) (acc: 's) : 's =
-      match remaining with
-      | 0UL -> acc
-      | _ ->
-        let index = baseIndex + BitOperations.TrailingZeroCount remaining
-        match index >= bound with
-        | true -> acc
-        | false -> bits baseIndex (remaining &&& (remaining - 1UL)) (folder acc index)
-    word 0 state
-
   /// Build a bitmap mask with bits set for all probes in the given file.
   let buildFileMask (filePath: string) (maps: InstrumentationMap array) : CoverageBitmap =
     let merged = InstrumentationMap.merge maps

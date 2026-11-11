@@ -31,12 +31,35 @@ type HashTrust =
 /// this module's compile — it is placed after both in the fsproj.
 module InputHashCoverage =
 
+  /// Fold `folder` over the index of every set probe of `bitmap` below `limit`, in increasing order, a word at a time: a
+  /// word with no bit set is skipped whole, and a set bit is found with a trailing-zero count. Nothing is allocated per
+  /// probe. Probes at or past `bitmap.Count` do not exist, whatever the padding of the last word holds, and a `Bits`
+  /// array shorter than `Count` says nothing about the probes it does not reach, so the walk never reads out of range.
+  ///
+  /// It lives here and not in `CoverageBitmap` because `LiveTestingTypes.fs` is over its file-size budget and this walk
+  /// has one caller.
+  let foldSetBelow (limit: int) (folder: 's -> int -> 's) (state: 's) (bitmap: CoverageBitmap) : 's =
+    let bound = min limit (min bitmap.Count (bitmap.Bits.Length * 64))
+    let rec word (w: int) (acc: 's) : 's =
+      match w * 64 >= bound with
+      | true -> acc
+      | false -> word (w + 1) (bits (w * 64) bitmap.Bits.[w] acc)
+    and bits (baseIndex: int) (remaining: uint64) (acc: 's) : 's =
+      match remaining with
+      | 0UL -> acc
+      | _ ->
+        let index = baseIndex + System.Numerics.BitOperations.TrailingZeroCount remaining
+        match index >= bound with
+        | true -> acc
+        | false -> bits baseIndex (remaining &&& (remaining - 1UL)) (folder acc index)
+    word 0 state
+
   /// The distinct source files whose instrumented slots are hit in
   /// `bitmap`, sorted for a deterministic hash regardless of slot iteration
   /// order. A `bitmap`/`map` length mismatch (e.g. a stale bitmap against a
   /// rebuilt instrumentation map) cannot read out of range: the walk is
   /// bounded to `0 .. map.Slots.Length - 1` and to `bitmap.Count`
-  /// (`CoverageBitmap.foldSetBelow`), so a probe with no slot or no bit is
+  /// (`foldSetBelow`), so a probe with no slot or no bit is
   /// never read.
   ///
   /// This runs once per test per hash, so it visits only the probes that are
@@ -47,7 +70,7 @@ module InputHashCoverage =
   let coveredFiles (map: InstrumentationMap) (bitmap: CoverageBitmap) : string list =
     let struct (_, files) =
       bitmap
-      |> CoverageBitmap.foldSetBelow
+      |> foldSetBelow
            map.Slots.Length
            (fun (struct (lastFile: string, files: Set<string>)) index ->
              let file = map.Slots.[index].File
