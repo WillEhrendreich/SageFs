@@ -683,7 +683,6 @@ let withSessionReply (ctx: McpContext) (workingDirectory: string option) (f: str
 let private keptStateClient =
   new System.Net.Http.HttpClient(
     SageFs.WorkerAuth.newHandler (),
-    SageFs.WorkerAuth.newHandler (),
     Timeout = System.TimeSpan.FromMilliseconds(float SageFs.DevReload.DevReloadConfig.defaults.CompileBudgetMs))
 
 /// Why a tool's manual was not given.
