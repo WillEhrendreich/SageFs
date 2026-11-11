@@ -140,7 +140,7 @@ let fileSize : (string * int) list =
     // 3190 -> 3179: the caller's ambient identity (the four AsyncLocals and memberIdFor) moved to McpAmbientCaller.fs, which
     // paid for the one session-access rule's call sites (the tool gate, stop_session) and left the file 8 lines under the
     // 3187 it started at. Exact size.
-    "SageFs/Mcp.fs", 3179 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
+    "SageFs/Mcp.fs", 3111 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own
@@ -195,7 +195,7 @@ let fileSize : (string * int) list =
     // provenance, pause and scope). Deliberate and reviewed; still below the 4353 this file stood at
     // before the cycle moved out. The confirmation machine went to its own file (BuildConfirmation.fs)
     // rather than here. Ratchet back DOWN when this file is split; never bump to paper over drift.
-    "SageFs.Core/Features/LiveTestingTypes.fs", 3487
+    "SageFs.Core/Features/LiveTestingTypes.fs", 3448
     // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
     // live-testing enable/disable — EnableLiveTestingForSession /
     // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
@@ -338,19 +338,19 @@ let fileSize : (string * int) list =
     // (until then a file not listed here was unbounded, which made "a file not in a budget table has a budget of zero"
     // false for this table). A budget above a file's real count fails, so `--ratchets --tighten` lowers these as the
     // files shrink; a file that grows fails. Never raise one.
-    "SageFs/DaemonMode.fs", 5529
+    "SageFs/DaemonMode.fs", 5525
     "SageFs/McpServer.fs", 5056
-    "SageFs/DashboardFragments.fs", 4459
+    "SageFs/DashboardFragments.fs", 4454
     "SageFs/Dashboard.fs", 4259
-    "sagefs-vscode/src/Extension.fs", 3756
-    "SageFs/McpTools.fs", 3173
+    "sagefs-vscode/src/Extension.fs", 3717
+    "SageFs/McpTools.fs", 3157
     "SageFs.Host/WorkerMain.fs", 2503
     "SageFs.Core/Cohort.fs", 2475
-    "SageFs/DashboardTypes.fs", 2169
+    "SageFs/DashboardTypes.fs", 2159
     "SageFs.Core/Middleware/HotReloadCore.fs", 1963
-    "SageFs.Core/Features/ReloadPlanning.fs", 1690
+    "SageFs.Core/Features/ReloadPlanning.fs", 1688
     "SageFs.Core/Middleware/ValueReadTracking.fs", 1650
-    "SageFs.Core/ProjectLoading.fs", 1558
+    "SageFs.Core/ProjectLoading.fs", 1555
     "SageFs.Core/Features/LiveTestingExecutors.fs", 1509 ]
 
 /// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
@@ -460,7 +460,7 @@ let analyzerFindings : (string * int) list =
 /// `working_directory` sentence and ten tool sentences are shorter, so the full catalog is 38,286 and the nine starter tools
 /// 5,395.
 let toolList : (string * int) list =
-  [ "full catalog characters", 38286
+  [ "full catalog characters", 38222
     "starter list characters", 5395 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =
