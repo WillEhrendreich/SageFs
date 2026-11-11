@@ -84,12 +84,6 @@ module Journal =
   let recordEntries (entries: JournalEntry seq) (journal: Journal) : Journal =
     { Buffer = RingBuffer.pushAll entries journal.Buffer }
 
-  /// Record one entry per message, oldest message first, all at one level and
-  /// source, every one stamped with the clock now. For messages happening now;
-  /// never for history, whose entries have their own times (`recordEntries`).
-  let recordAll (level: JournalLevel) (source: string) (messages: string seq) (journal: Journal) : Journal =
-    { Buffer = RingBuffer.pushAll (messages |> Seq.map (entryNow level source)) journal.Buffer }
-
   /// Number of entries currently in the journal.
   let count (journal: Journal) : int =
     RingBuffer.count journal.Buffer

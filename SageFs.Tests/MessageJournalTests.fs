@@ -143,8 +143,8 @@ let journalStatsTests =
       stats.Evicted |> Expect.equal "7 evicted" 7L
   ]
 
-/// The shape of the recordAll checks, named so no number hides at a call site.
-module RecordAllShape =
+/// The shape of the recordEntries checks, named so no number hides at a call site.
+module RecordEntriesShape =
   let MaxCapacity = 40
   let SmallBatch = 2000
   /// How many times larger the large batch is than the small one.
@@ -155,49 +155,60 @@ module RecordAllShape =
   let GrowthCeiling = float (BatchFactor + BatchFactor * BatchFactor) / 2.0
 
 /// What a reader of the journal can see of an entry. The clock stamp is left out:
-/// each entry takes its own `UtcNow`, so two builds never agree on it.
+/// `record` takes its own `UtcNow`, so two builds never agree on it.
 let visible (j: Journal) =
   Journal.entries j |> List.map (fun e -> e.Level, e.Source, e.Message)
 
+/// Entries as a journal built from history makes them: each one carries its own time and level.
+let entriesAt (level: JournalLevel) (messages: string list) : JournalEntry list =
+  messages |> List.map (fun m -> { Timestamp = System.DateTimeOffset.UnixEpoch; Level = level; Source = "eval"; Message = m })
+
 [<Tests>]
-let journalRecordAllTests =
-  testList "MessageJournal recordAll" [
+let journalRecordEntriesTests =
+  testList "MessageJournal recordEntries" [
 
     // The oracle is the definition the get_message_journal tool used before:
     // fold `record` over the messages, oldest first.
-    testProperty "recordAll shows the same journal as folding record over the messages"
+    testProperty "recordEntries shows the same journal as folding record over the messages"
       (fun (cap: PositiveInt) (messages: int list) ->
-        let c = min cap.Get RecordAllShape.MaxCapacity
+        let c = min cap.Get RecordEntriesShape.MaxCapacity
         let texts = messages |> List.map (sprintf "msg %d")
         let folded =
           texts
           |> List.fold (fun j m -> Journal.record JournalLevel.Warn "eval" m j) (Journal.create c)
-        let batched = Journal.create c |> Journal.recordAll JournalLevel.Warn "eval" texts
+        let batched = Journal.create c |> Journal.recordEntries (entriesAt JournalLevel.Warn texts)
         visible batched = visible folded
         && Journal.stats batched = Journal.stats folded
         && Journal.count batched = Journal.count folded
       )
 
-    testCase "recordAll keeps the newest entries first and drops the oldest on overflow" <| fun _ ->
-      let j = Journal.create 3 |> Journal.recordAll JournalLevel.Info "eval" [ "1"; "2"; "3"; "4"; "5" ]
+    testCase "recordEntries keeps the newest entries first and drops the oldest on overflow" <| fun _ ->
+      let j = Journal.create 3 |> Journal.recordEntries (entriesAt JournalLevel.Info [ "1"; "2"; "3"; "4"; "5" ])
       Journal.entries j |> List.map (fun e -> e.Message) |> Expect.equal "newest three, newest first" [ "5"; "4"; "3" ]
       (Journal.stats j).Evicted |> Expect.equal "two evicted" 2L
+
+    testCase "recordEntries keeps each entry's own time and level" <| fun _ ->
+      let own = System.DateTimeOffset(2020, 1, 2, 3, 4, 5, System.TimeSpan.Zero)
+      let entries : JournalEntry list =
+        [ { Timestamp = own; Level = JournalLevel.Failure; Source = "eval"; Message = "let y = z" } ]
+      let j = Journal.create 4 |> Journal.recordEntries entries
+      Journal.entries j |> Expect.equal "the entry as given" entries
 
     // Structural, not wall-clock: bytes allocated on this thread are exact. A
     // copy of the whole ring per entry makes them grow with the SQUARE of the
     // history; one copy makes them grow in a straight line.
-    testCase "recordAll allocates in proportion to the history, not its square" <| fun _ ->
+    testCase "recordEntries allocates in proportion to the history, not its square" <| fun _ ->
       let allocated (n: int) =
-        let messages = List.init n (sprintf "let x%d = 1")
-        Journal.create n |> Journal.recordAll JournalLevel.Info "eval" messages |> ignore
+        let entries = entriesAt JournalLevel.Info (List.init n (sprintf "let x%d = 1"))
+        Journal.create n |> Journal.recordEntries entries |> ignore
         let before = System.GC.GetAllocatedBytesForCurrentThread()
-        Journal.create n |> Journal.recordAll JournalLevel.Info "eval" messages |> ignore
+        Journal.create n |> Journal.recordEntries entries |> ignore
         System.GC.GetAllocatedBytesForCurrentThread() - before
-      let small = allocated RecordAllShape.SmallBatch
-      let large = allocated RecordAllShape.LargeBatch
+      let small = allocated RecordEntriesShape.SmallBatch
+      let large = allocated RecordEntriesShape.LargeBatch
       let growth = float large / float small
-      (growth, RecordAllShape.GrowthCeiling)
+      (growth, RecordEntriesShape.GrowthCeiling)
       |> Expect.isLessThan
            (sprintf "bytes grew %.1fx for a %dx history; one copy grows about %dx, a copy per entry about %dx"
-              growth RecordAllShape.BatchFactor RecordAllShape.BatchFactor (RecordAllShape.BatchFactor * RecordAllShape.BatchFactor))
+              growth RecordEntriesShape.BatchFactor RecordEntriesShape.BatchFactor (RecordEntriesShape.BatchFactor * RecordEntriesShape.BatchFactor))
   ]
