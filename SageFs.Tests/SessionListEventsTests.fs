@@ -200,7 +200,7 @@ let tests =
     }
 
     test "the watch remembers what it announced: the first look is silent, a stop is said once, a repeat is silent" {
-      let watch = SessionLifecycleWatch()
+      let watch = SessionListWatch()
       watch.Observe (registry [ running a ] (ActiveSession.Viewing a)) |> Expect.isEmpty "the first look is a baseline"
       watch.Observe (registry [] ActiveSession.AwaitingSession)
       |> Expect.equal "the stop" [ SseEvent.SessionStopped (SessionId.value a) ]

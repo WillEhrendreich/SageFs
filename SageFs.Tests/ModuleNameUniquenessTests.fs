@@ -10,7 +10,7 @@ open Microsoft.FSharp.Reflection
 let private shippedAssemblies : (string * System.Reflection.Assembly) list =
   [ "SageFs.Core", typeof<SageFs.WorkerRoute>.Assembly
     "SageFs.Host", typeof<SageFs.WorkerHttpTransport.HttpWorkerServer>.Assembly
-    "SageFs", typeof<SageFs.SessionLifecycleWatch>.Assembly ]
+    "SageFs", typeof<SageFs.SessionListWatch>.Assembly ]
 
 let private topLevelModuleNames (assembly: System.Reflection.Assembly) : string list =
   let types =
