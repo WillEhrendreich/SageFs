@@ -200,25 +200,25 @@ module EnvBackedRows =
   let private ageRows : EnvBacked list =
     [ age "frictionMaxAgeDays" "Friction rows kept for"
         "Friction rows older than this are rolled into the per-version counts and deleted."
-        "SAGEFS_FRICTION_MAX_AGE_DAYS" 30.0 (fun () -> DataRetention.frictionMaxAge)
+        DataRetention.frictionMaxAgeEnvVar 30.0 (fun () -> DataRetention.frictionMaxAge)
       age "cohortLedgerRetentionDays" "Finished cohort ledger kept for"
         "A finished cohort's ledger rows are cleared once its last entry is older than this. A cohort that is running is never touched."
-        "SAGEFS_COHORT_LEDGER_RETENTION_DAYS" 7.0 (fun () -> DataRetention.cohortLedgerRetention)
+        DataRetention.cohortLedgerRetentionEnvVar 7.0 (fun () -> DataRetention.cohortLedgerRetention)
       age "hostCacheMaxAgeDays" "Unused FSI hosts kept for"
         "A built FSI host that no session has used for this long is pruned. A host rebuilds in a few minutes."
-        "SAGEFS_HOST_CACHE_MAX_AGE_DAYS" 30.0 (fun () -> DataRetention.hostCacheMaxAge)
+        DataRetention.hostCacheMaxAgeEnvVar 30.0 (fun () -> DataRetention.hostCacheMaxAge)
       age "gateRetentionDays" "Gate checkouts kept for"
         "A gate checkout or tier clone whose repository is still there is kept this long after its last gate, so the next gate on that repository stays warm."
-        "SAGEFS_GATE_RETENTION_DAYS" 14.0 (fun () -> DataRetention.gateCheckoutRetention)
+        DataRetention.gateCheckoutRetentionEnvVar 14.0 (fun () -> DataRetention.gateCheckoutRetention)
       age "tempRunMaxAgeDays" "Test run folders kept for"
         "A test runner's temp data folder, and any other `sagefs-*` temp entry with no recorded owner, can be reclaimed this long after it was last touched."
-        "SAGEFS_TEMP_RUN_MAX_AGE_DAYS" 2.0 (fun () -> DataRetention.tempRunMaxAge)
+        DataRetention.tempRunMaxAgeEnvVar 2.0 (fun () -> DataRetention.tempRunMaxAge)
       age "workerLogMaxAgeDays" "Worker logs kept for"
         "A worker's log is kept this long after its last write. It is what you read after a crash."
-        "SAGEFS_WORKER_LOG_MAX_AGE_DAYS" 14.0 (fun () -> DataRetention.workerLogMaxAge)
+        DataRetention.workerLogMaxAgeEnvVar 14.0 (fun () -> DataRetention.workerLogMaxAge)
       grace "finishedWorktreeGraceDays" "Merged agent worktrees kept for"
         "A merged agent worktree is kept this long after it was last in use, because the agent that made it may be resumed. 0 means no grace. Work that is not merged is never removed, whatever this says."
-        "SAGEFS_FINISHED_WORKTREE_GRACE_DAYS" 1.0 (fun () -> DataRetention.finishedWorktreeGrace) ]
+        DataRetention.finishedWorktreeGraceEnvVar 1.0 (fun () -> DataRetention.finishedWorktreeGrace) ]
 
   let private countRows : EnvBacked list =
     [ count WaitsAndLimits "limits.listMembersMax" "Members per list_members reply"
@@ -238,10 +238,10 @@ module EnvBackedRows =
         "SAGEFS_FRICTION_MAX_AGGREGATE_VERSIONS" 20 (fun () -> DataRetention.frictionMaxAggregateVersions)
       count LocalData "data.gatePassRecordsKept" "Gate pass records kept"
         "How many of the local gate's pass records are kept, newest first. Each holds a commit's release bundle, about 270 MB."
-        "SAGEFS_GATE_PASS_RECORDS_KEPT" 10 (fun () -> DataRetention.gatePassRecordsKept)
+        DataRetention.gatePassRecordsKeptEnvVar 10 (fun () -> DataRetention.gatePassRecordsKept)
       count LocalData "data.gateLogsKept" "Gate logs kept"
         "How many of the gate's logs are kept, newest first. They are what you read after a red gate."
-        "SAGEFS_GATE_LOGS_KEPT" 20 (fun () -> DataRetention.gateLogsKept) ]
+        DataRetention.gateLogsKeptEnvVar 20 (fun () -> DataRetention.gateLogsKept) ]
 
   /// The compiler's memory ceiling, in megabytes, for `list_references`. Unset means a share of the machine's memory.
   let referencesResidentCeiling : EnvBacked =
