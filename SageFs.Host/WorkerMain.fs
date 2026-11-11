@@ -1001,10 +1001,8 @@ let run (sessionId: string) (requestedPort: int) = async {
     fun () -> lock callerLedger (fun () -> Features.CallerState.CallerLedger.stateOf callerLedger.Value)
   // The source files of a project directory, as a project would compile them (not what a build left behind).
   let projectSources (projectDir: string) =
-    IO.Directory.GetFiles(projectDir, "*.fs", IO.SearchOption.AllDirectories)
-    |> Array.filter (fun f ->
-      let n = f.Replace('\\', '/')
-      not (n.Contains("/obj/") || n.Contains("/bin/")))
+    SafeDirectoryWalk.sourceFileList [ ".fs" ] SafeDirectoryWalk.isBuildOrVcsDir projectDir
+    |> Array.ofList
   // The callers of whatever a save re-signed or removed, in the project's OTHER files. The compiler is given the options
   // of the project the file belongs to (without its referenced projects: their built assemblies are in its references,
   // and re-checking their sources on every such save would cost a project each); without options the answer is by name.
@@ -2461,12 +2459,9 @@ let run (sessionId: string) (requestedPort: int) = async {
       |> List.collect (fun dir ->
         match IO.Directory.Exists(dir) with
         | true ->
-          IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
-          |> Array.append (IO.Directory.GetFiles(dir, "*.fsx", IO.SearchOption.AllDirectories))
-          |> Array.toList
-          |> List.filter (fun f ->
-            let n = f.Replace('\\', '/')
-            not (n.Contains("/obj/") || n.Contains("/bin/")))
+          // Pruned BEFORE descending: a bin/obj/node_modules subtree is never listed, and a directory
+          // symlink is never followed, so a cycle under a project directory ends the walk instead of the worker.
+          SafeDirectoryWalk.sourceFileList [ ".fs"; ".fsx" ] SafeDirectoryWalk.isBuildOrVcsDir dir
         | false -> [])
 
     // Hot-reload is OFF by default — nothing watched until the user explicitly

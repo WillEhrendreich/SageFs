@@ -138,3 +138,30 @@ module SafeDirectoryWalk =
     walk root 0
     { Files = matched |> List.ofSeq
       Truncated = truncated }
+
+  /// Directory names no source walk enters: build output, version control and package caches. A
+  /// subtree under one of these is never listed, because `obj/` alone can hold more files than the
+  /// project it belongs to, and a symlinked `node_modules` can lead out of the tree.
+  let buildAndVcsDirNames : Set<string> = Set.ofList [ "bin"; "obj"; ".git"; "node_modules" ]
+
+  /// A `prune` for `walkFiles` that refuses the directories in `buildAndVcsDirNames`, judged on the
+  /// candidate's own name so the answer does not depend on where the root sits.
+  let isBuildOrVcsDir (dir: string) : bool =
+    let name = Path.GetFileName(dir.TrimEnd('/', '\\'))
+    buildAndVcsDirNames |> Set.exists (fun noise -> String.Equals(noise, name, StringComparison.OrdinalIgnoreCase))
+
+  /// The files under `root` whose name ends in one of `extensions` (for example `".fs"`), found by a
+  /// `walkFiles` that prunes with `prune` before it descends. The standard bounds apply; a caller
+  /// reads `Truncated` and says so.
+  let sourceFiles (extensions: string list) (prune: string -> bool) (root: string) : Result =
+    let isSource (path: string) =
+      extensions |> List.exists (fun extension -> path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+    walkFiles root isSource prune Bounds.standard
+
+  /// `sourceFiles`, for a caller that only wants the list: a walk that hit its bound says so in the
+  /// log and answers with what it found, so a partial answer is never presented as a whole one.
+  let sourceFileList (extensions: string list) (prune: string -> bool) (root: string) : string list =
+    let result = sourceFiles extensions prune root
+    if result.Truncated then
+      Utils.Log.warn "[SafeDirectoryWalk] The source walk in %s hit its depth/entry bound, so some files may be missing. %s is probably not a project tree." root root
+    result.Files
