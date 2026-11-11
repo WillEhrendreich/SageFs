@@ -1027,7 +1027,7 @@ let fileSizeBudgets =
         Budgets = budgets
         Actual = fun () -> budgets |> List.map (fun (rel, _) -> rel, lineCount rel) }
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
-    for (rel, budget) in budgets ->
+    for (rel, budget) in budgets do
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->
         let lines = lineCount rel
         (lines <= budget)
