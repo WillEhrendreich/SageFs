@@ -14,11 +14,11 @@
       },
       "FSharp.Compiler.Service": {
         "type": "Direct",
-        "requested": "[43.13.101-preview7.26381.103, )",
-        "resolved": "43.13.101-preview7.26381.103",
-        "contentHash": "FPQI7hgbUgeSxmNTEnT1JmlaFqWidB6l3FPwya4SbH4ymVsPPwqGU6YuwfK1BhxqkmoFIpifbociThwItToauw==",
+        "requested": "[43.13.101, )",
+        "resolved": "43.13.101",
+        "contentHash": "3lOIwtUG85qbGzTBht8Ui2DJaGaGwzPDi4Mb7OVPQsQBG1EZ0yZo+Lz9iwBsZyo1dTTxYYi8JcE0ZmBrK/6qRw==",
         "dependencies": {
-          "FSharp.Core": "[11.0.101-preview7.26381.103]"
+          "FSharp.Core": "[11.0.101]"
         }
       },
       "FSharp.Data.Adaptive": {
@@ -148,9 +148,9 @@
       },
       "FSharp.Core": {
         "type": "CentralTransitive",
-        "requested": "[11.0.101-preview7.26359.118, )",
-        "resolved": "11.0.101-preview7.26381.103",
-        "contentHash": "+2aZmEWA0k3Bkv0nFWEq1OQYhRwA7TEnsTJNlzQkkwOzY1a7+zr2wN2nD8Qm3qQkowof+50I1Ge9aP55x/Iaqw=="
+        "requested": "[11.0.101, )",
+        "resolved": "11.0.101",
+        "contentHash": "/Us61HrXUuswvfVj2vj6RPa123Lnvj3nF9RHT5dFQdPmPhBxGAjlwIKyUYg2TACsr0iHCZFqvZcMNmBf9A8h4g=="
       }
     },
     "net11.0": {
@@ -166,11 +166,11 @@
       },
       "FSharp.Compiler.Service": {
         "type": "Direct",
-        "requested": "[43.13.101-preview7.26381.103, )",
-        "resolved": "43.13.101-preview7.26381.103",
-        "contentHash": "FPQI7hgbUgeSxmNTEnT1JmlaFqWidB6l3FPwya4SbH4ymVsPPwqGU6YuwfK1BhxqkmoFIpifbociThwItToauw==",
+        "requested": "[43.13.101, )",
+        "resolved": "43.13.101",
+        "contentHash": "3lOIwtUG85qbGzTBht8Ui2DJaGaGwzPDi4Mb7OVPQsQBG1EZ0yZo+Lz9iwBsZyo1dTTxYYi8JcE0ZmBrK/6qRw==",
         "dependencies": {
-          "FSharp.Core": "[11.0.101-preview7.26381.103]"
+          "FSharp.Core": "[11.0.101]"
         }
       },
       "FSharp.Data.Adaptive": {
@@ -292,9 +292,9 @@
       },
       "FSharp.Core": {
         "type": "CentralTransitive",
-        "requested": "[11.0.101-preview7.26359.118, )",
-        "resolved": "11.0.101-preview7.26381.103",
-        "contentHash": "+2aZmEWA0k3Bkv0nFWEq1OQYhRwA7TEnsTJNlzQkkwOzY1a7+zr2wN2nD8Qm3qQkowof+50I1Ge9aP55x/Iaqw=="
+        "requested": "[11.0.101, )",
+        "resolved": "11.0.101",
+        "contentHash": "/Us61HrXUuswvfVj2vj6RPa123Lnvj3nF9RHT5dFQdPmPhBxGAjlwIKyUYg2TACsr0iHCZFqvZcMNmBf9A8h4g=="
       }
     }
   }
