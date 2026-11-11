@@ -152,6 +152,28 @@ before. If the number was reopened in between, the second closer's own close suc
 owner's failing call) followed later by that owner's `EBADF-CLOSE`. In both cases the closer's stack names the managed frame that
 owns the stale descriptor.
 
+## What a contributor does when this flake hits
+
+The gate stops at the first red tier, and its failure report (the `FAILURE` lines, also kept in
+`~/.local/share/sagefs-gate/logs/<sha>.failure.txt`) names the case, the file and line, the exact `rerun:` command and a `history:`
+line. A hit of this flake is a `default` or `default-net10` case, usually in the `metadata delta emitter` list, whose message holds
+`Bad file descriptor` or `Stream does not support seeking`. Run the `rerun:` command alone, the way the report prints it. The gate
+also does this itself once the tiers end, three times, and prints the verdict under the report:
+
+- `not reproduced: passed 3 of 3 reruns alone. It did not fail by itself, so start at the machine's load or at what ran beside it.`
+  This is what this flake looks like, and it means the case is probably not broken. It does not clear the pass: the gate stays red.
+  Rerun the gate for the same commit (`dotnet fsi scripts/ship.fsx`, or `scripts/local-gate.fsx -- <sha>`). Tiers that already went
+  green keep their pass records and are not run again, so only the red tier and the ones after it cost time.
+- `deterministic: failed 3 of 3 reruns alone. It fails by itself every time, so start at the case.` This is not this flake. Fix the
+  case.
+- `flaky: failed N of 3 reruns alone ...` fails by itself only some of the time. Start at timing or state shared between runs, and
+  do not assume it is this flake unless the message names a bad descriptor.
+- `unclassified: ...` the rerun could not be judged (the filter matched nothing, or the process died before it reported). Run the
+  `rerun:` command by hand.
+
+If a `Bad file descriptor` hit shows up, keep its `<sha>.failure.txt` and the tier log named in the report, and add the row to the
+table above. A hit under the canary (see "The canary") is the one that names the closer.
+
 ## What this page does not change
 
 No test or product code changed. The harness could stop holding `stdout.txt` open for the child's life and use the lines it already
