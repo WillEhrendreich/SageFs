@@ -1112,6 +1112,7 @@
         <Compile Include="RouteBindingTests.fs" />
         <Compile Include="MemberRouteGateTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
+        <Compile Include="CohortSeatSentenceTests.fs" />
         <Compile Include="CohortLandingPanelTests.fs" />
         <Compile Include="DockPanesTests.fs" />
         <Compile Include="AppOutputPaneTests.fs" />

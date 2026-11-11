@@ -3263,11 +3263,15 @@ let rec renderCohortPanelCore
         // An empty conductor seat stays empty until a person says who fills it: seat_conductor asks the person, the
         // command line seats on their word, and this panel is where they click. Say so where the person looks, so the
         // panel is not a dead end.
+        //
+        // One sentence says who conducts, in every state of the seat (`CohortStatusText.conductorSentence`): the holder, a
+        // holder gone silent, an empty seat with advice that matches the buttons below it, or a seat nobody has held. A
+        // one-member cohort used to say nothing about the seat at all.
+        Elem.div [ Attr.class' "meta"; testid "cohort-conductor"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
+          textEnc (Features.CohortStatusText.conductorSentence now silence frame)
+        ]
         match frame.Conductor with
-        | SageFs.Cohort.ConductorBinding.Vacant(former, since, _) ->
-          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
-            textEnc (sprintf "Conductor seat vacant since %s (%s held it). %s" (since.ToString "u") (MemberTable.MemberId.display former) Features.CohortStatusText.vacantSeatAdvice)
-          ]
+        | SageFs.Cohort.ConductorBinding.Vacant _ ->
           // One Seat button per present member who could hold the seat (a member under a token cannot call the conductor's
           // tools, so the cohort refuses it and the panel does not offer it). The words are markup text, and the click
           // asks first, as the purge button does: seating is the authority to mint tokens.
@@ -3299,9 +3303,6 @@ let rec renderCohortPanelCore
           match silence with
           | Features.CohortStatusText.HolderSilence.SilentSince _ ->
             let holderId = MemberTable.MemberId.display holder
-            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
-              textEnc (sprintf "Conductor %s is %s. A person can replace it: %s" holderId (Features.CohortStatusText.HolderSilence.text now silence) (Features.CohortStatusText.replaceCommandText "<member id>" holderId))
-            ]
             // One Replace button per present member who is neither the holder nor under a token (the cohort refuses both).
             // Its ticket is issued for the pair, so the click replaces exactly the holder this page shows, and the cohort
             // checks the seat is still that holder's when the command commits. The click asks first, naming the holder.

@@ -21,6 +21,27 @@ module CohortStatusText =
       "A person fills it: say yes when seat_conductor asks, click Seat on the dashboard's cohort panel, or run '%s <member id>' on the machine that runs the daemon (with no member id it lists who is present)."
       seatCommandText
 
+  /// How many members present could be seated: present, and not under a token (a member under a token cannot call the
+  /// conductor's tools, so the cohort refuses it the seat and the dashboard does not offer it a Seat button).
+  let seatableMembers (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : int =
+    Array.zip frame.MemberSeat frame.MemberIds
+    |> Array.filter (fun (seat, who) ->
+      match seat, who with
+      | SageFs.Cohort.SeatState.Present, SageFs.MemberTable.MemberId.Capability _ -> false
+      | SageFs.Cohort.SeatState.Present, _ -> true
+      | SageFs.Cohort.SeatState.Departed _, _ -> false)
+    |> Array.length
+
+  /// `vacantSeatAdvice` for the members who can be seated right now. With none present, the sentence cannot send a reader to
+  /// a Seat button the panel does not draw: it says there is none yet and what makes one appear.
+  let vacantSeatAdviceFor (seatable: int) : string =
+    match seatable with
+    | 0 ->
+      sprintf
+        "No member who could hold the seat is present, so the dashboard has no Seat button yet. When one joins, a person fills it: say yes when seat_conductor asks, click Seat on the dashboard's cohort panel, or run '%s <member id>' on the machine that runs the daemon (with no member id it lists who is present)."
+        seatCommandText
+    | _ -> vacantSeatAdvice
+
   /// The flag that names the holder a person replaces. One home, like `seatCommandText`.
   [<Literal>]
   let replaceFlagText = "--replace"
@@ -229,6 +250,26 @@ module CohortStatusText =
     | HolderSilence.SilentSince _ ->
       sprintf "held by %s, %s; a person can replace it: %s" holder (HolderSilence.text now silence) (replaceCommandText "<member id>" holder)
 
+  /// Who conducts the cohort, as the one sentence the dashboard's cohort panel shows above its member list. Every state of the
+  /// seat has its own sentence: a holder is named (a one-member cohort says whether that member conducts), a holder that went
+  /// silent says so and names the command that replaces it, an empty seat names who left it and what a person can really do
+  /// about it now (`vacantSeatAdviceFor`), and a seat nobody ever held says who will take it.
+  let conductorSentence (now: DateTime) (silence: HolderSilence) (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : string =
+    match frame.Conductor with
+    | SageFs.Cohort.ConductorBinding.Bound who ->
+      let holder = MemberTable.MemberId.display who
+      match silence with
+      | HolderSilence.NotSilent -> sprintf "Conductor: %s." holder
+      | HolderSilence.SilentSince _ ->
+        sprintf "Conductor %s is %s. A person can replace it: %s" holder (HolderSilence.text now silence) (replaceCommandText "<member id>" holder)
+    | SageFs.Cohort.ConductorBinding.Vacant(former, since, _) ->
+      sprintf
+        "Conductor seat vacant since %s (%s held it). %s"
+        (since.ToString "u")
+        (MemberTable.MemberId.display former)
+        (vacantSeatAdviceFor (seatableMembers frame))
+    | SageFs.Cohort.ConductorBinding.NeverBound -> "No conductor yet: the first member to join takes the seat."
+
   /// The cohort status text. `silence` is the standing of the seat's holder, which a frame cannot say (it carries no
   /// lease): the caller reads it off the cohort's state with `HolderSilence.ofState`. `reportFor` gives what the daemon
   /// recorded about a landing's failing tests, by landing id.
@@ -258,7 +299,7 @@ module CohortStatusText =
       | Cohort.ConductorBinding.Bound who -> heldSeatText now silence who
       | Cohort.ConductorBinding.Vacant(former, since, why) ->
         sprintf "(VACANT since %s — %s held it and left; nobody holds conductor authority. %s)"
-          (since.ToString "u") (MemberTable.MemberId.display former) vacantSeatAdvice
+          (since.ToString "u") (MemberTable.MemberId.display former) (vacantSeatAdviceFor (seatableMembers frame))
       | Cohort.ConductorBinding.NeverBound -> "(none yet — no member has ever joined this cohort)"
     sb.AppendLine(sprintf "Cohort ledger head: v%d" (int64 frame.Version)) |> ignore
     // WHICH cohort this is, and why it is on the page at all.
