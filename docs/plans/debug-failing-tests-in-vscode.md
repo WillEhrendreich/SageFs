@@ -2,6 +2,68 @@
 
 Roadmap item: `debug-failing-tests-in-vscode` (Next, Live testing). Plan written 2026-10-26 against master `59a8692c`.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. The working tree had uncommitted edits to `SageFs/Mcp.fs`, `McpTools.fs`, `DaemonMode.fs` and `SessionManager.fs` from other work; none of the files below were among them.
+
+### 1. Outcome
+
+What is left of this item is three things. (a) Breakpoints in evaluated code. A test the session re-evaluated has no PDB, so a breakpoint in it never binds. After this, when the hold says `symbols: eval`, VS Code offers "Build and debug the compiled copy", the daemon confirms the build in a throwaway worker (the venue `confirm-builds-without-restarting-the-worker` built; that item is Done at `docs/roadmap.md:133`), holds the test there, and the breakpoint binds. (b) The extension-host proof debugs several tests under one attach, which the daemon side already proves in `--integration-lt`. (c) Two hand measurements written into this plan with dates: a test stopped at a breakpoint past `Timeouts.watchdogGracePeriod` (30 s, scaled), and the attach time of Microsoft's `ms-dotnettools.csharp` adapter.
+
+Outcome gate: `--integration-lt` (19 cases, `Trusted` three times on 2026-11-10) gains an eval cell: a test defined by eval is debugged through the compiled-copy route, its row says `Compiled` with a verdict and no duration, and a breakpoint in it stops the host (`host_not_answering` naming netcoredbg, as the breakpoint case asserts today). `--integration-host` (`VscodeCommandProofTests`, `ProofCase.Debug`) debugs three tests and checks three rows. Linux and netcoredbg only. Microsoft's adapter stays a hand check per release, and the date and the three attach times go in this plan.
+
+### 2. Where the code is today
+
+- Daemon routes: `SageFs/McpDebugTest.fs:67` `beginDebug`, `:95` `continueDebug`, the verdict dispatch at `:113-116` (`held.Verdict`, then `TuiEvent.DebugRunFinished`). `HeldTargets` is the type at `:29`, owned per daemon through `SageFs/McpServer.fs:2533` (`HeldDebugTargets`) and made at `:4992`. The hold is noted to the confirmation venue at `:60-64` (`ConfirmWorkers.handWork.Note ... DebugReleased`).
+- Record: `SageFs.Core/Features/DebugRunRecord.fs` (`DebugRunRecord`, `DebugTicketLog` with capacity 64); tests `SageFs.Tests/DebugRunRecordTests.fs`.
+- A hold is a kept state: `SageFs.Core/ConfirmationVenue.fs:100-104` (`KeptState.HeldDebugTest`), `:123-129` (`Venue.SwapInPlace | ThrowawayWorker | Refused`), `:151` `decide`. Throwaway workers: `SageFs/ConfirmWorkers.fs:77` `startJob`, `:164` `start`, `:179` `retire`, `:194` `awaitReady`, `:287` `handWork`.
+- VS Code: `sagefs-vscode/src/TestDebugCommand.fs:130` `holdAndAttachAll` (several ids, one attach), `:221` `whilePaused` (pause, then resume on every way out), `:248` `debugTests`; `TestControllerAdapter.fs:143` `debugIdsOf` (every id in `request.include`), `:151` `debugHandler`; `TestDebugPure.fs:39-58` `DebugStatus` (closed set, `statusOfWire` at `:60`).
+- Extension-host proof: `sagefs-vscode/test-electron/ExtensionHostSuite.fs:136` `debugTestSequence` debugs ONE test (`Array.tryHead before`), `:183` `runDebugProof`. Runner: `SageFs.Tests/VscodeCommandProofTests.fs:283` `ProofCase`, `:305` a daemon per proof, `:457` the shim, `:514-516` the netcoredbg gate, `:552` registration in `--integration-host`.
+- Journeys: `SageFs.Tests/DebugRowJourneyTests.fs:158-161` (two `Integration.dedicatedCaseTask "--integration-lt"` cases); `DebugAttachJourneyTests.fs` (attach, breakpoint, a ticket across a confirming build); tree order in `LiveTestingShards.fs:31-36`, the breakpoint case first because it needs compiled code. `SAGEFS_REQUIRE_DEBUGGER` is read at `DebugAttachJourneyTests.fs:37` and set by `scripts/local-gate.fsx:387` through `ReleaseRules.debuggerRequirementEnvironment` (`ReleaseRulesTests.fs:524`).
+- Waits: `SageFs.Core/Timeouts.fs:728` `debugHold` 2 min, `:736` `debugAttachGrace` 5 s, `:751` `debugHostAnswerGrace` 5 s, `:773` `watchdogGracePeriod` 30 s (read only by `SageFs.Core/Watchdog.fs:50`).
+- Docs: `docs/LIVE_TESTING_GUIDE.md:300-352` is current. `docs/how-live-testing-works.md:122-124`, `:139` and `:148` are stale: they say a debug run is not recorded in the live-testing state and that several tests are "further out". Both are built. `docs/roadmap.md:22` says breakpoints in evaluated code wait on `confirm-builds-without-restarting-the-worker`; that item is Built, so nothing blocks them now (the roadmap is generated from `scripts/roadmap/RoadmapItems.fs`, the orchestrator's file).
+- Three bullets under "What exists today" below are out of date and the facts above replace them: "Nothing dispatches it into the Elm model" (it does, `McpDebugTest.fs:116`), "debugs only `items.[0]`" (every id, `TestControllerAdapter.fs:143`), "VS Code sends `{ testId }` and `{ ticket }` only" (it sends `sessionId`, `TestDebugCommand.fs:96,179`).
+- Not opened today: the host's `SymbolSupport` decision in `SageFs.Core/HostAgent.fs` (`TestDebug` module) `[not verified]`.
+
+### 3. Steps
+
+1. (edge, VS Code) RED in `ExtensionHostSuite.fs` `debugTestSequence`: take the first three entries, execute `sagefs.debugTest` with all three ids (the command takes an array, `TestControllerAdapter.fs:159`), assert three rows with `00:00:00`. Red today because the sequence passes one id. Build the extension the way `sagefs-vscode/package.json` says `[not verified]`, then run the host command in section 4.
+2. (pure, Core) DECISION below first. RED `SageFs.Tests/DebugCompiledCopyTests.fs` (new; `<Compile Include="DebugCompiledCopyTests.fs" />` beside `DebugRunRecordTests.fs` in `SageFs.Tests/SageFs.Tests.fsproj`): a pure `DebugVenue.decide` over (`SymbolSupport`, the venue facts) answering `HoldHere | HoldInThrowaway of why | Refuse of why`: `DefinedByEval` with room for a throwaway gives `HoldInThrowaway`, `CompiledWithSymbols` gives `HoldHere`, `MemoryHeadroom.Short` gives `Refuse` with the reason. New file `SageFs.Core/DebugVenue.fs`, fsproj entry after `ConfirmationVenue.fs`.
+3. (edge, daemon) `McpDebugTest.beginDebug`: on `HoldInThrowaway`, start the confirming build for the session (`ConfirmWorkers.startJob`), wait for the throwaway to be Ready (`awaitReady`), send `WorkerMessage.DebugTestBegin` to that worker, and answer with its host pid. `continueDebug` routes the ticket to the same worker, so `HeldTargets` keeps the worker beside the ticket; the throwaway is retired after `Ended`. The `debug` response gains an optional `venue` field (`session` or `throwaway`). Additive. Check `sagefs.nvim/lua/sagefs/debug_test.lua` reads only `pid`, `ticket` and `status`, then trailer `Plugin: n/a, pid and ticket keep their meaning and Neovim reads nothing else`.
+4. (edge, VS Code) `TestDebugPure`: a `Notice` for `symbols = eval` with buttons "Build and debug the compiled copy" and "Debug anyway"; `holdAndAttachAll` sends `compiledCopy: true` on the hold when chosen. Contract case in `sagefs-vscode/tests/TestDebugContractTests.fsx` first.
+5. (test) The eval cell in `DebugRowJourneyTests.fs`: edit the sample's test file so its tests are `Evaluated`, hold with `compiledCopy`, assert `symbols: compiled`, drive a breakpoint as `DebugAttachJourneyTests` does, assert the row's verdict and `Compiled`. Register with `Integration.dedicatedCaseTask "--integration-lt"` and put it in `LiveTestingShards.tree` AFTER the breakpoint case.
+6. (docs) `how-live-testing-works.md:139,148` and `LIVE_TESTING_GUIDE.md:322` (the "Code you evaluated" bullet) describe the offer. The two hand measurements from "Measure first: what it takes to run" are written here with dates and numbers.
+
+### 4. How to check it
+
+- REPL: `create_project_session` on `SageFs.Tests/SageFs.Tests.fsproj`; prove `DebugVenue.decide` with `send_fsharp_code` before writing the file.
+- `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Inner loop: `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary --filter-test-list "debug"` (a list filter, the leaf names start with `WHY`).
+- Acceptance: `SAGEFS_REQUIRE_DEBUGGER=1 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-lt --summary` (the whole tier, `Trusted`), then the same with `--integration-host --summary` (the VS Code proofs; `@vscode/test-electron` downloads a VS Code the first time). netcoredbg must be on PATH (`~/.local/bin/netcoredbg`, 3.2.0-1092 here).
+
+### 5. Traps in this repo
+
+- The breakpoint case stays first in `LiveTestingShards.tree`: a journey that edits `Hello.fs` leaves the tests `Evaluated`.
+- A confirming build on a session that holds a test already runs in a throwaway worker. Step 3 reuses that; do not add a second spawn path.
+- `DebugRunRecord` field names (`OwnerSession`, `HoldTicket`, `Verdict`, `CodeBasis`) are deliberate: shorter names made record expressions elsewhere infer the wrong type.
+- `HostAgent.fs` is embedded in the FSI host and cannot reference daemon types.
+- Step 3 is a wire change: `Plugin:` trailer, plugin first.
+- No timing assertions. The 120 and 240 in `ExtensionHostSuite.fs:149-150` are ceilings on events, never the pass condition.
+- Commit `SageFs.Tests/SageFs.Tests.fsproj` whole, with the new test file.
+- A throwaway is a second worker per session: `MemoryHeadroom.Short` refuses, and that refusal must reach the VS Code notice in words.
+
+### 6. Size and order
+
+Step 1 is an hour. Steps 2 to 5 are three to five days for one person; step 2 and step 4 are file-disjoint and can run in parallel. First commit: step 1's RED (three ids in `debugTestSequence`).
+
+### 7. Not now
+
+- A daemon-owned pause with a reason (a `LivePause` case), which would give Neovim auto-pause for free: a wire shape change; decision 1 below chose client-driven first.
+- A batch hold inside the host (`Hold` head and tail): the client-driven batch made it unnecessary.
+- Coverage from a debug run: discarded on purpose around the hold.
+
+DECISION (blocks step 2): where the compiled copy is debugged. (a) A throwaway worker from the confirmation venue: the session's FSI state survives, the attach pid is the throwaway host's. (b) Hard reset the session with a rebuild: loses REPL state, no new code, available by hand today. (c) Keep the note and stop here. Recommendation: (a). It is what `confirm-builds-without-restarting-the-worker` was built for.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
@@ -12,7 +74,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Size | M for the Next scope, L overall |
 | Branch and worktree | `worktree-agent-ad20eb97ce17072e5` at `.claude/worktrees/agent-ad20eb97ce17072e5` (2026-11-07, merge by the orchestrator) |
 | Last green commit | see the branch log: the last `feat(debug)` commit on it |
-| Next action | The row journeys are back in the tier and green (`debug-row-journeys-run-green`, Done). Still here: (1) the extension-host debug case is done (own daemon with hot reload off and a plain session, `ProofCase.Debug` in `VscodeCommandProofTests.fs`); its multi-test selection and the evaluated-code cell are not in it. (2) "Measure first" run 1 (a test stopped at a breakpoint longer than the watchdog), which the hand run of 2026-11-10 covered for 35.9 s only (one test held at a breakpoint for 35.858 s, the session stayed Healthy, the same ticket answered `attached`). (3) Microsoft's adapter, by hand per release. Slice 4's evaluated-code half waits on `confirm-builds-without-restarting-the-worker`. |
+| Next action | The row journeys are back in the tier and green (`debug-row-journeys-run-green`, Done). Still here: (1) the extension-host debug case is done (own daemon with hot reload off and a plain session, `ProofCase.Debug` in `VscodeCommandProofTests.fs`); its multi-test selection and the evaluated-code cell are not in it. (2) "Measure first" run 1 (a test stopped at a breakpoint longer than the watchdog), which the hand run of 2026-11-10 covered for 35.9 s only (one test held at a breakpoint for 35.858 s, the session stayed Healthy, the same ticket answered `attached`). (3) Microsoft's adapter, by hand per release. Slice 4's evaluated-code half is unblocked since `confirm-builds-without-restarting-the-worker` went Built; the Work order above is the plan for it. |
 | Decisions made | 2026-11-07, the implementing agent: (1) Accepted by the coordinator 2026-11-07: several tests are taken one after another by the client under one attach, not by a batch hold in the host. The host slot still holds one test, the debugger stays on the host between tests, so no daemon wire change, no change to `Hold`, and each verdict records as its test ends. The `Hold` head-and-tail design in "Slice 4" is not built. (2) Auto-pause stays client-driven (slice 3) and is skipped when the person had already paused. (3) A debug verdict overwrites the row and records no duration. The plan's open decisions 1 and 2 follow the plan's recommendations, still for Will to confirm. |
 | Surprises | The host's `DebugEnd.Attached` names no test, so the daemon keeps a bounded table of the holds it granted (`McpDebugTest.heldTargets`, keyed by session and ticket, taken on the first `Ended`) to say which row a verdict belongs to; that also gives "exactly one dispatch per ticket" at the route. `DebugRunRecord` fields are `OwnerSession`, `HoldTicket`, `Verdict`, `CodeBasis` because `Session`, `Ticket`, `Result` as field names made record expressions elsewhere in Core infer the wrong type. The per-file annotation push is gated on a key that moves with no row verdict, so `testSummaryProjectionKey` gained a debug-run count (a count of verdicts ever recorded, since the ticket log is bounded). `HostAgent.fs` is embedded in the FSI host, so the host cannot reference `DebugRunRecord`; the record lives in the daemon only. The `run_tests` argument is `pattern`; `tools/sagefs-call.fsx` sends `testPattern`, which the daemon ignores, so a filtered call from that driver starts the whole suite. |
 
