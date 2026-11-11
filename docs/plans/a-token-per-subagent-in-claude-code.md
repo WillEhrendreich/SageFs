@@ -2,17 +2,77 @@
 
 Roadmap item: `a-token-per-subagent-in-claude-code` (Exploring, Agents). Plan written 2026-10-26 against master 59a8692c.
 
+## Work order
+
+Written 2026-11-11 against master 8975e898. Every `path:line` below was read at that commit. The plan below is detailed and its measurements stand; what changed since it was last edited is that most of its step 7 has landed, and the "Resume here" block did not say so.
+
+### 1. Outcome
+
+Two Claude Code sub-agents spawned from one session appear in `get_cohort_status` as two members (`cap:<id>` each), hold separate claims and leases, and are refused separately by the role gate, and no token ever appears in a transcript, prompt or tool argument. Gate: a scripted `claude -p` run (new tier `--integration-claude`, fails loudly when `claude` is absent, as the VS Code runner does) over {string reference, inline http, inline stdio} x {token minted by hand, minted by `sagefs member mint`}, asserting two distinct `cap:` ids in the inline rows, ONE in the string-reference row, and no `sfm_` string in the transcript files under `~/.claude/projects/`. Measured on Linux with Claude Code 2.1.316 only; Cursor, Copilot CLI and opencode are unproven.
+
+### 2. Where the code is today
+
+Done since the plan's last edit:
+- The operator credential and the mint route (slice 0 of `a-token-for-every-daemon-call`): `SageFs/McpMintRoute.fs` (`POST /api/members/mint`, operator-only, `SageFs.Core/EndpointContracts.fs:77`), `SageFs/MemberMintCommand.fs` (`sagefs member mint --role R (--dir D | --session ID) [--scope S] [--ttl M] [--print-env VAR]`, usage at line 16, `MintOutput = Export | Details` at 20-25, the `export VAR=token` line at 133), the verb in `SageFs/Program.fs:164` and 811-829. Tests: `SageFs.Tests/McpMintRouteTests.fs`, `SageFs.Tests/MemberMintCommandTests.fs`. #181 (tool list follows the presented credential) and #182 (a bad token lists `credential_status` and answers 403 `invalid_token`) are closed.
+- Docs already tell an orchestrator to mint: `skills/sagefs/agents.md:56` and `docs/agents.md:178` carry the `eval "$(sagefs member mint ... --print-env SAGEFS_MEMBER_TOKEN)"` line.
+- The token path: `presentationFrom` `SageFs/McpCapability.fs:303`, `presentToken` 314, `mintMember` 71; `CapabilityTransport` in `SageFs.Core/Capability.fs:1006-1051` (header name 1006, `_meta` key 1008, env var 1010, `headerFromEnvironment` 1036, `presentationOf` 1051); `useMemberToken` `SageFs/McpServer.fs:886`; `createServerCaptureFilter` 556; `admitTokenless` `Capability.fs:956`; `IdentityPolicy` 915-936.
+- `SageFs.Tests/CapabilityHttpIntegrationTests.fs:174` (`Integration.hostList` at 172) proves header and `_meta` on one daemon, revocation, and the starter tool list (449). It does not yet assert two members from one `get_cohort_status` reply.
+
+Not done:
+- Who am I. `SageFs.Core/Features/CohortStatusText.fs:304` prints `Cohort ledger head: v%d` and nothing in `SageFs/` or `SageFs.Core/` prints the caller's own member id (grep for "You are cap" finds nothing; `McpCohortTools.fs:179,249` only say "You are the conductor"). The nvim parser `sagefs.nvim/lua/sagefs/cohort.lua:275` anchors on `^Cohort ledger head: v` and drops any line no section claims (lines 290-330), so a last line is safe; a first line breaks it.
+- `SageFs.Core/SubagentTokenPlan.fs` does not exist.
+- `sagefs check` is `SageFs/EnvCheck.fs` (`Program.fs:791-799`); it has no agent-file, trust or `--strict-mcp-config` check (grep for `agents`, `hasTrustDialogAccepted`, `strict-mcp` in `SageFs/` finds nothing).
+- The hook `tools/agent-hooks/` matches `Bash` only (`README.md:208`); `Hook.fs` and `ReplGuard.fs` know nothing of `mcp_server` or `agent_id`. Tests: `SageFs.Tests/ReplGuardTests.fs`, `ReplGuardConfigTests.fs`.
+- `headersHelper` has nothing to call: `MemberMintCommand` prints an `export` line or details, never a JSON header object.
+
+### 3. Steps
+
+1. Who am I. RED in a test that already drives `CohortStatusText.render` (`CohortPanelTests.fs` or `CohortSeatSentenceTests.fs` call it; pick one): the reply's LAST line is `You are <member> [<role>].` for a token member and for a plain connection. `render` needs the caller, so the signature gains it and `McpCohortTools` passes `who` (the file already has it at 179). Then a busted spec in `sagefs.nvim/spec/cohort_spec.lua` that `parse_status` still reads a reply with the line present, pushed first. Trailer `Plugin: done, cohort_spec covers the who-am-I footer`. Domain plus one edge argument.
+2. `SubagentTokenPlan.fs` (pure) with "Tests" 1 and 2, in `SageFs.Core/SageFs.Core.fsproj` after `Capability.fs`; `SageFs.Tests/SubagentTokenPlanTests.fs` after `MemberMintCommandTests.fs` in the test fsproj. Then the four `sagefs check` warnings in `EnvCheck.fs` (an agent file naming a server by string; `--strict-mcp-config`; a `tools:` list naming an inline server's tool; a project-scope agent folder with no `hasTrustDialogAccepted: true` in `~/.claude.json`). `EnvCheckTests.fs` exists for the RED.
+3. `headersHelper` output. DECISION: (a) a new `MintOutput.HeadersJson` case in `MemberMintCommand.fs:20` that prints `{"X-SageFs-Member-Token":"..."}` and reads the agent name from `CLAUDE_CODE_MCP_SERVER_NAME`, or (b) a shell wrapper around `--print-env`. Recommend (a): it is a DU case with a unit test, and the wrapper would be a loose script. Edge: a few lines in `run`.
+4. The deny hook: a second `PreToolUse` entry with matcher `mcp__sagefs__.*` in `tools/agent-hooks/README.md:206`, and a branch in `Hook.fs` that denies when the input carries `agent_id` and `mcp_server` is not the sub-agent's own server, reason text verbatim. RED in a new `SageFs.Tests/SubagentHookTests.fs` over the pure decision (put the decision in `Verdict.fs` or a sibling, which the test project compiles).
+5. Extend `CapabilityHttpIntegrationTests.fs:174`'s list: two connections with two tokens are two `cap:` members in one `get_cohort_status`; a third client on the first connection with the second token only in `_meta` is the second member. File-disjoint from 1 to 4.
+6. The outcome gate, test 4 above, as its own entry point registered in `TestInfrastructure.fs` next to the other `Dedicated` tiers, and wired into `ci-pipeline.fsx` or `TrustSignalTests` fails. It needs `claude` and a throwaway daemon; `--disallowedTools mcp__sagefs` on the parent so the real daemon is never reached.
+7. Docs: `docs/agents.md` sub-agent section (frontmatter example, `headersHelper`, the fallback), `skills/sagefs/agents.md`, `docs/mcp-tools.md` member-token section. `Plugin: n/a`.
+
+### 4. How to check it
+
+- Inner loop: a SageFs session on `SageFs.Tests`; `CohortStatusText.render` and the plan generator are pure.
+- `dotnet build SageFs.Tests -c Release`; `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`.
+- Filtered: `--summary --filter-test-list "SubagentTokenPlan"`; `--summary --filter-test-list "EnvCheck"`.
+- Acceptance: unfiltered `--summary`; `--integration-host --summary` for step 5; the new `--integration-claude` for step 6; in `~/Work/sagefs.nvim`, `busted spec/cohort_spec.lua` for step 1.
+- Hook: `tools/agent-hooks/README.md:262` shows the stdin shape to pipe by hand.
+
+### 5. Traps in this repo
+
+- A wire change needs the plugin first and a `Plugin:` trailer: step 1 changes text `cohort.lua` parses.
+- Tool-list weight (`RatchetBudgets.toolList`): no new tool; `mint_member`'s description (`McpTools.fs:3083`) gains one sentence at most.
+- `TokenRequired` is daemon-wide and does not catch the fallback (measured below); do not flip it as part of this item.
+- SAGE-005: `SubagentWiring.OwnConnection of agent: string * token: TokenSource` is fine; do not add a second string beside `agent`.
+- The hook is a compiled program because it runs before every call; keep the new branch cheap and fail-open on daemon silence, as `Hook.fs:19-22` does.
+- Only `~/.claude/agents/` connects inline servers in a headless run; a project-scope agent needs the folder trusted. The gate must use user-scope agents or trust the folder first.
+
+### 6. Size and order
+
+Steps 1 to 3: S, one to two days. Steps 4 to 7: M, three to five days, step 6 the longest. Order: 1 first (nothing else can be checked from inside a sub-agent without it), then 2 and 3 in parallel, then 4, 5 anytime, 6 last. First commit: step 1's nvim spec, then the daemon change.
+
+### 7. Not now
+
+- The rest of `a-token-for-every-daemon-call` (SDK spike, `EdgeAccess` on every route): a separate item; this one only needed slice 0, which exists.
+- `tokens-survive-a-restart`: a `headersHelper` that mints on each connection covers a restart without persisting (research note). Re-count after step 3.
+- Asking Anthropic for a `_meta` hook output: per-sub-agent connections work, so no.
+
 ## Resume here
 
 This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
 
 | Field | Now |
 |:--|:--|
-| Status | In progress. Phase 0 ran on 2026-11-01 and the mechanism works (see "Measure first, results"). |
+| Status | In progress. Phase 0 ran on 2026-11-01 and the mechanism works (see "Measure first, results"). Slice 0 of the operator credential landed afterwards: `POST /api/members/mint`, `sagefs member mint --print-env`, #181 and #182 closed. The who-am-I line, the planner, the `sagefs check` warnings, the hook and the outcome gate are not started (see "Work order"). |
 | Size | S for phase 0, M for phase 2 |
 | Branch and worktree | none, work on master |
 | Last green commit | none yet (the commit that carries this edit is docs only) |
-| Next action | Step 2: the failing test that a string-referenced server is reported as `SharesParent`, then `SubagentTokenPlan.fs`, then the `sagefs check` warning described under "Measure first, results". |
+| Next action | "Work order" step 1: the who-am-I footer on `get_cohort_status`, nvim spec first. |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | Four, all under "Measure first, results": `--strict-mcp-config` disables the wiring, the trust rule drops it silently in a headless run, a `tools:` allow-list cannot name an inline server's tools, and a dropped server falls back to the parent's. |
 
@@ -25,8 +85,8 @@ Two Claude Code sub-agents spawned from one session show up in `get_cohort_statu
 Verified in the repo:
 
 - A token outranks its connection. `SageFs/McpCapability.fs` `presentationFrom` reads `_meta["sagefs/memberToken"]` first (per call), then the hash claim the HTTP edge built from the `X-SageFs-Member-Token` header (per connection). `CapabilityTransport.presentationOf` in `SageFs.Core/Capability.fs` holds that rule.
-- `useMemberToken` (`SageFs/McpServer.fs:833`) turns the header into a principal. The call filter (`createServerCaptureFilter`, around `McpServer.fs:575`) calls `presentToken` and binds `currentCapability`.
-- The stdio bridge sends the header from `SAGEFS_MEMBER_TOKEN` (`SageFs/McpStdioBridge.fs:592`, `CapabilityTransport.headerFromEnvironment`). So a process started with that variable is a distinct member today.
+- `useMemberToken` (`SageFs/McpServer.fs:886` at 8975e898) turns the header into a principal. The call filter (`createServerCaptureFilter`, `McpServer.fs:556`) calls `presentToken` and binds `currentCapability`.
+- The stdio bridge sends the header from `SAGEFS_MEMBER_TOKEN` (`SageFs/McpStdioBridge.fs`, line 592 when this was written, `[not re-verified]`; `CapabilityTransport.headerFromEnvironment` is `Capability.fs:1036`). So a process started with that variable is a distinct member today.
 - `docs/decisions.md` (around lines 1428 to 1538) records finding F8: sub-agents of one Claude Code session share one connection, so one member. "Only a per-call `_meta` can" tell them apart without a second connection. The roadmap item repeats that.
 - `mint_member` (`SageFs/McpCapability.fs` `mintMember`) is conductor only and returns the raw token once, in the tool result. A tool result is part of the transcript.
 
@@ -108,7 +168,7 @@ Simulation: this item adds no new state machine in the daemon, so no DST. The si
 4. The fallback hook: a `PreToolUse` hook that denies a SageFs call when the input carries an `agent_id` and its `mcp_server` is not the sub-agent's own (the planner names each own server after the agent), with a message that says the sub-agent must use its own server. Both fields are measured. A deny reaches the sub-agent with its reason. It extends `tools/agent-hooks` (a compiled program, because it runs before every call).
 5. Test 3 in `CapabilityHttpIntegrationTests.fs`. File-disjoint from steps 2 to 4, can run in parallel.
 6. Docs: `docs/agents.md` section on sub-agents, `skills/sagefs/agents.md` (the brief an orchestrator gives, including "your first call is get_cohort_status; if it does not name a `cap:` member, stop"), `docs/mcp-tools.md` member-token section. Carries a `Plugin: n/a` trailer.
-7. Slice 0 of the operator credential (`a-token-for-every-daemon-call`): then the mint route, the CLI verb, the launcher and test 4. Owns `SageFs/Program.fs` (verb only), `SageFs/McpMintRoute.fs` (new), `EndpointContracts.fs` (one line).
+7. Slice 0 of the operator credential (`a-token-for-every-daemon-call`): then the mint route, the CLI verb, the launcher and test 4. Owns `SageFs/Program.fs` (verb only), `SageFs/McpMintRoute.fs` (new), `EndpointContracts.fs` (one line). Landed by 2026-11-02 except the launcher (`headersHelper` output) and test 4; see "Work order".
 8. Re-count the need for `tokens-survive-a-restart`. A minted token lives in daemon memory, and this repo redeploys the daemon on purpose, so a long orchestrated run loses its tokens at the next install.
 
 ## Measure first
@@ -142,7 +202,7 @@ Three things the experiment found that the docs do not say:
 
 One finding changes the design. When an inline server is dropped (1 or 2), the sub-agent still runs. It falls back to whatever server its parent has and becomes the parent's member, which is the collapse this item exists to prevent. The daemon cannot see it: the call arrives on the parent's connection with no token, exactly like the parent's own calls.
 
-`IdentityPolicy.TokenRequired` does not catch it either. The first version of this paragraph said it would, and that was wrong. `admitTokenless` (`SageFs.Core/Capability.fs:933`) admits a token-less call from the conductor, the orchestrator is normally the conductor, and a fallen-back sub-agent shares its connection, so it is admitted as the conductor. This is read from the code and was not run. The fallback has to be caught at the agent's end and by letting anyone ask who they are (see "Decisions").
+`IdentityPolicy.TokenRequired` does not catch it either. The first version of this paragraph said it would, and that was wrong. `admitTokenless` (`SageFs.Core/Capability.fs:956` at 8975e898) admits a token-less call from the conductor, the orchestrator is normally the conductor, and a fallen-back sub-agent shares its connection, so it is admitted as the conductor. This is read from the code and was not run. The fallback has to be caught at the agent's end and by letting anyone ask who they are (see "Decisions").
 
 One run reached the maintainer's real daemon through the inherited server: a `leave_cohort` scoped to a scratch path, refused, nothing changed. An experiment needs `--disallowedTools mcp__sagefs` to keep that from happening.
 
