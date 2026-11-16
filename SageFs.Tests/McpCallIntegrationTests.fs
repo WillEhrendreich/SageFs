@@ -186,6 +186,6 @@ let tests =
 
     testTask "WHY - SageFs --help lists the call command" {
       let! help = runSagefs [] [] [ "--help" ]
-      help.Out |> Expect.stringContains "the usage line" "SageFs call --list"
+      help.Out |> Expect.stringContains "the usage line" "sagefs call --list"
     }
   ]
