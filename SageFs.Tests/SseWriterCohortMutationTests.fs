@@ -153,12 +153,16 @@ let sseWriterCohortMutationTests = testList "SseWriter cohort-events mutations" 
         match SageFs.Cohort.decide clock noEntropy state cmd with
         | Ok(s, _, _) -> s
         | Error e -> failwithf "unexpected cohort decide error: %A" e
+      // bob joins first, so he takes the conductor seat: a conductor may not depart while it
+      // holds claims (CohortError.ConductorHoldsClaims), which would refuse alice's Depart below.
+      // Alice is therefore an ordinary member, and her departure is what orphans the claim.
       let state =
         SageFs.Cohort.CohortState.empty ()
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(bob, SageFs.Cohort.JoinableRole.Implementer, None, machine))
         |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, None, machine))
         |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Orphan.fs", "testing", machine))
         |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Depart(alice, machine))
-      let head : SageFs.Cohort.LedgerHead<SageFs.MemberTable.MemberId> = { Seq = 3L<SageFs.Measures.ledgerSeq>; State = state }
+      let head : SageFs.Cohort.LedgerHead<SageFs.MemberTable.MemberId> = { Seq = 4L<SageFs.Measures.ledgerSeq>; State = state }
       let frame = SageFs.Cohort.project head [||]
       let doc = SageFs.SseWriter.formatCohortMatrixEvent jsonOpts frame |> dataOf |> JsonDocument.Parse
       let claim = doc.RootElement.GetProperty("claims").EnumerateArray() |> Seq.exactlyOne
