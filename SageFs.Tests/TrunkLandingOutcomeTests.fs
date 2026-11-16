@@ -617,7 +617,7 @@ let tests =
         let! landingId = land w w.Carol "Alice.fs" w.BaseSha [ "alice:v1", "alice:carol" ] "carol: the same line"
         let! settled = awaitSettled w landingId
         settled |> Expect.stringContains "the landing is refused" "state=Blocked"
-        settled |> Expect.stringContains "with the reason the cohort already gives" "RebaseConflict"
+        settled |> Expect.stringContains "with the reason the cohort already gives" "rebasing onto the integration head conflicts"
         settled |> Expect.stringContains "naming the file" "Alice.fs"
         let! after = statusOf w
         (trunkLine after landingId) |> Expect.isNone "the trunk was told nothing about a landing that did not land"
