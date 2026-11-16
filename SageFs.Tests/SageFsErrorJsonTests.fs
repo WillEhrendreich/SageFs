@@ -38,7 +38,7 @@ let sageFsErrorJsonTests =
         json.fields.["port"] :?> int
         |> Expect.equal "port field" 8080
         json.suggestedAction
-        |> Expect.stringContains "mentions mcp-port" "mcp-port"
+        |> Expect.stringContains "names the env var that moves the port" "SAGEFS_MCP_PORT"
       }
 
       test "Unexpected serializes exn message, not the exn object" {
