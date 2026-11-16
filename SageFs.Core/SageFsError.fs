@@ -315,6 +315,10 @@ type SageFsError =
   /// sentence). `McpTools.classifyEcho` reads that text once at the MCP seam so the call is still reported with
   /// isError and recorded as a failure. A body that has the typed error returns it instead.
   | ToolFailed of reason: string * suggestion: string
+  /// `discover_features` was asked for a manual by a name no registered tool has. Carries the
+  /// names there are, so the refusal IS the correction. Built from `ManualRefusal.UnknownTool`
+  /// at the MCP seam, never formatted into display text and read back out of it.
+  | UnknownTool of requested: string * known: string list
   | Unexpected of exn
 
 /// The family a `SageFsError` belongs to, which decides its HTTP status class and how a
@@ -433,6 +437,8 @@ module SageFsError =
     // The route builds the whole sentence, session and lifecycle state included (Mcp.fs, the RestartInProgress arm).
     | SageFsError.SessionRestarting(_, reason) -> reason
     | SageFsError.ToolFailed(reason, _) -> reason
+    | SageFsError.UnknownTool(requested, known) ->
+      sprintf "no tool is named '%s'. The tools are: %s." requested (String.concat ", " known)
     | SageFsError.Unexpected exn ->
       sprintf "Unexpected error: %s" exn.Message
 
@@ -488,6 +494,8 @@ module SageFsError =
     | SageFsError.CohortOwnerNotWired -> LogLevel.Warning
     | SageFsError.SessionRestarting _ -> LogLevel.Information
     | SageFsError.ToolFailed _ -> LogLevel.Warning
+    // A caller's typo, not a fault: expected, and the reply names the correction.
+    | SageFsError.UnknownTool _ -> LogLevel.Information
 
   let toHttpStatus = function
     // 404 Not Found
@@ -509,6 +517,8 @@ module SageFsError =
     | SageFsError.CohortOwnerNotWired -> 500
     // The text a tool body wrote carries no family of its own; a refused request is the common meaning.
     | SageFsError.ToolFailed _ -> 400
+    // A name no tool has is a bad request, and the reply carries the names that would work.
+    | SageFsError.UnknownTool _ -> 400
     // 409 Conflict
     | SageFsError.PortInUse _ -> 409
     | SageFsError.RestartLimitExceeded _ -> 409
@@ -568,6 +578,7 @@ module SageFsError =
     | SageFsError.NeedsRebuild _
     | SageFsError.CohortActionFailed _
     | SageFsError.CohortRefused _
+    | SageFsError.UnknownTool _
     | SageFsError.ToolFailed _ -> ErrorCategory.Client
     | SageFsError.SessionCreationFailed _
     | SageFsError.SessionStopFailed _
@@ -670,6 +681,8 @@ module SageFsError =
     | SageFsError.SessionRestarting _ ->
       "Wait: the restart is in progress. Call get_session_status with wait_seconds=60, which returns once the session is Ready, then retry. Do not run hard_reset_fsi_session or create a new session: either starts the restart over"
     | SageFsError.ToolFailed(_, suggestion) -> suggestion
+    | SageFsError.UnknownTool _ ->
+      "Call discover_features again with no tool to rank features, or call one of the names it listed by name"
     | SageFsError.Unexpected _ -> "Check the SageFs log for details"
 
   /// Agent-facing error description: compose describe + suggestedAction.
@@ -737,6 +750,7 @@ module SageFsError =
     | SageFsError.CohortOwnerNotWired -> "CohortOwnerNotWired"
     | SageFsError.SessionRestarting _ -> "SessionRestarting"
     | SageFsError.ToolFailed _ -> "ToolFailed"
+    | SageFsError.UnknownTool _ -> "UnknownTool"
     | SageFsError.Unexpected _ -> "Unexpected"
 
   let private unsupportedReasonName (reason: ProjectCompatibility.UnsupportedTfmReason) : string =
@@ -877,6 +891,9 @@ module SageFsError =
     | SageFsError.ToolFailed(reason, suggestion) ->
       [ "reason", box reason
         "suggestion", box suggestion ]
+    | SageFsError.UnknownTool(requested, known) ->
+      [ "requested", box requested
+        "known", box known ]
     // The unnamed field is "Item", as F# reflection has always named it.
     | SageFsError.Unexpected ex -> [ "Item", box ex.Message ]
 

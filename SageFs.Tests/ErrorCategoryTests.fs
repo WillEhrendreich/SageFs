@@ -62,6 +62,7 @@ let private golden : (string * ErrorCategory) list =
     "CohortOwnerNotWired", ErrorCategory.Internal
     "SessionRestarting", ErrorCategory.Overload
     "ToolFailed", ErrorCategory.Client
+    "UnknownTool", ErrorCategory.Client
     "Unexpected", ErrorCategory.Internal ]
 
 /// One value of every case, built by reflection with a plain argument for each field.

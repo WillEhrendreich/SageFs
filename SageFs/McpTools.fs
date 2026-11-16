@@ -99,6 +99,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.SessionRestarting _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
   // A failure a tool body only described in text: it failed, and the text names no finer family.
   | SageFs.SageFsError.ToolFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.UnknownTool _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   // An exception the algebra had no specific case for. OperationFailed (not
   // the old fallback's InvalidRequest — the caller's request was not
   // necessarily invalid) is the honest "something broke" bucket.
@@ -2518,12 +2519,11 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         let topicOpt = match topic with | "" | null -> None | s -> Some s
         match System.String.IsNullOrWhiteSpace tool with
         | false ->
-          let answer =
+          Task.FromResult(
             match RegisteredTools.manual typeof<SageFsTools> (tool.Trim()) with
-            | Result.Ok manual -> manual
-            | Result.Error(ManualRefusal.UnknownTool(requested, known)) ->
-              sprintf "Error: no tool is named '%s'. The tools are: %s." requested (System.String.Join(", ", known))
-          Task.FromResult answer |> withEcho ctx "discover_features"
+            | Result.Ok manual -> EchoResult.Answered manual
+            | Result.Error(ManualRefusal.UnknownTool(requested, known)) -> EchoResult.Failed(SageFs.SageFsError.UnknownTool(requested, known)))
+          |> withEchoResult ctx "discover_features"
         | true ->
           SageFs.McpAnalysis.discoverFeatures ctx (RegisteredTools.describe typeof<SageFsTools>) topicOpt sid wd |> withEcho ctx "discover_features"
 

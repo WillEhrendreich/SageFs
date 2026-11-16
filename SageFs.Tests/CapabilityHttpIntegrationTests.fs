@@ -471,7 +471,7 @@ let starterListTests =
         manualError |> Expect.isFalse (sprintf "discover_features answers with a tool name: %s" manual)
         manual |> Expect.stringContains "the manual opens with the tool's name" "get_daemon_status"
         let! typoError, typo = call plain "discover_features" [ "tool", box "get_daemon_statu" ] []
-        typoError |> Expect.isFalse "a misspelled name is an answer, not a crash"
+        typoError |> Expect.isTrue "a misspelled name is a typed failure, not a crash, and it names the real ones"
         typo |> Expect.stringContains "that lists the real names" "get_daemon_status"
 
         // The operator credential keeps the full list under the same daemon.

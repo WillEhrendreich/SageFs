@@ -411,6 +411,18 @@
     "suggestedAction": "test"
   },
   {
+    "case": "UnknownTool",
+    "fields": {
+      "requested": "test",
+      "known": [
+        "a",
+        "b"
+      ]
+    },
+    "message": "no tool is named \u0027test\u0027. The tools are: a, b.",
+    "suggestedAction": "Call discover_features again with no tool to rank features, or call one of the names it listed by name"
+  },
+  {
     "case": "Unexpected",
     "fields": {
       "Item": "test"

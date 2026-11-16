@@ -180,6 +180,7 @@ module DaemonRefusal =
     | SageFsError.CohortOwnerNotWired
     | SageFsError.SessionRestarting _
     | SageFsError.ToolFailed _
+    | SageFsError.UnknownTool _
     | SageFsError.Unexpected _ -> DaemonRefusal.Other
 
   let title = function
