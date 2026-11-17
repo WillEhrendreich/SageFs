@@ -535,6 +535,10 @@ let gate (sha: string) (force: bool) (mode: ReleaseRules.FailureMode) (policy: R
           fail (PipelineFailed failed)
       finally
         releaseLease ()
+        // The sweep at the start cleans up the PREVIOUS run's leaks. This one cleans up this run's: a tier killed
+        // by a time cap dies before its fixture's finally runs, and its no-resume daemon is reparented to systemd
+        // and keeps spinning at ~700% CPU. Leaving it behind is what made the next gate's wall-clock waits fail.
+        reapOrphanDaemons ()
 
 // ── entry ────────────────────────────────────────────────────────────────────
 
@@ -546,6 +550,7 @@ let argv = fsi.CommandLineArgs |> Array.toList |> List.tail |> List.filter (fun 
 let onSignal (code: int) (context: PosixSignalContext) : unit =
   context.Cancel <- true
   releaseLease ()
+  reapOrphanDaemons ()
   match run "pgrep" [ "-P"; string Environment.ProcessId ] scriptsDir helperTimeout with
   | 0, out ->
     for line in out.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries) do
