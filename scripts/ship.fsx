@@ -325,3 +325,41 @@ match released with
   match (start repo "dotnet" (fsiScript "sync-nvim-version.fsx" [ "--"; version ]) false).Code with
   | 0 -> ()
   | _ -> eprintfn "ship: the sagefs.nvim version sync failed; run dotnet fsi scripts/sync-nvim-version.fsx -- %s" version
+
+// Last act: reap any fixture daemon orphaned by ANY stage. The gate sweeps at its own start and end, but the
+// packaged-tool smoke and install stages run after it and can leave a `sagefs --no-resume` daemon reparented
+// to systemd — one survived 0.6.949 at ~700% CPU for the next gate to inherit. Nothing in a finished ship
+// depends on a live fixture daemon, so reaping here is always safe. The same tested predicate decides which
+// processes are ours: a no-resume daemon whose parent is systemd or init.
+let rec killTree pid =
+  match start repo "pgrep" [ "-P"; string pid ] true with
+  | { Code = 0; Output = out } ->
+    for line in out.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries) do
+      match Int32.TryParse(line.Trim()) with
+      | true, child -> killTree child
+      | _ -> ()
+  | _ -> ()
+  start repo "kill" [ "-TERM"; string pid ] false |> ignore
+
+match start repo "pgrep" [ "-f"; "sagefs --no-resume" ] true with
+| { Code = 0; Output = out } ->
+  for line in out.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries) do
+    match Int32.TryParse(line.Trim()) with
+    | false, _ -> ()
+    | true, pid ->
+      let parentName =
+        match start repo "ps" [ "-o"; "ppid="; "-p"; string pid ] true with
+        | { Code = 0; Output = ppid } ->
+          match Int32.TryParse(ppid.Trim()) with
+          | true, parent ->
+            (match start repo "ps" [ "-o"; "comm="; "-p"; string parent ] true with
+             | { Code = 0; Output = name } -> name.Trim()
+             | _ -> "")
+          | _ -> ""
+        | _ -> ""
+      match ReleaseRules.isOrphanFixtureDaemon "sagefs --no-resume" parentName with
+      | true ->
+        printfn "ship: reaped an orphaned fixture daemon (pid %d) left by a stage" pid
+        killTree pid
+      | false -> ()
+| _ -> ()
