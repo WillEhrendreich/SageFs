@@ -294,6 +294,8 @@ let buildInputTests =
         "src/Lib.fsi", LiveTestBuildInput.WatchedFile.BuildInput LiveTestBuildInput.BuildInputKind.OtherInput
         "README.md", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.UnwatchedExtension
         ".editorconfig", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.UnwatchedExtension
+        // The daemon's own state dir: a write here must not rebuild the session that wrote it.
+        ".SageFs/warmup-replay-cache.json", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.UnwatchedExtension
         "src/Lib.fs~", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile
         "src/.Lib.fs.swp", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile
         "src/.#Lib.fs", LiveTestBuildInput.WatchedFile.Ignored FileWatcher.WatchDrop.TemporaryFile

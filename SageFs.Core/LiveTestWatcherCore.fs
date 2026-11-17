@@ -197,24 +197,31 @@ module LiveTestBuildInput =
     || lower.Contains ".received."
 
   let classify (path: string) : WatchedFile =
-    let fileName = System.IO.Path.GetFileName(path.Replace('\\', '/'))
+    let normalized = path.Replace('\\', '/')
+    let fileName = System.IO.Path.GetFileName normalized
     let lower = fileName.ToLowerInvariant()
-    match isScratchName fileName with
-    | true -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.TemporaryFile
+    // The daemon writes its own state under <session>/.SageFs (warmup replay cache, manifests, friction DB).
+    // Reading that as a build input makes every state write rebuild the session that wrote it, which writes
+    // state again — a loop that leaves every row Stale/BuildDisagrees and never settles.
+    match normalized.Split('/') |> Array.exists (fun part -> part = ".SageFs") with
+    | true -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.UnwatchedExtension
     | false ->
-      match lower.EndsWith ".fs" || lower.EndsWith ".fsx" with
-      | true -> WatchedFile.Source
+      match isScratchName fileName with
+      | true -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.TemporaryFile
       | false ->
-        match CohortLandingPlan.kindByName path with
-        | CohortLandingPlan.FileByName.ProjectFile -> WatchedFile.BuildInput BuildInputKind.ProjectFile
-        | CohortLandingPlan.FileByName.BuildInputByName
-        | CohortLandingPlan.FileByName.CompiledSource -> WatchedFile.BuildInput BuildInputKind.OtherInput
-        | CohortLandingPlan.FileByName.Inert -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.UnwatchedExtension
-        | CohortLandingPlan.FileByName.Content ->
-          // A dotfile (.editorconfig, .DS_Store, .gitattributes) is tooling state, not something a test reads.
-          match fileName.StartsWith "." with
-          | true -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.UnwatchedExtension
-          | false -> WatchedFile.BuildInput BuildInputKind.OtherInput
+        match lower.EndsWith ".fs" || lower.EndsWith ".fsx" with
+        | true -> WatchedFile.Source
+        | false ->
+          match CohortLandingPlan.kindByName path with
+          | CohortLandingPlan.FileByName.ProjectFile -> WatchedFile.BuildInput BuildInputKind.ProjectFile
+          | CohortLandingPlan.FileByName.BuildInputByName
+          | CohortLandingPlan.FileByName.CompiledSource -> WatchedFile.BuildInput BuildInputKind.OtherInput
+          | CohortLandingPlan.FileByName.Inert -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.UnwatchedExtension
+          | CohortLandingPlan.FileByName.Content ->
+            // A dotfile (.editorconfig, .DS_Store, .gitattributes) is tooling state, not something a test reads.
+            match fileName.StartsWith "." with
+            | true -> WatchedFile.Ignored SageFs.FileWatcher.WatchDrop.UnwatchedExtension
+            | false -> WatchedFile.BuildInput BuildInputKind.OtherInput
 
   /// Why the live-test watcher drops an event, or `None` when it queues it. Source keeps the `.fs`/`.fsx` filter it
   /// always had; a build input passes the same bin/obj and pattern checks with its own extension; a scratch file or a
