@@ -60,6 +60,16 @@ type SuiteResult =
   | RunnerMissing
   | Red of outputFile: string
 
+/// The publish decision lives in ReleaseRules (and is pinned by ReleaseRulesTests): only a suite that RAN and
+/// failed holds the bump back. A missing local runner still pushes, because the warning below promises the
+/// plugin's CI will run the suite on the push — a promise that was empty when the script committed and pushed
+/// only in the Green branch, leaving version.lua dirty and the plugin a release behind.
+let releaseDecision (result: SuiteResult) =
+  match result with
+  | Green -> ReleaseRules.publishPluginVersion ReleaseRules.PluginSuiteGreen
+  | RunnerMissing -> ReleaseRules.publishPluginVersion ReleaseRules.PluginSuiteRunnerMissing
+  | Red _ -> ReleaseRules.publishPluginVersion ReleaseRules.PluginSuiteRed
+
 // ── processes ────────────────────────────────────────────────────────────────
 
 let run (file: string) (args: string list) (cwd: string) (env: (string * string) list) : int * string =
@@ -235,16 +245,17 @@ let sync (version: string) =
       else
         File.WriteAllText(versionFile, ReleaseRules.pluginVersionFile version)
         say (sprintf "sagefs.nvim version file now says %s" version)
-        match runSuite () with
-        | RunnerMissing ->
-          warn "busted (with luajit and the Lua 5.1 rocks tree) is not usable on this machine, so the plugin's tests were not run here; its CI will run them on the push."
-          0
-        | Red output ->
+        let result = runSuite ()
+        if not (releaseDecision result) then
+          let output = match result with | Red file -> file | _ -> ""
           warn (sprintf "the plugin's busted suite is RED. Reverting the version change and leaving it unpushed. Output: %s" output)
           git nvimDir [ "checkout"; "--"; "lua/sagefs/version.lua" ] |> ignore
-          0
-        | Green ->
-          say "sagefs.nvim busted suite green"
+        else
+          match result with
+          | RunnerMissing ->
+            warn "busted (with luajit and the Lua 5.1 rocks tree) is not usable on this machine, so the plugin's tests were not run here; its CI will run them on the push."
+          | Green -> say "sagefs.nvim busted suite green"
+          | Red _ -> ()
           let message = sprintf "chore: release v%s\n\nMatches SageFs v%s. The plugin version always equals the SageFs release it was tested against.\n" version version
           let messageFile = Path.GetTempFileName()
           File.WriteAllText(messageFile, message)
@@ -252,7 +263,7 @@ let sync (version: string) =
           File.Delete messageFile
           if gitOk nvimDir [ "push"; "--quiet"; remote; primaryBranch ] then say (sprintf "sagefs.nvim v%s pushed" version)
           else warn (sprintf "committed v%s in the plugin but the push failed. Run: git -C %s push %s %s" version nvimDir remote primaryBranch)
-          0
+        0
 
 // ── entry ────────────────────────────────────────────────────────────────────
 

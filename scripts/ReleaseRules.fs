@@ -521,6 +521,22 @@ let chooseFailureReport (passStartedAt: DateTimeOffset) (file: ReportFile) : Rep
     | true -> ShowReport text
     | false -> StaleReport writtenAt
 
+/// What the sagefs.nvim repo's own suite said when a release synced its version file.
+type PluginSuite =
+  /// It ran here and passed.
+  | PluginSuiteGreen
+  /// No local runner: the plugin's CI runs it on the push.
+  | PluginSuiteRunnerMissing
+  /// It ran here and failed.
+  | PluginSuiteRed
+
+/// Whether the version bump is committed and pushed. Only a suite that RAN and failed holds the release back.
+let publishPluginVersion (suite: PluginSuite) : bool =
+  match suite with
+  | PluginSuiteGreen -> true
+  | PluginSuiteRunnerMissing -> true
+  | PluginSuiteRed -> false
+
 /// Exit codes that mean the pass was stopped, not that a case failed: `timeout(1)` (124), SIGINT (130), SIGTERM (143).
 let cancelledExitCodes = [ 124; 130; 143 ]
 

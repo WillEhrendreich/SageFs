@@ -660,6 +660,14 @@ let pipelineEnvironmentTests =
       let entries = names |> List.mapi (fun i n -> n, sprintf "v%d=%d" i (abs seed % 1000))
       let text = entries |> List.map (fun (n, v) -> n + "=" + v) |> String.concat ";"
       parsePipelineEnvironment text = Result.Ok entries
+
+    testCase "WHY — a plugin suite that cannot run locally still publishes the version bump, because the warning says CI runs it on the push" <| fun _ ->
+      // sync-nvim-version tells the operator "its CI will run them on the push" when busted is missing. That
+      // promise is empty unless the bump is actually committed and pushed; leaving version.lua dirty left the
+      // plugin a release behind. A suite that ran and failed is the only result that holds the release back.
+      publishPluginVersion PluginSuiteRunnerMissing |> Expect.isTrue "a missing local runner still pushes the bump"
+      publishPluginVersion PluginSuiteGreen |> Expect.isTrue "a green suite pushes the bump"
+      publishPluginVersion PluginSuiteRed |> Expect.isFalse "a red suite holds the release back"
   ]
 
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant wiringTests |> ignore
