@@ -283,8 +283,9 @@ module DashboardDom =
       do! summary.ClickAsync()
   }
 
-  /// Retry a `(reopen-panel, body)` pair when `body` fails, reopening the
-  /// panel first each time.
+  /// Retry a `(reopen-panel, body)` pair when either step fails, reopening the
+  /// panel first each time. The reopen is inside the retry: under load a morph
+  /// can make even the click that opens the panel land on a dock element.
   ///
   /// What this once guarded against is gone. The dashboard used to push its
   /// whole `#main` about once a second (a polling fallback, plus a ticking
@@ -303,8 +304,12 @@ module DashboardDom =
   /// product failure keeps failing every attempt and still surfaces once
   /// `attemptsLeft` reaches 0.
   let rec throughPanelReset (reopen: unit -> Task<unit>) (attemptsLeft: int) (body: unit -> Task<unit>) : Task<unit> = task {
-    do! reopen ()
+    // The reopen is part of the retried step, not setup outside it. The click that opens the panel is itself a
+    // Playwright action that a morph can make land on a dock element (the gate saw this under load at 1280px),
+    // so a throw from reopen must be retried too. A genuine product failure throws on every attempt and still
+    // escapes once attemptsLeft reaches 0.
     try
+      do! reopen ()
       do! body ()
     with _ when attemptsLeft > 0 ->
       do! throughPanelReset reopen (attemptsLeft - 1) body
