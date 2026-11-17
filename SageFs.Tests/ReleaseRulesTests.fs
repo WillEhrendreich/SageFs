@@ -661,6 +661,12 @@ let pipelineEnvironmentTests =
       let text = entries |> List.map (fun (n, v) -> n + "=" + v) |> String.concat ";"
       parsePipelineEnvironment text = Result.Ok entries
 
+    testCase "WHY — the Marketplace publishes with Trusted Publishing OIDC, not a long-lived PAT that expires and goes stale" <| fun _ ->
+      let publish = read ".github/workflows/publish.yml"
+      publish |> Expect.stringContains "the Marketplace step asks vsce for the OIDC credential" "vsce publish --oidc"
+      publish.Contains "secrets.VSCE_PAT" |> Expect.isFalse "no PAT secret is read anywhere in the release workflow"
+      publish |> Expect.stringContains "the job can request an OIDC token" "id-token: write"
+
     testCase "WHY — a plugin suite that cannot run locally still publishes the version bump, because the warning says CI runs it on the push" <| fun _ ->
       // sync-nvim-version tells the operator "its CI will run them on the push" when busted is missing. That
       // promise is empty unless the bump is actually committed and pushed; leaving version.lua dirty left the
