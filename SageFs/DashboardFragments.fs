@@ -566,7 +566,7 @@ let renderSessionHealthLine (health: SessionHealth) =
     Elem.div
       [ Attr.id DomIds.SessionHealthLine
         Attr.class' "session-health-line meta"
-        Attr.style (sprintf "font-weight: bold; color: %s; padding: 2px 12px; overflow-wrap: anywhere;" color)
+        Attr.style (sprintf "font-weight: bold; color: %s; padding: 2px 12px; overflow-wrap: anywhere; pointer-events: none;" color)
         Attr.create "role" "status"
         Sink.attr "aria-label" (UserText.ofString line) ]
       [ textEnc line ]

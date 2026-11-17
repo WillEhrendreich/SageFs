@@ -141,6 +141,13 @@ let sessionHealthLineTests =
       let html = renderSessionHealthLine SessionHealth.Starting |> renderNode
       html.Contains("Health:") |> Expect.isFalse "no visible text while starting")
 
+    testCase "a status line never eats clicks meant for the controls beneath it" (fun () ->
+      let html = renderSessionHealthLine (SessionHealth.Degraded "run dotnet build") |> renderNode
+      // The header is a fixed 36px band; a long Degraded reason wraps past it and paints over
+      // the Output panel's Evaluate toggle. A role=status banner has no controls of its own,
+      // so it must be transparent to the pointer at every width.
+      html |> Expect.stringContains "non-interactive status" "pointer-events: none")
+
     testCase "Degraded reuses SessionHealth.describeForAgent verbatim — the dashboard and get_fsi_status can never disagree" (fun () ->
       let html = renderSessionHealthLine (SessionHealth.Degraded "run dotnet build") |> renderNode
       let expected = SessionHealth.describeForAgent (SessionHealth.Degraded "run dotnet build") |> Option.get
