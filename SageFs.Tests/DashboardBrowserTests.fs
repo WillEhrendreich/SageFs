@@ -257,8 +257,13 @@ module DashboardDom =
       page.EvaluateAsync<bool>(
         "() => { var el = document.querySelector('#evaluate-section'); return el ? el.open : false; }")
     if not isOpen then
-      let summary = page.Locator("#evaluate-section summary").First
-      do! summary.ClickAsync()
+      // A pointer click on this summary loses a hit-testing race with the live dock under concurrent load:
+      // the dock's resize handle and buttons sit at the click point even while the summary is visible and
+      // stable, and Playwright retries for 30s without landing (the gate saw this at 1280px). Dispatch the
+      // click on the element itself — the same native <details> toggle a user gets — so a morph cannot
+      // steal the pointer. Other journeys dispatch clicks on controls the same way.
+      let! _ = page.EvaluateAsync("() => document.querySelector('#evaluate-section summary').click()")
+      ()
     let evalInput = page.Locator(".eval-input").First
     do! PlaywrightExpect.isVisibleAsync evalInput "eval input visible after opening"
   }
