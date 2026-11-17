@@ -274,9 +274,10 @@ let replDashboard: Scenario =
               CadenceSeed.ofId "repl-dashboard-open-project",
               Target.DashboardCssSelector createSessionButtonSelector
             )
-          // N is 3 for this sample, not 1 — see `helloDashboard`'s own doc
-          // comment on this exact literal.
-          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 3 source files")
+          // The old "Scanned 3 source files" line is no longer rendered by
+          // the session picker. The stable signal that the project actually
+          // opened is the header leaving "No session" for "Session: <id>".
+          Expect = Expectation.PageTextContains(sessionStatusSelector, "Session:")
           Dwell = Dwell.short }
         { Caption = Caption.mk "2/4 · It warms up and goes green"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
