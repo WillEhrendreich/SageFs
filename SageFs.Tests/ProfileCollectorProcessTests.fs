@@ -21,8 +21,13 @@ let private scriptWith (body: string) : string =
   Directory.CreateDirectory dir |> ignore
   let path = Path.Combine(dir, "dotnet-trace")
   let header = "#!/bin/sh\nbase=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then base=\"$a\"; fi\n  prev=\"$a\"\ndone\n"
-  File.WriteAllText(path, header + body)
-  File.SetUnixFileMode(path, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+  // Write under another name and rename into place, so the executable path is never open for
+  // writing when a test starts it. Under load the gate once saw ETXTBSY ("Text file busy") on
+  // the case that writes a stand-in and immediately starts it; rename removes that window.
+  let staged = path + ".writing"
+  File.WriteAllText(staged, header + body)
+  File.SetUnixFileMode(staged, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+  File.Move(staged, path)
   path
 
 /// A stand-in that attaches, then waits for SIGTERM and writes `fixtureJson` the way the tool converts a trace.
