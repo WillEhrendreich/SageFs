@@ -401,7 +401,11 @@ let private causeNames (diff: ImageDiff) : string list =
 
 [<Tests>]
 let metadataDeltaTests =
-  testList "metadata delta emitter" [
+  // Every case compiles assemblies with Cecil, copies them and spawns a child host. Under load the fd and thread
+  // pressure makes those file operations fail with BadImageFormatException, EndOfStreamException or "Bad file
+  // descriptor" — symptoms of the machine, not of the emitter. No verdict needs cases to overlap, so the whole
+  // list is sequenced; this is the only process+Cecil work in the parallel default suite.
+  testSequenced <| testList "metadata delta emitter" [
 
     // -- the switch and the closed sets ---------------------------------------------------------------------
 
