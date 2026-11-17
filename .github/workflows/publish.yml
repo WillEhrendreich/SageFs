@@ -99,7 +99,9 @@ jobs:
       # Studio extension is deprecated and no longer published, so its
       # publisher CLI (tfx-cli) and publisher id are gone.
       shell: bash
-      run: npm install -g @vscode/vsce ovsx
+      # Pin the OIDC-capable version. npx resolves its OWN cache, not the global install, so the publish step
+      # pins it too — the 0.6.947 publish used a cached older vsce that answered "unknown option '--oidc'".
+      run: npm install -g @vscode/vsce@4.1.1 ovsx
 
     - name: Download release bundle
       uses: actions/download-artifact@v4
@@ -125,7 +127,7 @@ jobs:
       id: marketplace
       continue-on-error: true
       shell: bash
-      run: npx @vscode/vsce publish --oidc --packagePath "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --skip-duplicate
+      run: npx --yes @vscode/vsce@4.1.1 publish --oidc --packagePath "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --skip-duplicate
 
     - name: Create Open VSX namespace (idempotent)
       continue-on-error: true

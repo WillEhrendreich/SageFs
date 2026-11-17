@@ -791,7 +791,11 @@ let metadataDeltaTests =
         removeQuietly directory
     }
 
-    testTask "WHY - what a save costs on a big assembly: SageFs.Core.dll read twice, diffed, written, and applied by the runtime" {
+    // The only process + Cecil work in the parallel default suite: delta children write assemblies at once and
+    // this reads the loaded runtime's CoreLib/Metadata through Cecil. Under load that read once threw
+    // EndOfStreamException on System.Private.CoreLib.dll and failed an otherwise-correct case. Nothing in the
+    // verdict needs it to overlap other cases, so serialize it.
+    testSequenced (testTask "WHY - what a save costs on a big assembly: SageFs.Core.dll read twice, diffed, written, and applied by the runtime" {
       let directory = scratch ()
       try
         let core = typeof<PeImage>.Assembly.Location
@@ -868,7 +872,7 @@ let metadataDeltaTests =
             printfn "DELTA-BENCH [%s] slowest handlers: %s" label handler
       finally
         removeQuietly directory
-    }
+    })
 
     testTask "WHY - a process started the way a hot reload app is started reports it can take a delta" {
       let directory = scratch ()

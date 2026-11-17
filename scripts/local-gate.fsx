@@ -288,6 +288,35 @@ let takeTurn (sha: string) (force: bool) (policy: ReleaseRules.SupersedePolicy) 
       say "the gate lock is held and no live gate is named for it; waiting for it to free"
       MyTurn (waitForLock ())
 
+/// Reap fixture daemons orphaned by an earlier gate. A tier killed by a time cap dies before its fixture's
+/// `finally` runs, so its `sagefs --no-resume` daemon is reparented to PID 1 and keeps spinning. One stayed at
+/// 771% CPU for 8.5 hours and made the next gate's wall-clock and file-read assertions fail under load 15-17.
+/// The decision (ReleaseRules.isOrphanFixtureDaemon) only kills no-resume daemons whose parent is gone; the
+/// persistent daemon and any daemon a live test still owns are untouched. A failure to sweep never blocks a gate.
+let reapOrphanDaemons () : unit =
+  match run "pgrep" [ "-f"; "sagefs --no-resume" ] scriptsDir helperTimeout with
+  | 0, out ->
+    let pids =
+      out.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.choose (fun s -> match Int32.TryParse(s.Trim()) with | true, p -> Some p | _ -> None)
+    for pid in pids do
+      let parentName =
+        match run "ps" [ "-o"; "ppid="; "-p"; string pid ] scriptsDir helperTimeout with
+        | 0, text ->
+          match Int32.TryParse(text.Trim()) with
+          | true, ppid ->
+            (match run "ps" [ "-o"; "comm="; "-p"; string ppid ] scriptsDir helperTimeout with
+             | 0, name -> name.Trim()
+             | _ -> "")
+          | _ -> ""
+        | _ -> ""
+      match ReleaseRules.isOrphanFixtureDaemon "sagefs --no-resume" parentName with
+      | true ->
+        say (sprintf "reaped an orphaned fixture daemon (pid %d) left by an earlier gate" pid)
+        killTree pid
+      | false -> ()
+  | _ -> ()
+
 // ── the build lease ──────────────────────────────────────────────────────────
 
 let http = new HttpClient(Timeout = leaseRequestTimeout)
@@ -441,6 +470,7 @@ let gate (sha: string) (force: bool) (mode: ReleaseRules.FailureMode) (policy: R
       // lock, never before, or a crashed starter would leave a pid that a newcomer would try to kill.
       File.WriteAllText(currentPath, sprintf "%d %s\n" Environment.ProcessId sha)
       takeLease ()
+      reapOrphanDaemons ()
       try
         let wt = prepareCheckout sha
         // A killed run leaves build output made for a commit the tree has moved past; SageFs.GateCheckout decides.

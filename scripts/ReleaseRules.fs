@@ -521,6 +521,17 @@ let chooseFailureReport (passStartedAt: DateTimeOffset) (file: ReportFile) : Rep
     | true -> ShowReport text
     | false -> StaleReport writtenAt
 
+/// A fixture daemon the gate may reap before a run. Browser and integration fixtures start `sagefs --no-resume`
+/// on a reserved port; if the gate kills a tier (time cap, SIGKILL), the fixture's `finally` never runs and the
+/// daemon is reparented to PID 1. It then spins for hours and loads the machine for the NEXT gate, which fails
+/// wall-clock and file-read assertions for reasons that have nothing to do with the commit under test.
+/// The persistent daemon (`sagefs`, no --no-resume) and a daemon still owned by a live test are left alone.
+/// Reparenting goes to PID 1 in a container but to the USER systemd manager on a desktop session, so the rule
+/// names the parent process rather than comparing its pid: `systemd` or `init` means its owner is gone.
+let isOrphanFixtureDaemon (commandLine: string) (parentName: string) : bool =
+  commandLine.Contains "sagefs --no-resume"
+  && (parentName = "systemd" || parentName = "init")
+
 /// What the sagefs.nvim repo's own suite said when a release synced its version file.
 type PluginSuite =
   /// It ran here and passed.
