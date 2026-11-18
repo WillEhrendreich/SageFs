@@ -2571,10 +2571,10 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
           textEnc (Glyphs.text Glyph.Logo)
           // The word drops out below 560px (dashboard.css): the icon stays, and the room goes to the session and its status.
           Elem.span [ Attr.class' "tabline-brand-name" ] [ Text.raw " SageFs" ]
-          // The version used to live in the daemon-health line under the header. It is identity,
-          // so it belongs beside the name — one small token, not a full row of daemon facts.
-          Elem.span [ Attr.class' "tabline-version" ] [ textEnc snap.Version ]
         ]
+        // The version moved here from the deleted daemon-health bar: identity, not a row of facts.
+        // A sibling of the wordmark, not a child: the brand tab's flex gap spaces them.
+        Elem.span [ Attr.class' "tabline-version" ] [ textEnc snap.Version ]
       ]
       // Status tabs — center
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
