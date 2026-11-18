@@ -75,21 +75,22 @@ module PlaywrightExpect =
     Expect.isTrue found (sprintf "Expected '%s' in '%s' within %dms" text selector ms)
   }
 
-  /// Wait for the SSE stream to connect by checking the tabline carries the
-  /// server-pushed session identity. The shell renders #session-status as the
-  /// state pill ("Ready") and the "Session: {id}" text in a sibling
-  /// .tabline-info — both are inside #main, which the server morphs on every
-  /// SSE push, so their presence proves the round-trip is live.
+  /// Wait for the SSE stream to connect by checking the page carries the
+  /// server-pushed session identity. #session-status is the state pill ("Ready")
+  /// and .output-session-id (in the Output header, after the header redesign) is
+  /// the id. Both are inside #main, which the server morphs on every SSE push,
+  /// so their presence proves the round-trip is live.
   let waitForSSE (ms: int) (page: IPage) = task {
     let sw = Diagnostics.Stopwatch.StartNew()
     let mutable found = false
     while not found && sw.ElapsedMilliseconds < int64 ms do
       let! content = page.EvaluateAsync<string>(
-        "() => { var s = document.querySelector('#session-status'); var i = document.querySelector('#main .tabline-info'); return (s ? s.textContent : '') + '|' + (i ? i.textContent : ''); }")
-      if content <> null && content.Contains("Ready") && content.Contains("Session:") then
-        found <- true
-      else
-        do! Task.Delay(TestTimeouts.pollService)
+        "() => { var s = document.querySelector('#session-status'); var i = document.querySelector('#main .output-session-id'); return (s ? s.textContent : '') + '|' + (i ? i.textContent : ''); }")
+      if content <> null then
+        let parts = content.Split('|')
+        if parts.Length >= 2 && parts.[0].Contains("Ready") && not (System.String.IsNullOrWhiteSpace parts.[1]) then
+          found <- true
+      if not found then do! Task.Delay(TestTimeouts.pollService)
     Expect.isTrue found (sprintf "Expected SSE connection within %dms" ms)
   }
 
@@ -730,16 +731,16 @@ module private NoSessionLanding =
       (sprintf "[%s] zero console/page errors of any kind across the journey, got: %s" label (String.concat " | " allErrors))
 
   /// The permanent chrome that must render in EVERY dashboard state — this
-  /// exact invariant is what the no-session landing broke twice: header,
-  /// sidebar Sessions panel with its [+] new-session button, and the
-  /// statusline (session-status pill + session identity — the same elements
-  /// the shared-daemon "session status renders with state" test above treats
-  /// as the statusline for the with-session case).
+  /// exact invariant is what the no-session landing broke twice: header (with
+  /// its wordmark/version), sidebar Sessions panel with its [+] new-session
+  /// button, and the session-status pill. The daemon-health bar was deleted by
+  /// design and the session id lives in the Output header only when a session
+  /// is in view, so neither is permanent chrome.
   let private assertPermanentChrome (page: IPage) (label: string) = task {
     let header = page.Locator(".app-header")
     do! PlaywrightExpect.isVisibleAsync header (sprintf "[%s] app header visible" label)
-    let daemonHealth = page.Locator("#daemon-health")
-    do! PlaywrightExpect.isVisibleAsync daemonHealth (sprintf "[%s] daemon health bar visible" label)
+    let wordmark = page.Locator(".app-header .tabline-brand")
+    do! PlaywrightExpect.isVisibleAsync wordmark (sprintf "[%s] header wordmark visible" label)
     let sessionsHeading = page.GetByRole(AriaRole.Heading, PageGetByRoleOptions(Name = "Sessions"))
     do! PlaywrightExpect.isVisibleAsync sessionsHeading (sprintf "[%s] sidebar Sessions heading visible" label)
     // The [+] that opens the new-session dialog is permanent chrome in the Sessions header, visible in every state.
@@ -747,8 +748,6 @@ module private NoSessionLanding =
     do! PlaywrightExpect.isVisibleAsync newSession (sprintf "[%s] sidebar new-session [+] visible" label)
     let statusPill = page.Locator("#session-status")
     do! PlaywrightExpect.isVisibleAsync statusPill (sprintf "[%s] statusline session-status pill visible" label)
-    let tabline = page.Locator("#main .tabline-info").First
-    do! PlaywrightExpect.isVisibleAsync tabline (sprintf "[%s] statusline session identity visible" label)
   }
 
   /// States 1 + 4 + the click-through Create journey: (1) zero sessions, bare
@@ -1279,10 +1278,11 @@ let tests =
     // the browser clamps scrollTop to the tiny COLLAPSED maximum — "a few dozen px", the
     // same ceiling the `scrolledTo > 100.0` guard above already uses to define that
     // collapsed state. A fixed floor of 200px sits comfortably above that collapse
-    // ceiling and comfortably below every anchoring outcome observed so far (514-651
-    // locally and on CI), so it still fails for the actual defect (collapse-then-clamp)
-    // while tolerating environment-sensitive anchoring jitter that is not the defect.
-    let floor = 200.0
+    // ceiling. It is relative to where the sidebar actually started: compacting the
+    // session card shortened the sidebar, so a fixed 200px floor sat above its new
+    // maximum and failed a non-collapsed scroll. Half the starting position still
+    // separates "kept its anchor" from "collapsed to the clamp ceiling".
+    let floor = scrolledTo * 0.5
     let! textAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0]) + ' => ' + c.innerText.replace(/\\s+/g, ' ').slice(0, 400)).join(' || ')")
     let! sizesAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0] || c.tagName) + ':' + Math.round(c.getBoundingClientRect().height)).join(' ')")
     let! maxAfter = page.EvaluateAsync<float>("() => { var el = document.querySelector('.sidebar-inner'); return el.scrollHeight - el.clientHeight; }")
@@ -1290,13 +1290,14 @@ let tests =
   })
 
   playwrightTest "session status renders with state" (fun page -> task {
-    // The tabline #session-status carries the state pill; the session id
-    // renders in the sibling .tabline-info. Both are inside #main, pushed
+    // #session-status carries the state pill; the session id renders in
+    // .output-session-id in the Output header. Both are inside #main, pushed
     // by the server on every SSE state change.
     let status = page.Locator("#session-status")
     do! PlaywrightExpect.waitForText BrowserWaits.pageRenders status "Ready"
-    let sessionInfo = page.Locator("#main .tabline-info").First
-    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders sessionInfo "Session:"
+    // The Output header's session id is server-pushed too, so waiting for the
+    // same SSE round-trip proves both halves are live.
+    do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
   })
 
   playwrightTest "eval stats panel renders" (fun page -> task {
@@ -1534,9 +1535,8 @@ let tests =
     // to the shared Elm model. It should only update the requesting browser's
     // active session (via signal or per-connection state).
     do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
-    // The tabline shows the viewing session identity.
-    let tabline = page.Locator("#main .tabline-info").First
-    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders tabline "Session:"
+    // The Output header shows the viewing session identity.
+    do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     // The switch endpoint should return a signal update, not an Elm dispatch.
     // Verify by checking that the switch response contains a signal patch
     // for activeSession (not a full page morph from Elm re-render).
@@ -1556,9 +1556,8 @@ let tests =
     let! _ = page1.GotoAsync(
       sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
     do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page1
-    let tabline1 = page1.Locator("#main .tabline-info").First
-    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates tabline1 "Session:"
-    let! text1Before = tabline1.TextContentAsync()
+    let session1 = page1.Locator("#main .output-session-id").First
+    let! text1Before = session1.TextContentAsync()
 
     // Open page2 in separate context (simulates different browser tab)
     let! page2 = PlaywrightFixture.newPage ()
@@ -1566,13 +1565,12 @@ let tests =
       let! _ = page2.GotoAsync(
         sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
       do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page2
-      let tabline2 = page2.Locator("#main .tabline-info").First
-      do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates tabline2 "Session:"
-      let! text2Before = tabline2.TextContentAsync()
+      let session2 = page2.Locator("#main .output-session-id").First
+      let! text2Before = session2.TextContentAsync()
 
       // Both tabs should show the same session initially (default session)
-      Expect.isTrue (text1Before.Contains("Session:")) "page1 has session info"
-      Expect.isTrue (text2Before.Contains("Session:")) "page2 has session info"
+      Expect.isTrue (not (System.String.IsNullOrWhiteSpace text1Before)) "page1 has a session id"
+      Expect.isTrue (not (System.String.IsNullOrWhiteSpace text2Before)) "page2 has a session id"
 
       // Both tabs land on the same default session.
       Expect.equal text2Before text1Before
@@ -1583,28 +1581,16 @@ let tests =
 
   // --- TS journey ports (page-structure.spec.ts) ---
 
-  playwrightTest "page structure: daemon health shows title with version" (fun page -> task {
-    // The shell has no <h1>; the daemon-health bar carries the product
-    // identity + version (e.g. "🟢 Healthy · SageFs 0.6.444.0 · up 6m · 15MB").
-    let health = page.Locator("#daemon-health")
-    do! PlaywrightExpect.waitForText BrowserWaits.daemonWork health "SageFs"
-    let! text = health.TextContentAsync()
+  playwrightTest "page structure: the header carries the product name and version" (fun page -> task {
+    // The daemon-health bar was deleted as redundant; the version now sits beside
+    // the wordmark in the header. The shell has no <h1>, so this is its identity.
+    let brand = page.Locator(".app-header .tabline-brand")
+    do! PlaywrightExpect.waitForText BrowserWaits.daemonWork brand "SageFs"
+    let! text = brand.TextContentAsync()
     Expect.isTrue (
       text <> null
       && System.Text.RegularExpressions.Regex.IsMatch(text, @"v?\d+\.\d+\.\d+"))
-      "daemon health shows a version number"
-  })
-
-  playwrightTest "page structure: the daemon health bar counts its uptime in the browser" (fun page -> task {
-    // The server renders the moment the daemon started and a Ds.text expression (ElapsedClock), never the
-    // elapsed time, so an idle dashboard has nothing to push. The label is the browser's own work: it must
-    // appear, in the daemon's words ("5m", "2h 5m", "2d 3h"), once the clock has ticked.
-    let! _ =
-      page.WaitForFunctionAsync(
-        "() => /\\bup (\\d+d \\d+h|\\d+h \\d+m|\\d+m) /.test(document.querySelector('#daemon-health').textContent)")
-    let! text = page.Locator("#daemon-health").TextContentAsync()
-    Expect.isTrue (System.Text.RegularExpressions.Regex.IsMatch(text, @"\bup (\d+d \d+h|\d+h \d+m|\d+m) "))
-      "the health bar reads 'up <duration>' once the browser's clock has ticked"
+      "the header shows a version number beside the wordmark"
   })
 
   playwrightTest "page structure: output section and panel render" (fun page -> task {

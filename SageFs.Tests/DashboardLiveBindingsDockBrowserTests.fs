@@ -356,7 +356,9 @@ let journey () : Task<unit> = task {
     outputBar |> Expect.equal "the app-output pane takes no height when no app has written" 0.0
     do! waitHidden page "#live-dock-bar"
     // The popover stays out of the way: close it, and the bindings are what is left at the bottom.
-    // Ten bindings in the dock at its default ceiling show at least eight rows: one line a row, and nothing under a REPL-only row.
+    // The dock's default ceiling is min(30vh, 18rem) — a quarter to a third of the screen,
+    // not the two-thirds it used to take. Ten collapsed bindings show as many rows as fit
+    // (at least three at a 720px viewport); the rest scroll inside the dock.
     do! evaluateThroughPopover page (sprintf "let a1 = 1\nlet a2 = 2\nlet a3 = 3\nlet a4 = 4\nlet a5 = 5\nlet a6 = 6\nlet a7 = 7\nprintfn \"DOCKPROBE-%s-ten\";;" tag) (sprintf "DOCKPROBE-%s-ten" tag)
     do! closePopoverWithButton page
     do! waitText page "#bindings-panel" "a7"
@@ -376,7 +378,7 @@ let journey () : Task<unit> = task {
     let! flowPins = page.EvaluateAsync<int>("() => [...document.querySelectorAll('#live-tree .live-binding-pin')].filter(e => getComputedStyle(e).position !== 'absolute').length")
     flowPins |> Expect.equal "every row's pin is out of the flow (the aria-label tooltip rule must not win)" 0
     let rowsInView = geometry.Split('|').[0] |> int
-    (rowsInView >= 8) |> Expect.isTrue (sprintf "ten collapsed bindings show at least eight rows in the dock, got %d (%s)" rowsInView geometry)
+    (rowsInView >= 3) |> Expect.isTrue (sprintf "the dock's default ceiling shows at least three rows, got %d (%s)" rowsInView geometry)
     do! shot page "3-bindings"
 
     // The view is a setting: a choice saved for this app (its own .SageFs/settings.json) reaches the page that is already open on the
@@ -443,6 +445,10 @@ let journey () : Task<unit> = task {
       | Some text -> System.IO.File.WriteAllText(appSettings, text)
       | None -> (try System.IO.File.Delete appSettings with _ -> ())
 
+    // The dock's default ceiling is a quarter to a third of the viewport now. An open view
+    // panel is in the flow and leaves no room for the tree, so close it — the fold/unfold
+    // below is about the collapse control, not the settings panel.
+    do! page.Locator("#live-view-panel .live-view-close").ClickAsync()
     // The pane folds its own tree away: the tree can be taller than the dock's ceiling, and the
     // drag handle that changes the ceiling is a thin line to find. The fold is the user's, so it
     // survives a push.

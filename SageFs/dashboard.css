@@ -546,6 +546,14 @@ h2 {
   gap: 6px;
 }
 
+/* At phone width the Output header carries the title, the workflow switcher and the
+   Evaluate controls. The session id is useful on a wide screen but pushes the
+   controls past the right edge here; the card in the Sessions panel still names it. */
+@media (width < 30.062em) {
+  .output-session-id { display: none; }
+  .output-header { padding-inline: 4px; flex-wrap: wrap; row-gap: 4px; }
+}
+
 .eval-pop > summary {
   list-style: none;
   white-space: nowrap;
