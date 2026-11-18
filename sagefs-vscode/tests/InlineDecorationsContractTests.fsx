@@ -214,8 +214,9 @@ let oneLineGhostTextTests =
       match renderInlineResult None "Result: val a: int = 3\nval b: int = 5\n" with
       | None -> failtest "a result with text renders"
       | Some rendered ->
-        rendered.ContentText |> Expect.equal "joined with a semicolon" "  // → Result: val a: int = 3; val b: int = 5"
+        rendered.ContentText |> Expect.equal "joined with a semicolon, without MCP's Result prefix" "  // → val a: int = 3; val b: int = 5"
         rendered.ContentText.Contains "│" |> Expect.isFalse "no box-drawing bar in the ghost text"
+        rendered.HoverText |> Expect.stringContains "the hover still carries the full MCP text" "Result: val a: int = 3"
 
     testCase "a diagnostic whose first line ends in \\r\\n renders that line alone" <| fun _ ->
       match renderInlineDiagnostic "error FS0001: bad\r\nmore detail\r\n" with

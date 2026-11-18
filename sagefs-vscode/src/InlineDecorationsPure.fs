@@ -86,9 +86,6 @@ let ghostLine (text: string) : string =
 /// is appended as a `"  123ms"` suffix on the summary line only, never on
 /// the hover text (the hover already carries the full result; there is
 /// nothing to disambiguate).
-/// The daemon appends a write-back verdict as the LAST line of an eval's
-/// output when the call named a file_path. That verdict is data for agents
-/// and is already in the structured result; in the editor's inline ghost
 /// MCP's text channel prefixes a successful eval with "Result: " for agents. In an F# editor that
 /// word is a TYPE — seeing it ghosted after a line reads as part of the answer. Strip only that
 /// leading prefix, once; the MCP text itself is unchanged for callers that read it.
