@@ -604,6 +604,11 @@ module ActionResult =
 
   let private dismiss = sprintf "el.closest('.%s').remove()" CssClass
 
+  // Clear a toast after a few seconds; the dismiss button still works sooner.
+  // It is feedback, not a fixture — it must not cover the card or its buttons.
+  let private autoDismiss =
+    "setTimeout(function(){var n=el.closest('." + CssClass + "');if(n)n.remove()},4000)"
+
   let private placement =
     "position:fixed;bottom:2.25rem;right:1rem;max-width:min(42rem,calc(100vw - 2rem));z-index:200;"
     + "display:flex;gap:0.5rem;align-items:flex-start;padding:0.4rem 0.6rem;"
@@ -620,7 +625,8 @@ module ActionResult =
         Attr.style placement
         Sink.attr "role" (UserText.ofString role)
         testid "action-result"
-        Ds.onInit replacePrevious ]
+        Ds.onInit replacePrevious
+        Ds.onInit autoDismiss ]
       [ Elem.pre
           [ Attr.class' (sprintf "output-line %s" tone)
             Attr.style "margin:0;white-space:pre-wrap;flex:1;" ]
@@ -1331,12 +1337,8 @@ let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading
         (q.GetAppOutput sessionId)
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
-    let daemonHealthPanel =
-      let processLivenessPanel =
-        match daemonHealth with
-        | Some snap -> renderDaemonHealthWith (Map.ofList [ sid, readiness ]) (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
-        | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
-      Elem.div [] [ processLivenessPanel; renderSessionHealthLine viewedHealth ]
+    // The daemon-health bar is gone; the tabline says Ready and the card says the rest.
+    let daemonHealthPanel = Elem.div [] []
     // Friction review panel — local store only. Built server-side so the
     // client never assembles raw telemetry. The read is synchronous SQLite;
     // an SSE stream reuses its last-built panel within the worker-data TTL
@@ -1475,10 +1477,8 @@ let buildNoSessionSnapshotWithSessionsSorted
     // card is best-effort (warmup = None), same as buildSessionCards.
     let liveRows = buildSessionCardsFrom q (infra.Teardowns.Current ()) None sessions
     let daemonHealth = q.GetDaemonHealth()
-    let daemonHealthPanel =
-      match daemonHealth with
-      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
-      | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+    // The daemon-health bar is gone from the dashboard — the Settings page keeps its own view.
+    let daemonHealthPanel = Elem.div [] []
     // No session in view, so no session's failures to show.
     let failureNarrativesPanel =
       renderFailureNarratives (FailureNarrativesPanelView.fromNarratives [])

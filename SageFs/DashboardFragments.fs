@@ -547,14 +547,9 @@ let renderAutoOpenToggleButton (enabled: bool) (style: string) =
 /// session (`SessionHealth.classify`) — distinct from the process-liveness
 /// bar above it, and distinct from the per-session card badge in the
 /// sidebar (same verdict, different surface). Quiet by design for
-/// Starting/Healthy — `SessionHealth.describeForAgent` returns `None` for
-/// both, matching the DU's own "the common case must stay quiet" doctrine
-/// (SageFs.Core/SessionHealth.fs). Degraded/Failed render the FULL reason
-/// text inline, unconditionally — no `<details>`, no `⊕` disclosure to open:
-/// this is the exact fix for sagefs-ux-roast.md §1 ("the only surface
-/// telling the truth was a collapsed summary hidden behind an unlabeled
-/// glyph"). Reuses `describeForAgent`'s own wording verbatim so the
-/// dashboard and `get_fsi_status` can never disagree about the same session.
+/// A compact verdict: the full reason is in the tooltip/accessible name, not a wall of text in the
+/// card. `describeForAgent`'s own wording stays the one source, so the dashboard and `get_fsi_status`
+/// can never disagree. Starting/Healthy stay quiet — the common case says nothing.
 let renderSessionHealthLine (health: SessionHealth) =
   match SessionHealth.describeForAgent health with
   | None -> Elem.div [ Attr.id DomIds.SessionHealthLine ] []
@@ -563,13 +558,20 @@ let renderSessionHealthLine (health: SessionHealth) =
       match health with
       | SessionHealth.Failed _ -> "var(--fg-red)"
       | _ -> "var(--fg-yellow)"
+    let word =
+      match health with
+      | SessionHealth.Failed _ -> "Failed"
+      | SessionHealth.Degraded _ -> "Degraded"
+      | SessionHealth.Starting -> "Starting"
+      | SessionHealth.Healthy -> "Healthy"
     Elem.div
       [ Attr.id DomIds.SessionHealthLine
         Attr.class' "session-health-line meta"
-        Attr.style (sprintf "font-weight: bold; color: %s; padding: 2px 12px; overflow-wrap: anywhere; pointer-events: none;" color)
+        Attr.style (sprintf "color: %s; padding: 2px 12px; pointer-events: none;" color)
         Attr.create "role" "status"
+        Sink.attr "title" (UserText.ofString line)
         Sink.attr "aria-label" (UserText.ofString line) ]
-      [ textEnc line ]
+      [ textEnc word ]
 
 /// How long ago something happened is the browser's to count, not the server's.
 ///
@@ -2352,7 +2354,11 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             // What the three that take a session down do, in words on the card: three reviewers saw Stop, Dispose and Purge side by
             // side with no hint of how they differ, and a tooltip is not on screen for a person who does not hover.
             Elem.details [ Attr.class' "session-card-help" ] [
-              Elem.summary [] [ textEnc "What do these buttons do?" ]
+              Elem.summary
+                [ Attr.class' "session-card-help-trigger"
+                  Attr.create "title" "What do these buttons do?"
+                  Sink.attr "aria-label" (UserText.ofString "What do these buttons do?") ]
+                [ textEnc "?" ]
               Elem.div
                 [ Attr.class' "session-card-hint"
                   Attr.create "data-testid" "session-card-hint" ]
@@ -2565,6 +2571,9 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
           textEnc (Glyphs.text Glyph.Logo)
           // The word drops out below 560px (dashboard.css): the icon stays, and the room goes to the session and its status.
           Elem.span [ Attr.class' "tabline-brand-name" ] [ Text.raw " SageFs" ]
+          // The version used to live in the daemon-health line under the header. It is identity,
+          // so it belongs beside the name — one small token, not a full row of daemon facts.
+          Elem.span [ Attr.class' "tabline-version" ] [ textEnc snap.Version ]
         ]
       ]
       // Status tabs — center
@@ -2573,18 +2582,8 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
           Elem.span [ Attr.class' (sprintf "status %s" (SessionInView.badgeCssClass snap.InView)); Attr.style "border-radius:0;" ] [
             textEnc (SessionInView.badgeLabel snap.InView) ]
         ]
-        // The second fact, beside the badge and outside it: "Ready" is the engine's word and the badge keeps it alone, so the
-        // state and whether the changes are live are two things on the bar. It folds away below 40em (dashboard.css), where the
-        // header has no cell for it and the health line under the header says the same thing in full.
-        match SessionInView.liveNote snap.InView with
-        | Some (glyph, words) ->
-          let tone = match glyph with | Glyph.Pass -> "tabline-livenote-ok" | _ -> "tabline-livenote-warn"
-          // The long form is the sentence; below 62.5em the short one stands in for it (dashboard.css), so the header keeps the fact.
-          let short = match glyph with | Glyph.Pass -> "in sync" | _ -> "not in sync"
-          Elem.div [ Attr.id "session-live-note"; Attr.class' ("tabline-livenote " + tone); testid "session-live-note" ] [
-            Elem.span [ Attr.class' "livenote-long" ] [ textEnc (Glyphs.lead glyph + words) ]
-            Elem.span [ Attr.class' "livenote-short" ] [ textEnc (Glyphs.lead glyph + short) ] ]
-        | None -> ()
+        // "session matches your files" left the header: it is session-specific and the
+        // session card on the right is where session facts belong. The Ready badge stays.
         // min-width:0 + overflow:hidden + text-overflow:ellipsis let this
         // shrink instead of overflowing onto the right-side theme picker at
         // phone width (sagefs-ux-roast.md §7.2 — a measured 130px collision
@@ -2593,20 +2592,8 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
         // badge — §4.1's "the dashboard cannot see the workflow at all")
         // rather than as its own flex child, so it never adds a second
         // overflow surface.
-        match snap.SessionId with
-        | "" ->
-          // No session in view: the cell would read "Session:" with nothing after it, and the badge beside it already says
-          // "No session". Only the switcher's empty morph target stays, so the page keeps the element a later push fills.
-          renderWorkflowSwitcher snap.WorkflowLabel snap.SessionId
-        | sessionId ->
-          Elem.div
-            [ Attr.class' "tabline-info"
-              Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:0.857rem;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
-            // The word "Session:" drops out below 560px (dashboard.css), leaving the id and the workflow switcher whole.
-            Elem.span [ Attr.class' "tabline-session-label" ] [ textEnc "Session: " ]
-            textEnc sessionId
-            renderWorkflowSwitcher snap.WorkflowLabel sessionId
-          ]
+        // Session id and Mode now live in the Output panel header, where the person reads code
+        // and results. The workflow switcher has one SSE-patched id, so it exists there only.
         // The duplicate #eval-stats id (this wrapper AND renderEvalStats's own
         // root both used to carry it — an invalid-HTML morph-target hazard in
         // an app whose whole render model is "one #main, one morph") is fixed
@@ -2669,6 +2656,13 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
             Elem.div [ Attr.class' "output-header" ] [
               Elem.div [ Attr.style "display:flex;align-items:center;gap:16px;" ] [
                 Elem.h2 [] [ Text.raw "Output" ]
+                // Session id and Mode moved here from the app header: they are session facts,
+                // so they belong with the output of that session, not above the whole page.
+                match snap.SessionId with
+                | "" -> renderWorkflowSwitcher snap.WorkflowLabel ""
+                | sid ->
+                  Elem.span [ Attr.class' "output-session-id"; Attr.style "color:var(--fg-dim);font-size:0.857rem;" ] [ textEnc sid ]
+                  renderWorkflowSwitcher snap.WorkflowLabel sid
               ]
               // Evaluate is a small button out of the way (it pops a box open); the live bindings own the bottom region.
               Elem.div [ Attr.class' "output-actions" ] [

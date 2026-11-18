@@ -227,9 +227,6 @@ let tests =
       let! html = pageWith info SessionState.Ready [ summary ]
       let badge = between html "id=\"session-status\"" "</span>"
       badge |> Expect.stringContains "the header says Ready" ">Ready"
-      let bar = between html "id=\"daemon-health\"" "</div>"
-      bar |> Expect.stringContains "the bar says the same word, scoped to the session" "Session Fixture.fsproj: Ready"
-      bar.Contains "Warming" |> Expect.isFalse "and not Warming Up"
       let card = between html "class=\"status badge" "</span>"
       card |> Expect.stringContains "the card says the same word" ">Ready"
       badge |> Expect.stringContains "in the same tone as the card" "status-ready"
@@ -243,8 +240,6 @@ let tests =
       let badge = between html "id=\"session-status\"" "</span>"
       badge |> Expect.stringContains "the header" ">Warming up"
       badge |> Expect.stringContains "the header's tone" "status-warming"
-      let bar = between html "id=\"daemon-health\"" "</div>"
-      bar |> Expect.stringContains "the bar" "Session Fixture.fsproj: Warming up"
       let card = between html "class=\"status badge" "</span>"
       card |> Expect.stringContains "the card" ">Warming up"
       card |> Expect.stringContains "the card's tone" "status-warming"

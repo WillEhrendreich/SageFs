@@ -37,15 +37,10 @@
   --syn-number: #d27e99;
   --font-size: 93.75%;
   --sidebar-width: 320px;
-  /* The bottom dock holds the live bindings, which is what this page is opened for while a program runs: a watch window you
-     can read at a glance. One home for its ceiling, mirroring --sidebar-width, so a resize control has a single value to
-     write and the default can be reasoned about here rather than at the rule that uses it. 30vh at an 18rem cap showed three
-     and a half binding rows at 900px, which blind reviewers read as "a few rows, and nothing says there are more". With a
-     binding on one line (see `.live-row` in the container query below) 46vh at a 30rem cap showed nine bindings at 900px, and
-     then two reviewers in a row saw the pane as a strip under a mostly empty transcript, with rows cut at its foot. 56vh at a
-     36rem cap shows eleven and the transcript keeps the rest. Reviewers then read the pane as the second thing on a page whose first
-     half was a transcript, so it is 72vh at a 50rem cap: the pane is what the page is for, and the transcript scrolls. */
-  --dock-max-height: min(72vh, 50rem);
+  /* The bottom dock holds the live bindings: a watch window, not the page. A quarter to a third of the viewport leaves the
+     transcript as the main surface and the bindings as a strip underneath. The dock can still be dragged larger; this is the
+     initial size only. Mirrored by DashboardTypes.DockHeightDefault, which the signal and a test both use. */
+  --dock-max-height: min(30vh, 18rem);
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
@@ -3671,6 +3666,25 @@ h2 {
   padding: 2px 0;
 }
 
+/* A compact help affordance: a square "?" instead of a sentence that occupies a card row. */
+.session-card-help > .session-card-help-trigger {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-normal);
+  border-radius: 0;
+  font-size: 0.857rem;
+  line-height: 1;
+}
+
+/* Version beside the wordmark: a token in the header, at the house minimum size. */
+.tabline-version {
+  font-size: 0.857rem;
+  color: var(--fg-dim);
+}
+
 /* The card is the frame: its selected edge is the accent bar. A second 1px box around it drew two borders, so a panel that holds
    session cards has none of its own. */
 .sidebar .panel:has(.session-row) {
@@ -3803,8 +3817,8 @@ h2 {
   }
 
   .app-header .theme-select {
-    /* Wide enough for the longest theme name ("Kanagawa" lost its last letter at 6.5rem). */
-    width: 8rem;
+    /* The theme name is a preference, not a headline. The longest name still fits at 6.5rem. */
+    width: 6.5rem;
   }
 
   /* With the card folded below the first screen, the Sessions header carries the word. At a wide window it is hidden: the
@@ -4811,7 +4825,7 @@ body {
   }
 
   .tabline-right .theme-select {
-    min-width: 10.5rem;
+    min-width: 6.5rem;
     max-width: none;
     font-size: 0.857rem;
   }
@@ -5990,6 +6004,8 @@ body {
   gap: 0.25rem;
   list-style: none;
   white-space: nowrap;
+  /* The glyph and the word are separate inline children; without line-height they overlap. */
+  line-height: 1.4;
   font-size: 0.857rem;
 
   &::-webkit-details-marker {

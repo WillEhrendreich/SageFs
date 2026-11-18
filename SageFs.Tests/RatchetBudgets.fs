@@ -340,7 +340,7 @@ let fileSize : (string * int) list =
     // files shrink; a file that grows fails. Never raise one.
     "SageFs/DaemonMode.fs", 5524
     "SageFs/McpServer.fs", 5056
-    "SageFs/DashboardFragments.fs", 4454
+    "SageFs/DashboardFragments.fs", 4448
     "SageFs/Dashboard.fs", 4259
     "sagefs-vscode/src/Extension.fs", 3717
     "SageFs/McpTools.fs", 3157

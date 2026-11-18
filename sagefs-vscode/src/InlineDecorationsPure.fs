@@ -86,8 +86,25 @@ let ghostLine (text: string) : string =
 /// is appended as a `"  123ms"` suffix on the summary line only, never on
 /// the hover text (the hover already carries the full result; there is
 /// nothing to disambiguate).
+/// The daemon appends a write-back verdict as the LAST line of an eval's
+/// output when the call named a file_path. That verdict is data for agents
+/// and is already in the structured result; in the editor's inline ghost
+/// text it is noise after the value ("val it: int = 42; ; ; not persisted:
+/// the eval failed, so nothing was written back"). Strip only that last
+/// line, and only when it is exactly one of the two verdict shapes.
+let private stripWriteBackVerdict (text: string) : string =
+  let lines = text.Trim() |> splitLines
+  match lines.Length with
+  | 0 -> text
+  | n ->
+    let last = lines.[n - 1].TrimStart()
+    if last.StartsWith("not persisted:", System.StringComparison.Ordinal)
+       || last.StartsWith("written back to ", System.StringComparison.Ordinal) then
+      lines.[0 .. n - 2] |> String.concat "\n"
+    else text
+
 let renderInlineResult (durationMs: float option) (text: string) : InlineResultRender option =
-  let trimmed = text.Trim()
+  let trimmed = (stripWriteBackVerdict text).Trim()
   match trimmed with
   | "" -> None
   | _ ->
@@ -104,7 +121,9 @@ let renderInlineResult (durationMs: float option) (text: string) : InlineResultR
       | n -> sprintf "%s … (%d lines)" firstLine n
     Some {
       ContentText = sprintf "  // → %s%s" (ghostLine summary) durSuffix
-      HoverText = trimmed
+      // The hover keeps the FULL original reply, verdict included — it is data for a
+      // caller that asked for it, just not something to paint in the editor.
+      HoverText = text.Trim()
     }
 
 // ── Inline diagnostic rendering ──────────────────────────────────

@@ -291,9 +291,9 @@ module Signals =
   /// the stylesheet starts with). Datastar writes it into a `style` attribute rather than JS poking
   /// a custom property, so the drag is a signal and the inline script stays under its budget.
   let [<Literal>] DockHeight = "dockHeight"
-  /// The dock's default ceiling. One home: the signal starts at it, a double-click on the resize handle returns to it, and a
-  /// test holds the stylesheet's `--dock-max-height` to the same text.
-  let [<Literal>] DockHeightDefault = "min(72vh, 50rem)"
+  /// The dock's default ceiling: a quarter to a third of the screen, not two-thirds.
+  /// The signal starts here, double-click on the resize handle returns here, and a test holds the CSS to it.
+  let [<Literal>] DockHeightDefault = "min(30vh, 18rem)"
   /// True while the dock's resize handle is being dragged, so pointermove knows a drag is live.
   let [<Literal>] DockResizing = "dockResizing"
   let [<Literal>] NewSessionDir = "newSessionDir"

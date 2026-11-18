@@ -83,6 +83,6 @@ let tests =
       none.Contains "tabline-session-label" |> Expect.isFalse "no Session: label with nothing after it"
       none |> Expect.stringContains "the empty switcher target is still on the page" DomIds.WorkflowSwitcher
       let some = page (snapshotWith off [])
-      some |> Expect.stringContains "with a session the label and id are there" "tabline-session-label"
+      some |> Expect.stringContains "with a session the id is in the Output header" "output-session-id"
       some |> Expect.stringContains "and so is the id" "abcd1234"
   ]

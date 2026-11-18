@@ -82,40 +82,44 @@ let tests =
       for view, expected in labels do
         SessionInView.badgeLabel view |> Expect.equal (sprintf "the label for %A" view) expected
 
-    testCase "WHY — a session whose build is current says so beside the badge, in an element of its own, because \"Ready\" is the engine's word and the badge keeps it" <| fun _ ->
+    testCase "WHY — a session whose build is current keeps 'Ready' in the badge; the build fact lives in the Sessions panel, not the app header" <| fun _ ->
       let page = renderMainContent (snapshotOf (readyWith Readiness.ReadyCurrent)) |> render
-      page |> Expect.stringContains "the note says the second fact" "session matches your files"
-      page |> Expect.stringContains "it has an element of its own" "data-testid=\"session-live-note\""
-      headerBadge page |> Expect.stringContains "the badge still says Ready" ">Ready"
-      (headerBadge page).Contains "session matches your files" |> Expect.isFalse "and the note is not inside the badge"
+      headerBadge page |> Expect.stringContains "the badge says Ready" ">Ready"
+      page.Contains "session matches your files" |> Expect.isFalse "the header no longer carries the session-specific note"
+      page.Contains "session-live-note" |> Expect.isFalse "and no header live-note element remains"
 
     testCase "WHY — the header never says 'all changes live': beside 'Hot reload: off' in the sidebar it read as a contradiction, because 'live' there means the session matches the files and not that hot reload is on" <| fun _ ->
       let page = renderMainContent (snapshotOf (readyWith Readiness.ReadyCurrent)) |> render
       page.Contains "all changes live" |> Expect.isFalse "the overclaim is gone"
 
-    testCase "WHY — the live note has a short form for a header with no room, because at 400px the state and whether it is live were split across three rows or lost" <| fun _ ->
+    testCase "WHY — the build fact left the app header; SessionInView keeps it for the Sessions-panel marker" <| fun _ ->
       let page (view: SessionInView) = renderMainContent (snapshotOf view) |> render
-      page (readyWith Readiness.ReadyCurrent) |> Expect.stringContains "in sync: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Pass + "in sync<")
-      page (readyWith Readiness.ReadyOlderCode) |> Expect.stringContains "not in sync: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Warn + "not in sync<")
+      (page (readyWith Readiness.ReadyCurrent)).Contains "session-live-note"
+      |> Expect.isFalse "no header live-note for a current build"
+      (page (readyWith Readiness.ReadyOlderCode)).Contains "session-live-note"
+      |> Expect.isFalse "no header live-note for a stale build"
+      SessionInView.liveNote (readyWith Readiness.ReadyCurrent)
+      |> Expect.equal "the current signal still says the build matches" (Some (Glyph.Pass, "session matches your files"))
+      SessionInView.liveNote (readyWith Readiness.ReadyOlderCode)
+      |> Expect.equal "the stale signal still says changes not live" (Some (Glyph.Warn, "changes not live"))
 
     testCase "WHY — a count of evaluations is a plain word and agrees with its number, because 'evals' was named jargon by three reviewers" <| fun _ ->
       [ 0, "0 evaluations"; 1, "1 evaluation"; 12, "12 evaluations" ]
       |> List.iter (fun (n, expected) -> evaluationsText n |> Expect.equal (sprintf "the count %d" n) expected)
 
-    testCase "WHY — a Ready session says what its build is next to the badge, with the caution glyph when it is not current, and a session that is not Ready says nothing there because its badge already names the state" <| fun _ ->
+    testCase "WHY — a stale build is named in the Sessions-panel marker, and no session has no note in the app header" <| fun _ ->
       let page (view: SessionInView) = renderMainContent (snapshotOf view) |> render
       [ "changes not live", readyWith Readiness.ReadyOlderCode
         "rebuilding", readyWith Readiness.ReadyRebuilding
         "REPL behind the app", readyWith Readiness.ReadyReplBehindApp
         "build not checked", readyWith Readiness.ReadyUnchecked ]
       |> List.iter (fun (words, view) ->
-        page view |> Expect.stringContains (sprintf "the note says %s" words) (Glyphs.lead Glyph.Warn + words)
-        page view |> Expect.stringContains "in the warning cell" "tabline-livenote-warn")
+        page view |> Expect.stringContains (sprintf "the marker says %s" words) words)
       [ "faulted", inPlay SessionState.Faulted (SessionDisplayStatus.Faulted "boom")
         "warming up", inPlay SessionState.WarmingUp SessionDisplayStatus.Starting
         "no session", SessionInView.NoSessionInPlay ]
       |> List.iter (fun (name, view) ->
-        (page view).Contains "session-live-note" |> Expect.isFalse (sprintf "no live note for %s" name))
+        (page view).Contains "session-live-note" |> Expect.isFalse (sprintf "no header live note for %s" name))
 
     testCase "WHY — a faulted session's main area says why and what to do, because the reason and the remedy sat on a sidebar card" <| fun _ ->
       let html =
@@ -164,8 +168,8 @@ let tests =
       let badge = renderMainContent (snapshotOf view) |> render |> headerBadge
       badge |> Expect.stringContains "the page draws the caution class" "status status-notice"
       badge |> Expect.stringContains "and the engine's word" ">Ready"
-      badge.Contains "changes not live" |> Expect.isFalse "and nothing added to it"
-      renderMainContent (snapshotOf view) |> render |> Expect.stringContains "the note beside it, in its own cell" (Glyphs.lead Glyph.Warn + "changes not live")
+      badge.Contains "changes not live" |> Expect.isFalse "and nothing added to the badge"
+      renderMainContent (snapshotOf view) |> render |> Expect.stringContains "the marker in the Sessions panel" "changes not live"
 
     testCase "WHY — over every readiness, only a current build is green, and a build that is behind is never red" <| fun _ ->
       let readinesses =

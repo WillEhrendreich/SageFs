@@ -48,6 +48,16 @@ for (const [name, reply] of Object.entries(replies)) {
 }
 assert.equal(Pure.renderInlineResult(undefined, "a\nb\nc\nd\ne\nf").ContentText, "  // → a … (6 lines)", "a long result says how long it is");
 
+// The write-back verdict the daemon appends when a call named file_path is data for agents, already
+// in the structured result. In the editor's inline ghost text it is noise after the value.
+const withVerdict = Pure.renderInlineResult(undefined, "val it: int = 42\r\nnot persisted: the eval failed, so nothing was written back\r\n");
+assert.equal(withVerdict.ContentText, "  // → val it: int = 42", "the verdict does not appear in the inline result");
+assert.match(withVerdict.HoverText, /not persisted/, "the hover still carries the full text");
+const written = Pure.renderInlineResult(undefined, "val it: int = 42\nwritten back to /x/Program.fs:12\n");
+assert.equal(written.ContentText, "  // → val it: int = 42", "the written-back verdict is stripped too");
+const genuine = Pure.renderInlineResult(undefined, "val it: string = \"not persisted: a value\"\n");
+assert.match(genuine.ContentText, /not persisted/, "a value that merely contains the phrase is kept");
+
 // A diagnostic is first-line by design, and must still be painted whole.
 const diagnostic = Pure.renderInlineDiagnostic("error FS0001: bad\r\nmore detail\r\n");
 assert.equal(paintedByVsCode(diagnostic.ContentText), diagnostic.ContentText, "the diagnostic's ghost text is painted whole");

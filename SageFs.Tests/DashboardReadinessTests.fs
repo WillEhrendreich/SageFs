@@ -77,13 +77,10 @@ let pageTests =
       let! html = pageFor rebuildingSession 12 12
       let badge = between html "id=\"session-status\"" "</span>"
       badge |> Expect.stringContains "the header badge keeps the engine's word" ">Ready"
-      html |> Expect.stringContains "and the note beside it says what is under way" (Glyphs.lead Glyph.Warn + "rebuilding")
+      html |> Expect.stringContains "the Sessions-panel marker says what is under way" "rebuilding"
       badge |> Expect.stringContains "in the caution colour" "status status-notice"
       badge.Contains "status-ready" |> Expect.isFalse "and not in green"
-      let bar = between html "id=\"daemon-health\"" "</div>"
-      bar |> Expect.stringContains "the daemon bar names the session and says it in the same words" "Session Fixture.fsproj: Ready, rebuilding"
-      bar |> Expect.stringContains "and says whose health the green is" "Daemon healthy"
-      bar.Contains (Glyphs.lead Glyph.Pass + "Fixture.fsproj") |> Expect.isFalse "the bar's check mark is gone from the session"
+      html.Contains "daemon-health" |> Expect.isFalse "the redundant daemon bar is gone"
       let card = between html "data-testid=\"session-card-source\"" "session-card-actions"
       card |> Expect.stringContains "the card says the same fact" "Rebuilding"
       card |> Expect.stringContains "and carries the same readiness words for a journey to read" "data-readiness=\"Ready, rebuilding\""
