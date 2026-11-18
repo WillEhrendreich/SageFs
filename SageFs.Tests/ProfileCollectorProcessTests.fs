@@ -33,6 +33,7 @@ let private scriptWith (body: string) : string =
   // runtime, which under load produced ETXTBSY at Process.Start.
   let chmod = System.Diagnostics.ProcessStartInfo("/bin/chmod", sprintf "+x %s" staged)
   chmod.UseShellExecute <- false
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply chmod
   use proc = System.Diagnostics.Process.Start chmod
   proc.WaitForExit()
   File.Move(staged, path)
