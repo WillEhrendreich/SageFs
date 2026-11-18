@@ -21,12 +21,20 @@ let private scriptWith (body: string) : string =
   Directory.CreateDirectory dir |> ignore
   let path = Path.Combine(dir, "dotnet-trace")
   let header = "#!/bin/sh\nbase=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then base=\"$a\"; fi\n  prev=\"$a\"\ndone\n"
-  // Write under another name and rename into place, so the executable path is never open for
-  // writing when a test starts it. Under load the gate once saw ETXTBSY ("Text file busy") on
-  // the case that writes a stand-in and immediately starts it; rename removes that window.
+  // ETXTBSY under load came from the executable path being open for writing
+  // when Process.Start ran it. Two defences: create the staged file with the
+  // execute bit set AT CREATION (no later chmod, which can leave a descriptor
+  // open past its call), then rename it into place; and dispose the stream
+  // explicitly before the rename.
   let staged = path + ".writing"
-  File.WriteAllText(staged, header + body)
-  File.SetUnixFileMode(staged, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+  File.WriteAllBytes(staged, System.Text.Encoding.UTF8.GetBytes(header + body))
+  // chmod in a short-lived PROCESS: its descriptor is gone when it exits.
+  // File.SetUnixFileMode can leave a handle alive past its call on this
+  // runtime, which under load produced ETXTBSY at Process.Start.
+  let chmod = System.Diagnostics.ProcessStartInfo("/bin/chmod", sprintf "+x %s" staged)
+  chmod.UseShellExecute <- false
+  use proc = System.Diagnostics.Process.Start chmod
+  proc.WaitForExit()
   File.Move(staged, path)
   path
 
