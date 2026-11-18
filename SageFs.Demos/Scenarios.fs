@@ -112,19 +112,10 @@ let helloDashboard: Scenario =
               CadenceSeed.ofId "hello-dashboard-open-project",
               Target.DashboardCssSelector createSessionButtonSelector
             )
-          // A real, non-empty project's warmup actually scans its source
-          // files — "Scanned N source files" (`AppState.fs`'s own literal
-          // wording) is a genuine, structural proof the project loaded
-          // (never fires for a bare Quick Start session, which scans 0),
-          // not just "a session card appeared" (§2's already-fixed
-          // nothingburger: that testid fires during `WarmingUp` too). N is 3
-          // for this one-file sample, not 1: Ionide.ProjInfo's effective
-          // compile list (what warmup actually scans) includes the SDK's two
-          // auto-generated files (AssemblyInfo.fs, AssemblyAttributes.fs)
-          // alongside Program.fs — confirmed directly against a real
-          // recording's own warmup transcript ("[2/4] Scanned 3 source
-          // files"), not guessed.
-          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 3 source files")
+          // The old "Scanned N source files" line is no longer rendered by
+          // the session picker. The header leaving "No session" for
+          // "Session: <id>" is the stable proof the project actually opened.
+          Expect = Expectation.PageTextContains(sessionStatusSelector, "Session:")
           Dwell = Dwell.short }
         // Creating a session does NOT switch the dashboard's main panel to
         // that session's own view — it stays on the "Start a Session"
@@ -266,7 +257,7 @@ let replDashboard: Scenario =
     Sample = sample
     Layout = LayoutTemplate.DashboardOnly
     Steps =
-      [ { Caption = Caption.mk "1/4 · Open a real F# project"
+      [ { Caption = Caption.mk "ONE REAL PROJECT LOADS — REFERENCES RESOLVED"
           Action =
             Action.TypeThenClick(
               Target.DashboardCssSelector newSessionDirSelector,
@@ -279,11 +270,11 @@ let replDashboard: Scenario =
           // opened is the header leaving "No session" for "Session: <id>".
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Session:")
           Dwell = Dwell.short }
-        { Caption = Caption.mk "2/4 · It warms up and goes green"
+        { Caption = Caption.mk "STATE: READY — SESSION LOADED"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }
-        { Caption = Caption.mk "3/4 · Evaluate a plain expression"
+        { Caption = Caption.mk "int = 55 — EVALUATED, NOT REBUILT"
           Action =
             Action.ClickThenTypeThenClick(
               Target.DashboardCssSelector evaluateAccordionSelector,
@@ -309,7 +300,7 @@ let replDashboard: Scenario =
         // type/submit ever reached a visible box. `TypeThenClick` (no
         // pre-click) is correct once the accordion is already open from the
         // immediately preceding step.
-        { Caption = Caption.mk "4/4 · Evaluate the project's own state"
+        { Caption = Caption.mk "int = 3 — SAME SESSION, STATE KEPT"
           Action =
             Action.TypeThenClick(
               Target.DashboardCssSelector evalTextareaSelector,
@@ -367,7 +358,7 @@ let ltDashboard: Scenario =
             )
           Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
           Dwell = Dwell.short }
-        { Caption = Caption.mk "2/4 · It warms up and goes green"
+        { Caption = Caption.mk "STATE: READY — SESSION LOADED"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }

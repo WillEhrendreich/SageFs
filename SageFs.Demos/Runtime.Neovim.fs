@@ -154,6 +154,8 @@ let actorPrologue: string list = []
 /// integration: the cell-agent's `Actors.Neovim.launch` needs the actual
 /// bound path, generated fresh per run, so it cannot be hardcoded the way
 /// VS Code's fixed cell-mount constants are).
-let nvimConfig (pluginCommitSha: string) (pluginRuntimePath: string) : Wire.NvimConfig =
+let nvimConfig (pluginCommitSha: string) (pluginRuntimePath: string) (kittyPath: string) (nvimPath: string) : Wire.NvimConfig =
   { PluginCommit = Some pluginCommitSha
-    PluginRuntimePath = Some pluginRuntimePath }
+    PluginRuntimePath = Some pluginRuntimePath
+    KittyPath = Some kittyPath
+    NvimPath = Some nvimPath }

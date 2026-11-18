@@ -572,7 +572,11 @@ for i in $(seq 1 50); do [ -e /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
 export DISPLAY=:99
 
 export SAGEFS_DATA_DIR=/home/demo/.sagefs
-export SAGEFS_BIND_HOST=127.0.0.1
+# Default `localhost` binds both IPv4 and IPv6 loopback. Forcing 127.0.0.1
+# left ::1 unbound, and the VS Code extension probes `localhost` — on a
+# machine where that resolves to ::1 it reported "SageFs: offline" even
+# though the dashboard was up on IPv4.
+export SAGEFS_BIND_HOST=localhost
 export DOTNET_ROOT=/dotnet-root
 %s
 /dotnet-root/dotnet /sagefs-bin/SageFs.dll --mcp-port 47749 --no-resume \
@@ -819,32 +823,37 @@ let private resolveActorExtras
       match Runtime.Neovim.resolveKitty (), Runtime.Neovim.resolveNvim () with
       | Error e, _
       | _, Error e -> return Error e
-      | Ok _, Ok _ ->
+      | Ok kittyPath, Ok nvimPath ->
+        // Kitty resolves its resources relative to its install tree
+        // (RPATH $ORIGIN/../lib), so bind the whole tree at the SAME path on
+        // both sides, plus nvim's own binary. CellAgent then launches these
+        // resolved absolute paths instead of a hardcoded /usr/bin/kitty.
+        let kittyRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName kittyPath, ".."))
+        let toolBinds = [ (kittyRoot, kittyRoot); (nvimPath, nvimPath) ]
+        let pluginRepoDir = Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, "Work", "sagefs.nvim")
 
-      let pluginRepoDir = Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, "Work", "sagefs.nvim")
+        if not (Directory.Exists(Path.Combine(pluginRepoDir, ".git"))) then
+          return
+            Error(
+              sprintf
+                "no sagefs.nvim checkout at %s — clone WillEhrendreich/sagefs.nvim there to record a Neovim scenario."
+                pluginRepoDir
+            )
+        else
 
-      if not (Directory.Exists(Path.Combine(pluginRepoDir, ".git"))) then
-        return
-          Error(
-            sprintf
-              "no sagefs.nvim checkout at %s — clone WillEhrendreich/sagefs.nvim there to record a Neovim scenario."
-              pluginRepoDir
-          )
-      else
+          let scratchDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-demos-nvim-plugin-%s" (Guid.NewGuid().ToString "N"))
 
-      let scratchDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-demos-nvim-plugin-%s" (Guid.NewGuid().ToString "N"))
+          // Pinned to the sagefs.nvim commit that adds a non-interactive
+          // `:SageFsCreateSession <project>` (skips the `vim.ui.select` project
+          // picker synthetic keystrokes cannot answer) — never the floating
+          // `"master"` ref (roast I12: a resolved commit, not a moving branch).
+          match! Runtime.Neovim.resolvePinnedPlugin pluginRepoDir scratchDir "90bc3f41" with
+          | Error e -> return Error e
+          | Ok(sha, pluginDir) ->
 
-      // Pinned to the sagefs.nvim commit that adds a non-interactive
-      // `:SageFsCreateSession <project>` (skips the `vim.ui.select` project
-      // picker synthetic keystrokes cannot answer) — never the floating
-      // `"master"` ref (roast I12: a resolved commit, not a moving branch).
-      match! Runtime.Neovim.resolvePinnedPlugin pluginRepoDir scratchDir "90bc3f41" with
-      | Error e -> return Error e
-      | Ok(sha, pluginDir) ->
-
-      let nvimBinds = Runtime.Neovim.actorBinds pluginDir
-      let nvimConfig = Runtime.Neovim.nvimConfig sha pluginDir
-      return Ok(appBinds @ nvimBinds, appPrologue @ Runtime.Neovim.actorPrologue, None, Some nvimConfig, appConfig)
+            let nvimBinds = Runtime.Neovim.actorBinds pluginDir @ toolBinds
+            let nvimConfig = Runtime.Neovim.nvimConfig sha pluginDir kittyPath nvimPath
+            return Ok(appBinds @ nvimBinds, appPrologue @ Runtime.Neovim.actorPrologue, None, Some nvimConfig, appConfig)
   }
 
 let private ffmpeg (args: string list) : Async<int * string> =

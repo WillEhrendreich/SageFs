@@ -107,7 +107,12 @@ type NvimConfig =
     /// pattern) — unlike VS Code's fixed cell-mount constant, this scratch
     /// directory's path is generated fresh per run (a GUID-suffixed temp
     /// dir), so the cell-agent cannot hardcode it and needs it on the wire.
-    PluginRuntimePath: string option }
+    PluginRuntimePath: string option
+    /// Resolved host paths for kitty and nvim, bound into the cell at the
+    /// SAME absolute path. The old hardcoded /usr/bin/kitty failed on machines
+    /// where kitty is installed user-space (as it is here).
+    KittyPath: string option
+    NvimPath: string option }
 
 type AppConfig =
   { /// Which `AppKind` (`"web"|"raylib"|"console"`) the App co-actor should

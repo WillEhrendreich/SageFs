@@ -224,8 +224,8 @@ let private assembleActors (plan: ScenarioPlan) : Async<Result<Map<ActorId, Live
 
       let! neovimHandle =
         Neovim.launch
-          "/usr/bin/kitty"
-          "/usr/bin/nvim"
+          (nvimConfig.KittyPath |> Option.defaultValue "/usr/bin/kitty")
+          (nvimConfig.NvimPath |> Option.defaultValue "/usr/bin/nvim")
           (Some pluginRuntimePath)
           (Display CellDisplay)
           (rectFor plan "neovim")

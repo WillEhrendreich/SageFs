@@ -51,12 +51,12 @@ let tests =
         typed |> Expect.stringContains "points at the real sample project's own relative directory" (Sample.relativePath helloDashboard.Sample)
       | other -> failtestf "expected TypeThenClick(DashboardCssSelector _, _, _, DashboardCssSelector _), got %A" other
 
-    testCase "step 1 expects the output panel to show a REAL, non-empty source scan — structural proof the project actually loaded, not just that a card exists (§10)" <| fun _ ->
+    testCase "step 1 expects the header to leave 'No session' for 'Session:' — the picker no longer writes a source-scan line" <| fun _ ->
       match helloDashboard.Steps.[0].Expect with
       | Expectation.PageTextContains(selector, text) ->
-        selector |> Expect.equal "checks the session output log" "[data-testid=session-output]"
-        text |> Expect.equal "a real, non-zero source-file scan (AppState.fs's own wording)" "Scanned 1 source files"
-      | other -> failtestf "expected PageTextContains(session-output, \"Scanned 1 source files\"), got %A" other
+        selector |> Expect.equal "checks the header, which is the stable signal" "body"
+        text |> Expect.equal "the project actually opened" "Session:"
+      | other -> failtestf "expected PageTextContains(body, \"Session:\"), got %A" other
 
     testCase "step 2 clicks the session card (navigating into its own view — creating a session alone doesn't) and expects the status text to actually say Ready, not just the card existing (§9 fix)" <| fun _ ->
       match helloDashboard.Steps.[1].Action with
