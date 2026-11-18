@@ -1007,7 +1007,7 @@ module McpTools =
           match format with
           | Json -> McpAdapter.formatWorkerEvalResultJson response
           | Text -> note + formatWorkerEvalResult workflow response
-          | Editor -> note + EvalEditorOutput.render response
+          | Editor -> note + EvalEditorOutput.render workflow response
         match response with
         | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
           // A successful eval proves the session can still function.

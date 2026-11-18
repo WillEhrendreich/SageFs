@@ -7,11 +7,26 @@ namespace SageFs
 module EvalEditorOutput =
   open WorkerProtocol
 
-  let render (response: WorkerResponse) : string =
+  /// A failed eval still owes the editor the FULL error — the worker's diagnostic,
+  /// the classified reason and the workflow's next step. Only the agent's "Error: "
+  /// label is framing; the detail is the user's information.
+  let private errorDetail (workflow: WorkflowTypes.SessionWorkflow) (err: SageFsError) (diags: WorkerDiagnostic list) =
+    let reason = SageFsError.describeForAgent err
+    let suggestion =
+      match err with
+      | SageFsError.FsiHostCrashed _ -> ""
+      | _ -> reason |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
+    let enhanced = WorkflowErrorContext.enhance workflow reason suggestion
+    [ reason; enhanced; diags |> List.map (fun d -> d.Message) |> String.concat "\n" ]
+    |> List.filter (not << System.String.IsNullOrWhiteSpace)
+    |> String.concat "\n"
+    |> AppState.stripAnsi
+
+  let render (workflow: WorkflowTypes.SessionWorkflow) (response: WorkerResponse) : string =
     match response with
     | WorkerResponse.EvalResult(_, Ok output, _, _) -> AppState.stripAnsi output
-    | WorkerResponse.EvalResult(_, Error err, _, _) -> AppState.stripAnsi (SageFsError.describeForAgent err)
-    | WorkerResponse.WorkerError err -> AppState.stripAnsi (SageFsError.describeForAgent err)
+    | WorkerResponse.EvalResult(_, Error err, diags, _) -> errorDetail workflow err diags
+    | WorkerResponse.WorkerError err -> errorDetail workflow err []
     | WorkerResponse.CheckResult _
     | WorkerResponse.TypeCheckWithSymbolsResult _
     | WorkerResponse.CompletionResult _
