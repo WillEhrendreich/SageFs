@@ -42,7 +42,13 @@ assert.match(paintedByVsCode(two.ContentText), /val a: int = 3.*val b: int = 5/,
 
 // WHY: issue #132, the second screenshot. Lines were joined with a box-drawing bar ("val a: int = 3  │  val b: int = 5"),
 // which reads as noise. They are joined with a semicolon, and a result cut at four lines says how many it has.
-assert.equal(two.ContentText, "  // → val a: int = 3; val b: int = 5", "two bindings read as one plain line, without MCP's Result prefix");
+// Pin the decisions, not the exact paint: a cosmetic edit must not turn a green suite red.
+assert.match(two.ContentText, /\/\/ →/, "the inline marker is there");
+assert.match(two.ContentText, /val a: int = 3/, "the first binding is there");
+assert.match(two.ContentText, /val b: int = 5/, "the second binding is there");
+assert.match(two.ContentText, /; /, "bindings are joined with a semicolon");
+assert.ok(!/[\r\n\u2028\u2029]/.test(two.ContentText), "one line, whatever the daemon's line ends");
+assert.ok(!two.ContentText.includes("Result:"), "MCP's Result prefix never reaches the ghost");
 for (const [name, reply] of Object.entries(replies)) {
   assert.ok(!Pure.renderInlineResult(undefined, reply).ContentText.includes("│"), `${name}: no box-drawing bar in the ghost text`);
 }

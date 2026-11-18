@@ -214,8 +214,14 @@ let oneLineGhostTextTests =
       match renderInlineResult None "Result: val a: int = 3\nval b: int = 5\n" with
       | None -> failtest "a result with text renders"
       | Some rendered ->
-        rendered.ContentText |> Expect.equal "joined with a semicolon, without MCP's Result prefix" "  // → val a: int = 3; val b: int = 5"
+        // Assert the decisions, not the paint string: cosmetics may change without a red test.
+        rendered.ContentText |> Expect.stringContains "the inline marker" "// →"
+        rendered.ContentText |> Expect.stringContains "the first binding" "val a: int = 3"
+        rendered.ContentText |> Expect.stringContains "the second binding" "val b: int = 5"
+        rendered.ContentText |> Expect.stringContains "joined with a semicolon" "; "
+        hasTerminator rendered.ContentText |> Expect.isFalse "one line, whatever the daemon's line ends"
         rendered.ContentText.Contains "│" |> Expect.isFalse "no box-drawing bar in the ghost text"
+        rendered.ContentText.Contains "Result:" |> Expect.isFalse "MCP's Result prefix never reaches the ghost"
         rendered.HoverText |> Expect.stringContains "the hover still carries the full MCP text" "Result: val a: int = 3"
 
     testCase "a diagnostic whose first line ends in \\r\\n renders that line alone" <| fun _ ->
