@@ -89,6 +89,16 @@ let ghostLine (text: string) : string =
 /// The daemon appends a write-back verdict as the LAST line of an eval's
 /// output when the call named a file_path. That verdict is data for agents
 /// and is already in the structured result; in the editor's inline ghost
+/// MCP's text channel prefixes a successful eval with "Result: " for agents. In an F# editor that
+/// word is a TYPE — seeing it ghosted after a line reads as part of the answer. Strip only that
+/// leading prefix, once; the MCP text itself is unchanged for callers that read it.
+let private stripMcpResultPrefix (text: string) : string =
+  let trimmed = text.TrimStart()
+  let prefix = "Result: "
+  if trimmed.StartsWith(prefix, System.StringComparison.Ordinal) then trimmed.Substring prefix.Length
+  else text
+
+/// The daemon appends a write-back verdict as the last eval line. In an editor
 /// text it is noise after the value ("val it: int = 42; ; ; not persisted:
 /// the eval failed, so nothing was written back"). Strip only that last
 /// line, and only when it is exactly one of the two verdict shapes.
@@ -104,7 +114,7 @@ let private stripWriteBackVerdict (text: string) : string =
     else text
 
 let renderInlineResult (durationMs: float option) (text: string) : InlineResultRender option =
-  let trimmed = (stripWriteBackVerdict text).Trim()
+  let trimmed = (text |> stripMcpResultPrefix |> stripWriteBackVerdict).Trim()
   match trimmed with
   | "" -> None
   | _ ->

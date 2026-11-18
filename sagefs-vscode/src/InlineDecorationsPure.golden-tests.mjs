@@ -42,7 +42,7 @@ assert.match(paintedByVsCode(two.ContentText), /val a: int = 3.*val b: int = 5/,
 
 // WHY: issue #132, the second screenshot. Lines were joined with a box-drawing bar ("val a: int = 3  │  val b: int = 5"),
 // which reads as noise. They are joined with a semicolon, and a result cut at four lines says how many it has.
-assert.equal(two.ContentText, "  // → Result: val a: int = 3; val b: int = 5", "two bindings read as one plain line");
+assert.equal(two.ContentText, "  // → val a: int = 3; val b: int = 5", "two bindings read as one plain line, without MCP's Result prefix");
 for (const [name, reply] of Object.entries(replies)) {
   assert.ok(!Pure.renderInlineResult(undefined, reply).ContentText.includes("│"), `${name}: no box-drawing bar in the ghost text`);
 }
@@ -57,6 +57,11 @@ const written = Pure.renderInlineResult(undefined, "val it: int = 42\nwritten ba
 assert.equal(written.ContentText, "  // → val it: int = 42", "the written-back verdict is stripped too");
 const genuine = Pure.renderInlineResult(undefined, "val it: string = \"not persisted: a value\"\n");
 assert.match(genuine.ContentText, /not persisted/, "a value that merely contains the phrase is kept");
+
+// "Result" is an F# type. MCP prefixes eval output with it for agents; the editor must not paint it.
+const mcpText = Pure.renderInlineResult(undefined, "Result: val it: int = 42\n");
+assert.equal(mcpText.ContentText, "  // → val it: int = 42", "the MCP Result prefix does not reach the ghost text");
+assert.match(mcpText.HoverText, /Result:/, "the hover still carries the full MCP text");
 
 // A diagnostic is first-line by design, and must still be painted whole.
 const diagnostic = Pure.renderInlineDiagnostic("error FS0001: bad\r\nmore detail\r\n");
