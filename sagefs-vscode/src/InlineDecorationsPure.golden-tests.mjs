@@ -20,12 +20,13 @@ const PS = String.fromCharCode(0x2029); // Unicode paragraph separator
 /** What VS Code paints for a decoration's contentText (workbench.desktop.main.js, 1.142). */
 const paintedByVsCode = (contentText) => contentText.match(/^.*$/m)[0];
 
+// The daemon's Editor channel sends the worker's own value — no agent framing.
 const replies = {
-  "windows, two bindings": "Result: val a: int = 3\r\nval b: int = 5\r\n",
-  "unix, two bindings": "Result: val a: int = 3\nval b: int = 5\n",
-  "old mac line ends": "Result: val a: int = 3\rval b: int = 5\r",
-  "unicode separators": "Result: val a: int = 3" + LS + "val b: int = 5" + PS,
-  "one line, windows": "Result: 5val it: unit = ()\r\n\r\n",
+  "windows, two bindings": "val a: int = 3\r\nval b: int = 5\r\n",
+  "unix, two bindings": "val a: int = 3\nval b: int = 5\n",
+  "old mac line ends": "val a: int = 3\rval b: int = 5\r",
+  "unicode separators": "val a: int = 3" + LS + "val b: int = 5" + PS,
+  "one line, windows": "5val it: unit = ()\r\n\r\n",
   "five lines, windows": "a\r\nb\r\nc\r\nd\r\ne\r\n",
 };
 
@@ -48,26 +49,17 @@ assert.match(two.ContentText, /val a: int = 3/, "the first binding is there");
 assert.match(two.ContentText, /val b: int = 5/, "the second binding is there");
 assert.match(two.ContentText, /; /, "bindings are joined with a semicolon");
 assert.ok(!/[\r\n\u2028\u2029]/.test(two.ContentText), "one line, whatever the daemon's line ends");
-assert.ok(!two.ContentText.includes("Result:"), "MCP's Result prefix never reaches the ghost");
 for (const [name, reply] of Object.entries(replies)) {
   assert.ok(!Pure.renderInlineResult(undefined, reply).ContentText.includes("│"), `${name}: no box-drawing bar in the ghost text`);
 }
 assert.equal(Pure.renderInlineResult(undefined, "a\nb\nc\nd\ne\nf").ContentText, "  // → a … (6 lines)", "a long result says how long it is");
 
-// The write-back verdict the daemon appends when a call named file_path is data for agents, already
-// in the structured result. In the editor's inline ghost text it is noise after the value.
-const withVerdict = Pure.renderInlineResult(undefined, "val it: int = 42\r\nnot persisted: the eval failed, so nothing was written back\r\n");
-assert.equal(withVerdict.ContentText, "  // → val it: int = 42", "the verdict does not appear in the inline result");
-assert.match(withVerdict.HoverText, /not persisted/, "the hover still carries the full text");
-const written = Pure.renderInlineResult(undefined, "val it: int = 42\nwritten back to /x/Program.fs:12\n");
-assert.equal(written.ContentText, "  // → val it: int = 42", "the written-back verdict is stripped too");
-const genuine = Pure.renderInlineResult(undefined, "val it: string = \"not persisted: a value\"\n");
-assert.match(genuine.ContentText, /not persisted/, "a value that merely contains the phrase is kept");
-
-// "Result" is an F# type. MCP prefixes eval output with it for agents; the editor must not paint it.
-const mcpText = Pure.renderInlineResult(undefined, "Result: val it: int = 42\n");
-assert.equal(mcpText.ContentText, "  // → val it: int = 42", "the MCP Result prefix does not reach the ghost text");
-assert.match(mcpText.HoverText, /Result:/, "the hover still carries the full MCP text");
+// A user's own value may print "Result: " — F# has a Result type, and a string can
+// contain the phrase. The renderer prints the daemon's value verbatim; there is no
+// agent framing to strip, so nothing can be mistaken for framing and removed.
+const userValue = Pure.renderInlineResult(undefined, "val it: string = \"Result: keep me\"\n");
+assert.match(userValue.ContentText, /Result: keep me/, "a value that prints Result: is kept verbatim");
+assert.equal(userValue.HoverText, 'val it: string = "Result: keep me"', "and the hover carries it whole");
 
 // A diagnostic is first-line by design, and must still be painted whole.
 const diagnostic = Pure.renderInlineDiagnostic("error FS0001: bad\r\nmore detail\r\n");

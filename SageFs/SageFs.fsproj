@@ -194,6 +194,7 @@
              either. McpNudge (after Mcp.fs, because it needs McpContext) re-exports its bindings. -->
         <Compile Include="EvalWriteBackWire.fs" />
         <Compile Include="EvalReply.fs" />
+        <Compile Include="EvalEditorOutput.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpNudge.fs" />

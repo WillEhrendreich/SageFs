@@ -48,14 +48,8 @@ module McpTools =
     GetWarmupContext: (string -> Threading.Tasks.Task<WarmupContext option>) option
     /// Read the current feature push state (eval history, bindings, timeline).
     GetFeatureState: (unit -> Features.FeatureHooks.FeaturePushState) option
-    /// Record a completed eval (code, result, durationMs) into the feature push
-    /// state's history — the WRITE counterpart to GetFeatureState. The daemon
-    /// wires this to the same `FeaturePushState ref` its `/exec` bridge writes,
-    /// so the pure-MCP `send_fsharp_code` path populates the eval history that
-    /// `get_recent_fsi_events`/filmstrip/impact_forecast read (roast-7 §2/§3
-    /// follow-up — before this, only the CLI-integrated `/exec` client wrote,
-    /// so a pure-MCP agent's `get_recent_fsi_events` lied "no events yet" right
-    /// after a successful eval). `None` in tests, like LiveSnapshotSink.
+    /// Write counterpart to GetFeatureState: the daemon wires it to the same ref
+    /// `/exec` writes, so pure-MCP evals populate get_recent_fsi_events. None in tests.
     RecordEval: (string -> string -> int64 -> unit) option
     /// In-memory agent activity tracker for multi-agent coordination.
     ActivityTracker: AgentActivityTracker.Tracker
@@ -943,7 +937,12 @@ module McpTools =
     | other ->
       sprintf "Unexpected response: %A" other
 
-  type OutputFormat = Text | Json
+  /// Who reads an eval's text. Agents get the framed channel (prefix, verdict,
+  /// banner); editors get the worker's own value, so nothing is stripped downstream.
+  type OutputFormat =
+    | Text  // agents: framed MCP text
+    | Json  // agents: structured data
+    | Editor // editors: the raw value, framed by nothing
 
   /// Adjust diagnostic line/column numbers in a WorkerResponse by preprocessing offsets.
   let adjustResponseDiagnostics (lineOffset: int) (colOffset: int) (response: WorkerProtocol.WorkerResponse) =
@@ -1008,6 +1007,7 @@ module McpTools =
           match format with
           | Json -> McpAdapter.formatWorkerEvalResultJson response
           | Text -> note + formatWorkerEvalResult workflow response
+          | Editor -> note + EvalEditorOutput.render response
         match response with
         | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
           // A successful eval proves the session can still function.
@@ -1188,12 +1188,12 @@ module McpTools =
           Instrumentation.succeedSpan span
           // Compute file-overlap advisory AFTER caching raw output
           let enrichedOutput =
-            match filePath with
-            | Some fp ->
+            match format, filePath with
+            | Editor, Some _ | Editor, None | Json, Some _ | Json, None | Text, None -> finalOutput
+            | Text, Some fp ->
               let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) Timeouts.agentPresenceEviction DateTime.UtcNow
               let advisories = SessionOperations.FileOverlapAdvisory.compute (resolvedKey agentName) [fp] presences
               SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
-            | None -> finalOutput
           // Eval write-back (roadmap "A REPL eval changes the running app", the write-to-source
           // slice): a successful eval that named its file and block is spliced back into that file
           // through the tweak door's per-file lock and its journal-before-rename, so the existing
@@ -1210,10 +1210,10 @@ module McpTools =
           let enrichedOutput =
             match format, filePath with
             | Text, Some _ -> enrichedOutput + Environment.NewLine + EvalWriteBack.WriteBack.describe writeBack
-            | _ -> enrichedOutput
+            | Text, None | Json, Some _ | Json, None | Editor, Some _ | Editor, None -> enrichedOutput
           // Said after the result when the REPL runs the build from before a patch the app took. JSON is data and keeps its shape.
           let! freshness = SessionStatusPayload.replFreshnessOf ctx.SessionOps sid
-          let shown = match format with Text -> ReplFreshness.annotate freshness enrichedOutput | Json -> enrichedOutput
+          let shown = match format with | Text -> ReplFreshness.annotate freshness enrichedOutput | Json | Editor -> enrichedOutput
           return (shown, outcome, allDiags, lastError, freshness, writeBack)
         }
       | other ->

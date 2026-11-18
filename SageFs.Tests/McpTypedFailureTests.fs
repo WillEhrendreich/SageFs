@@ -346,4 +346,19 @@ let tests =
         entries |> List.map (fun e -> e.Timestamp) |> List.distinct |> Expect.equal "the entries' own time" [ long_ago ]
         entries |> List.map (fun e -> e.Level) |> List.sort |> Expect.equal "each entry's own level" [ JournalLevel.Info; JournalLevel.Failure ]
     ]
+
+    testList "the editor eval channel is framed by nothing" [
+      testTask "WHY — the worker's value reaches the editor verbatim; agent framing lives only in the Text channel" {
+        let ctx = sharedCtx ()
+        let proxy : WorkerProtocol.SessionProxy =
+          fun _ -> async { return WorkerProtocol.WorkerResponse.EvalResult("r", Ok "val it: int = 2\n", [], Map.empty) }
+        let ctx = { ctx with SessionOps = { ctx.SessionOps with GetProxy = fun _ -> Task.FromResult (Some proxy) } }
+        let! editorText, _, _, _, _, _ =
+          evalFSharpCodeWithOutcome ctx "test" "1 + 1" OutputFormat.Editor None None None None None None (EvalLimit.Default Timeouts.evalCall)
+        editorText |> Expect.equal "the editor gets exactly the worker's value" "val it: int = 2\n"
+        let! agentText, _, _, _, _, _ =
+          evalFSharpCodeWithOutcome ctx "test" "1 + 1" OutputFormat.Text None None None None None None (EvalLimit.Default Timeouts.evalCall)
+        agentText |> Expect.stringContains "agents still get the Result prefix" "Result: val it: int = 2"
+      }
+    ]
   ]

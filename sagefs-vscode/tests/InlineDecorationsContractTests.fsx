@@ -202,7 +202,7 @@ let hasTerminator (s: string) = s.IndexOfAny terminators >= 0
 let oneLineGhostTextTests =
   testList "ghost text is one line" [
     testCase "WHY — a Windows reply with two bindings keeps both, and nothing VS Code would cut at" <| fun _ ->
-      match renderInlineResult None "Result: val a: int = 3\r\nval b: int = 5\r\n" with
+      match renderInlineResult None "val a: int = 3\r\nval b: int = 5\r\n" with
       | None -> failtest "a result with text renders"
       | Some rendered ->
         rendered.ContentText |> Expect.stringContains "the first binding" "val a: int = 3"
@@ -211,7 +211,7 @@ let oneLineGhostTextTests =
         rendered.HoverText |> Expect.stringContains "the hover still has the whole reply" "val b: int = 5"
 
     testCase "a Unix reply joins its lines with a semicolon, never a box-drawing bar" <| fun _ ->
-      match renderInlineResult None "Result: val a: int = 3\nval b: int = 5\n" with
+      match renderInlineResult None "val a: int = 3\nval b: int = 5\n" with
       | None -> failtest "a result with text renders"
       | Some rendered ->
         // Assert the decisions, not the paint string: cosmetics may change without a red test.
@@ -221,8 +221,14 @@ let oneLineGhostTextTests =
         rendered.ContentText |> Expect.stringContains "joined with a semicolon" "; "
         hasTerminator rendered.ContentText |> Expect.isFalse "one line, whatever the daemon's line ends"
         rendered.ContentText.Contains "│" |> Expect.isFalse "no box-drawing bar in the ghost text"
-        rendered.ContentText.Contains "Result:" |> Expect.isFalse "MCP's Result prefix never reaches the ghost"
-        rendered.HoverText |> Expect.stringContains "the hover still carries the full MCP text" "Result: val a: int = 3"
+        rendered.HoverText |> Expect.stringContains "the hover still carries the whole reply" "val a: int = 3"
+
+    testCase "a value that happens to print Result: is kept verbatim — it is data, not framing" <| fun _ ->
+      match renderInlineResult None "val it: string = \"Result: keep me\"\n" with
+      | None -> failtest "a result with text renders"
+      | Some rendered ->
+        rendered.ContentText |> Expect.stringContains "the user's value is intact" "Result: keep me"
+        rendered.HoverText |> Expect.stringContains "and the hover has it whole" "\"Result: keep me\""
 
     testCase "a diagnostic whose first line ends in \\r\\n renders that line alone" <| fun _ ->
       match renderInlineDiagnostic "error FS0001: bad\r\nmore detail\r\n" with
