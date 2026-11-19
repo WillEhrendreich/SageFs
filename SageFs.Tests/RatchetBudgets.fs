@@ -344,7 +344,7 @@ let fileSize : (string * int) list =
     "SageFs/Dashboard.fs", 4259
     "sagefs-vscode/src/Extension.fs", 3717
     "SageFs/McpTools.fs", 3157
-    "SageFs.Host/WorkerMain.fs", 2503
+    "SageFs.Host/WorkerMain.fs", 2493
     "SageFs.Core/Cohort.fs", 2475
     "SageFs/DashboardTypes.fs", 2159
     "SageFs.Core/Middleware/HotReloadCore.fs", 1963

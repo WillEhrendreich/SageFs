@@ -2432,24 +2432,14 @@ let run (sessionId: string) (requestedPort: int) = async {
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
     try cts.Cancel() with :? ObjectDisposedException -> ())
 
-  // Parent-death monitor: when the daemon is killed hard (Task Manager,
-  // taskkill /F, crash, OS shutdown), no Shutdown message ever arrives.
-  // Watching the daemon PID lets the worker self-exit instead of becoming
-  // an orphan (issue #126).
-  match workerConfig.DaemonPid with
-  | Some daemonPid ->
-    // Fenced on (pid, startTime) whenever the daemon told us its own start
-    // time (SAGEFS_DAEMON_START_TICKS) — closing the pid-reuse race where a
-    // recycled daemon pid would otherwise keep this worker alive forever.
-    let owner : SageFs.OwnerMonitor.Owner =
-      { Pid = daemonPid; StartTimeTicks = workerConfig.DaemonStartTicks }
-    Log.info "Worker %s monitoring daemon PID %d (parent-death watchdog, fenced=%b)"
-      sessionId daemonPid (Option.isSome workerConfig.DaemonStartTicks)
-    Async.Start(
-      SageFs.OwnerMonitor.run SageFs.OwnerMonitor.getProcessById owner cts (fun msg ->
-        Log.warn "%s" msg))
-  | None ->
-    Log.debug "Worker %s has no daemon PID — parent-death watchdog disabled" sessionId
+  // Worker lifetime is owned by the daemon, never decided by the worker.
+  // A worker that used to watch its daemon's pid and start time killed itself
+  // whenever the two disagreed — a stale fence reaped healthy sessions minutes
+  // after they finished loading. Orphan cleanup belongs to the daemon: it stops
+  // sessions through StopSession (graceful worker shutdown) when they are idle
+  // beyond Timeouts.abandonedSessionBound, and its startup sweep reclaims stale
+  // private roots. One owner, one decision, no identity to compare.
+  Log.debug "Worker %s leaves lifetime to its daemon (pid %A)" sessionId workerConfig.DaemonPid
 
   try
     // Start the HTTP server on the port reserved at startup (see reservePort)

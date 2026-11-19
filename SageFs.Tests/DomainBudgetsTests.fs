@@ -452,7 +452,7 @@ let counted : Lazy<Map<string, int>> =
 
 /// What each project may still carry. Ratchet down, never up. A key that is not here has a budget of zero.
 let budgets : (string * int) list =
-  [ "SageFs.Core: option fields", 154
+  [ "SageFs.Core: option fields", 153
     "SageFs.Core: bool fields", 52
     "SageFs.Core: wildcard over owned union", 248
     "SageFs.Core: with wildcard", 200

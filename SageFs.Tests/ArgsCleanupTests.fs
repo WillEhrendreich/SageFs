@@ -141,7 +141,6 @@ let projectLoadConfigTests =
         ]
         Workflow = SessionWorkflow.Interactive
         DaemonPid = None
-        DaemonStartTicks = None
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
       plc.Solutions
@@ -156,7 +155,6 @@ let projectLoadConfigTests =
         Targets = [ SageFs.SessionProjectTarget.Bare ]
         Workflow = SessionWorkflow.Interactive
         DaemonPid = None
-        DaemonStartTicks = None
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
       plc.Targets |> Expect.equal "bare target is retained" [ SageFs.SessionProjectTarget.Bare ]
@@ -183,6 +181,15 @@ let workerSpawnConfigTests =
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd
       |> Expect.equal "projects env" (Some "MyApp.fsproj")
+
+    testCase "WHY — a worker is never handed a start-time fence to decide whether its daemon is alive" <| fun () ->
+      let _, envVars = buildWorkerSpawnConfig "sess1" [ SageFs.SessionProjectTarget.Bare ] false true SessionWorkflow.Interactive
+      envVars
+      |> List.exists (fun (k, _) -> k = "SAGEFS_DAEMON_START_TICKS")
+      |> Expect.isFalse "no start-time identity crosses the spawn boundary; the daemon owns worker lifetime"
+      (typeof<Args.WorkerConfig>.GetProperties()
+       |> Array.exists (fun p -> p.Name = "DaemonStartTicks"))
+      |> Expect.isFalse "the worker config has no such field to parse"
 
     testCase "WHY — Args.resolveHostLaunch — Windows runs the native SageFs.Host.exe because users identify workers by that process name" <| fun () ->
       let daemonDir = Path.Combine(Path.GetTempPath(), "sagefs-daemon")
