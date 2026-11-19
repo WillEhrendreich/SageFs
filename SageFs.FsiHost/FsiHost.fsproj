@@ -34,7 +34,6 @@
 
   <ItemGroup>
       <!-- The agent (hot reload + live testing) that lives beside the user's code. Same source files SageFs.Core compiles. -->
-    <Compile Include="ParentDeath.fs" />
     <Compile Include="Measures.fs" />
     <Compile Include="Utils.fs" />
     <!-- FSI's own naming rules, mirrored from the compiler source. The host's

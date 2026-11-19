@@ -148,7 +148,6 @@
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />
-        <EmbeddedResource Include="ParentDeath.fs" LogicalName="FsiHost/ParentDeath.fs" />
         <EmbeddedResource Include="Measures.fs" LogicalName="FsiHost/Measures.fs" />
         <EmbeddedResource Include="Utils.fs" LogicalName="FsiHost/Utils.fs" />
         <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />
