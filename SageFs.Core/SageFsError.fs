@@ -358,7 +358,7 @@ module SageFsError =
     | SageFsError.NeedsRebuild missing ->
       sprintf "Session not created: generated build state is missing (%s)." (String.concat ", " missing)
     | SageFsError.DuplicateSession(existingId, dir) ->
-      sprintf "A session for this project already exists (session %s, working directory %s). Use switch_session to select it instead of creating a duplicate." existingId dir
+      sprintf "A session for this project already exists (session %s, working directory %s). Use switch_session to select it, or stop_session to remove it and create a fresh one." existingId dir
     | SageFsError.UnsafeSessionPath(path, reason) ->
       sprintf "Refused session path '%s': %s" path reason
     | SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason) ->
@@ -638,7 +638,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> "Specify a sessionId explicitly"
     | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
     | SageFsError.NeedsRebuild _ -> "Build the project, then retry creating the session"
-    | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session"
+    | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session, or stop_session to remove it and create a fresh one"
     | SageFsError.UnsafeSessionPath _ -> "Use an existing directory and keep project paths inside it — no UNC paths or '..' escapes"
     | SageFsError.ProjectFrameworkNotHostable _ -> "Point SageFs at a .NET (Core) project (net5.0 or newer) for now — .NET Framework support is not shipped yet, and the message names the issue tracking it"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
