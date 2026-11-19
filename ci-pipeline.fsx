@@ -1989,7 +1989,13 @@ let sagefsPipeline = pipeline "sagefs" {
           // stage). Concurrent with the other tiers, so it adds one slot's worth
           // of load, not its duration, to the wall clock.
           :: testTierOn TierPlan.Net10 "--summary"
-          :: [ for k in 1 .. hostShards -> testTier $"--integration-host --shard {k}/{hostShards} --summary" ]
+          // The host tier drives real daemons through time-dependent state: a landing reaching a
+          // terminal verdict, a rebuild moving Rebuilding then InSync, a debugger-held worker being
+          // released. Those are assertions about a daemon under a wall clock, the same class as the
+          // rendering and measuring tiers below: run beside other tiers the workers are starved and a
+          // different case fails every run (TrunkLanding, source-state gates, LT debug), each passing
+          // 3/3 alone. Admission, never a longer timeout.
+          :: [ for k in 1 .. hostShards -> testTierExclusive $"--integration-host --shard {k}/{hostShards} --summary" "asserting time-dependent daemon state" "while asserting time-dependent daemon state" ]
         let ciOnly =
           [ testTier "--mutation-score"
             // Every tier that drives a real browser gets the machine alone. The assertion is wall

@@ -150,6 +150,7 @@ let ciWiringTests =
            "the measurement and the rendering assertions are the only claims about the machine"
            [ "--integration-browser --summary"
              "--integration-disconnect --summary"
+             "--integration-host --shard {k}/{hostShards} --summary"
              "--integration-hr --summary"
              "--integration-hr-delta --summary"
              "--integration-hr-growth --summary"
