@@ -150,15 +150,7 @@ let tests =
         parts.[0] |> Expect.stringEnds "the installed global tool path" ".dotnet/tools/sagefs"
         let flags = parts |> Array.skip 1
         Expect.isNonEmpty "ExecStart passes at least one flag" flags
-        let original = Console.Out
-        use writer = new StringWriter()
-        Console.SetOut writer
-        let help =
-          try
-            Program.main [| "--help" |] |> ignore
-            writer.ToString()
-          finally
-            Console.SetOut original
+        let help = (TestInfrastructure.CliProcess.run [ "--help" ]).Out
         for flag in flags do
           help |> Expect.stringContains (sprintf "--help lists %s" flag) flag
       }

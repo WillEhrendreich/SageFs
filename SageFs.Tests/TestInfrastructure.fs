@@ -338,6 +338,31 @@ module SpawnEnvironment =
   let apply (psi: System.Diagnostics.ProcessStartInfo) : unit =
     SageFs.ProcessEnvironment.applyTo psi [ "DOTNET_ROOT", dotnetRoot ]
 
+/// The built CLI, run as a process.
+///
+/// `Program.main` cannot be called inside the test process: the CLI module has a top-level `do` block that
+/// establishes the process settings snapshot (saved settings plus this machine's tier) the first time anything in
+/// the module is touched, and `SettingsInForce.establish` is one-shot and process-global. A case that touched it left
+/// every later `MachineTier.current ()` answering this machine's tier while `Timeouts` had already been scaled for the
+/// tier the process started with (`Timeout scaling by machine tier` failed only in the full run). Running the binary
+/// also proves what a user runs: its argv, its exit code, its stderr.
+module CliProcess =
+  type Run = { ExitCode: int; Out: string; Err: string }
+
+  /// The build under test, started with `args`. `Process.Start` names the expected path when no build exists.
+  let run (args: string list) : Run =
+    let psi = System.Diagnostics.ProcessStartInfo(SageFsBinary.path ())
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    for arg in args do psi.ArgumentList.Add arg
+    SpawnEnvironment.apply psi
+    use proc = System.Diagnostics.Process.Start psi
+    let out = proc.StandardOutput.ReadToEndAsync()
+    let err = proc.StandardError.ReadToEndAsync()
+    proc.WaitForExit()
+    { ExitCode = proc.ExitCode; Out = out.Result; Err = err.Result }
+
 /// Work that a test puts a deadline on starts on a thread of its own, not on the pool.
 ///
 /// `Task.Run(work).WaitAsync(deadline)` starts the clock when the item is queued, and a queued item waits until a

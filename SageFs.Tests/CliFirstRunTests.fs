@@ -65,20 +65,20 @@ let unimplementedFlagDetectionTests =
   ]
 
 // ─────────────────────────────────────────────────────────────────────────
-// Program.unimplementedFlagRejection — pure decision Program.fs's Daemon
-// branch acts on (print + exit 2), tested without ever touching a daemon.
+// Args.UnimplementedFlag.rejection — the pure decision Program.fs's Daemon
+// branch acts on (print + exit 2), tested without ever touching the CLI module.
 // ─────────────────────────────────────────────────────────────────────────
 
 [<Tests>]
 let unimplementedFlagRejectionTests =
-  testList "Program.unimplementedFlagRejection" [
+  testList "Args.UnimplementedFlag.rejection" [
 
     testCase "no unimplemented flags means nothing blocks startup" <| fun () ->
-      Program.unimplementedFlagRejection [| "--mcp-port"; "47700" |]
+      Args.UnimplementedFlag.rejection [| "--mcp-port"; "47700" |]
       |> Expect.isEmpty "normal daemon args are never rejected"
 
     testCase "--proj is rejected with guidance naming the dashboard" <| fun () ->
-      let rejected = Program.unimplementedFlagRejection [| "--proj"; "Foo.fsproj" |]
+      let rejected = Args.UnimplementedFlag.rejection [| "--proj"; "Foo.fsproj" |]
       match rejected with
       | [ (flag, guidance) ] ->
         flag |> Expect.equal "flag identified" Args.UnimplementedFlag.Proj
@@ -87,78 +87,67 @@ let unimplementedFlagRejectionTests =
       | other -> failtestf "expected exactly one rejection, got %A" other
 
     testCase "--sln gets the same guidance shape as --proj" <| fun () ->
-      let projGuidance = Program.unimplementedFlagRejection [| "--proj"; "x" |] |> List.map snd
-      let slnGuidance = Program.unimplementedFlagRejection [| "--sln"; "x" |] |> List.map snd
+      let projGuidance = Args.UnimplementedFlag.rejection [| "--proj"; "x" |] |> List.map snd
+      let slnGuidance = Args.UnimplementedFlag.rejection [| "--sln"; "x" |] |> List.map snd
       slnGuidance |> Expect.equal "proj and sln share the same startup-project guidance" projGuidance
 
     testCase "--no-watch guidance says it has no effect rather than implying it works" <| fun () ->
-      match Program.unimplementedFlagRejection [| "--no-watch" |] with
+      match Args.UnimplementedFlag.rejection [| "--no-watch" |] with
       | [ (Args.UnimplementedFlag.NoWatch, guidance) ] ->
         guidance |> Expect.stringContains "guidance is honest about doing nothing" "does nothing"
       | other -> failtestf "expected exactly one no-watch rejection, got %A" other
 
     testCase "multiple unimplemented flags are all reported, not just the first" <| fun () ->
-      let rejected = Program.unimplementedFlagRejection [| "--proj"; "Foo.fsproj"; "--no-watch" |]
+      let rejected = Args.UnimplementedFlag.rejection [| "--proj"; "Foo.fsproj"; "--no-watch" |]
       rejected |> List.map fst
       |> Expect.equal "both flags surfaced" [Args.UnimplementedFlag.Proj; Args.UnimplementedFlag.NoWatch]
   ]
 
 // ─────────────────────────────────────────────────────────────────────────
-// main(): the Daemon branch refuses instead of starting when an
-// unimplemented flag is present. This never reaches decideDaemonLaunch /
-// DaemonState.readOnPort — it must exit before touching any daemon state,
-// so it is safe to call `Program.main` directly here.
+// main(): the Daemon branch refuses instead of starting when an unimplemented
+// flag is present, before it touches any daemon state.
+//
+// This runs the built binary rather than calling `Program.main` in this process.
+// The CLI module's top-level `do` block establishes the process settings
+// snapshot from this machine's profile the first time anything in the module is
+// touched, and that snapshot is one-shot and process-global: calling it here
+// would leave every later `MachineTier.current ()` answering this machine's tier
+// while `Timeouts` had been scaled for the tier the test process started with.
+// The binary is also exactly what a user runs, so the exit code and stderr are
+// the real ones.
 // ─────────────────────────────────────────────────────────────────────────
 
-let private runMain (args: string array) =
-  let origOut = Console.Out
-  let origErr = Console.Error
-  use outWriter = new StringWriter()
-  use errWriter = new StringWriter()
-  Console.SetOut(outWriter)
-  Console.SetError(errWriter)
-  try
-    let code = Program.main args
-    code, outWriter.ToString(), errWriter.ToString()
-  finally
-    Console.SetOut(origOut)
-    Console.SetError(origErr)
+let private runMain (args: string list) =
+  let run = TestInfrastructure.CliProcess.run args
+  run.ExitCode, run.Out, run.Err
 
 [<Tests>]
 let mainRejectsUnimplementedFlagsTests =
   testSequenced <| testList "main() refuses unimplemented daemon-startup flags" [
 
     testCase "sagefs --proj exits non-zero without starting a daemon" <| fun () ->
-      let code, _, stderr = runMain [| "--proj"; "Foo.fsproj" |]
+      let code, _, stderr = runMain [ "--proj"; "Foo.fsproj" ]
       Expect.isTrue "must exit non-zero" (code <> 0)
       stderr |> Expect.stringContains "stderr names the flag" "--proj"
 
     testCase "sagefs --sln exits non-zero without starting a daemon" <| fun () ->
-      let code, _, stderr = runMain [| "--sln"; "Foo.slnx" |]
+      let code, _, stderr = runMain [ "--sln"; "Foo.slnx" ]
       Expect.isTrue "must exit non-zero" (code <> 0)
       stderr |> Expect.stringContains "stderr names the flag" "--sln"
 
     testCase "sagefs --no-watch exits non-zero without starting a daemon" <| fun () ->
-      let code, _, stderr = runMain [| "--no-watch" |]
+      let code, _, stderr = runMain [ "--no-watch" ]
       Expect.isTrue "must exit non-zero" (code <> 0)
       stderr |> Expect.stringContains "stderr names the flag" "--no-watch"
 
     testCase "WHY — an unimplemented flag must never share the success exit code" <| fun () ->
-      let code, _, _ = runMain [| "--no-watch" |]
+      let code, _, _ = runMain [ "--no-watch" ]
       Expect.notEqual "0 means success; a refused request is not success" 0 code
 
-    // --help: documents its real exit codes, never advertises a flag it
-    // refuses. `--help` never touches daemon state (readOnPort, a port, a
-    // process) so it is safe to drive through `Program.main` directly, in
-    // process — no real SageFs.exe needs to be spawned to prove this. Used to
-    // be split: this file covered "what's new" and DaemonIntegrationTests.fs's
-    // live-process test separately pinned the legacy --proj/--sln absence.
-    // Folded back together here now that both assertions are equally provable
-    // in-process, so the live-process copy was retired.
-    // Kept in this same sequenced list because it also drives main() through
-    // the shared Console.Out/Error capture.
+    // --help documents its real exit codes and never advertises a flag it refuses. It runs the same built binary
+    // as the cases above, so the help text is the one a user sees.
     testCase "sagefs --help documents check and stop exit codes and gives a first-run next step" <| fun () ->
-      let code, stdout, _ = runMain [| "--help" |]
+      let code, stdout, _ = runMain [ "--help" ]
       Expect.equal "help exits 0" 0 code
       stdout |> Expect.stringContains "documents check's failing exit code" "1 = at least one check failed"
       stdout |> Expect.stringContains "documents stop's no-op exit code" "1 = there was nothing to stop"

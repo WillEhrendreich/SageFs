@@ -69,6 +69,24 @@ module UnimplementedFlag =
       if List.contains "--sln" args then UnimplementedFlag.Sln
       if List.contains "--no-watch" args then UnimplementedFlag.NoWatch ]
 
+  /// Human guidance for why a flag was refused, and what to do instead. CLI
+  /// presentation text, kept beside the closed set it explains: the refusal is
+  /// pure, and a test can reach it without loading the CLI module (whose
+  /// startup block installs this machine's settings snapshot into the process).
+  let guidance =
+    function
+    | UnimplementedFlag.Proj
+    | UnimplementedFlag.Sln ->
+      "The daemon no longer loads a project at startup — it always starts bare. Start `sagefs`, then create a session for your project from your editor, an MCP client, or the dashboard (http://localhost:37750/dashboard)."
+    | UnimplementedFlag.NoWatch ->
+      "File watching has no daemon-startup or session-creation control today — every worker is spawned with watching on, and no client (MCP, dashboard, editors) can request otherwise yet. This flag is accepted for recognition but does nothing."
+
+  /// `sagefs <unimplemented flags>` must refuse rather than silently start a
+  /// daemon that ignored what was asked of it. Pure: which flags block startup,
+  /// paired with the message to show for each.
+  let rejection (args: string array) : (UnimplementedFlag * string) list =
+    detectAll (Array.toList args) |> List.map (fun flag -> flag, guidance flag)
+
 /// What a worker process needs — comes entirely from env vars.
 /// Uses dependency rejection: pure core reads from a function,
 /// impure shell passes Environment.GetEnvironmentVariable.

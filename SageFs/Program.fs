@@ -301,26 +301,6 @@ module CliCommand =
         | false -> ShowHelp
       | _ -> Daemon args
 
-/// Human guidance for why an unimplemented daemon-startup flag was refused,
-/// and what to do instead. This is CLI presentation text, kept separate from
-/// `Args.UnimplementedFlag` (SageFs.Core), which only carries the closed set
-/// of flags and detects their presence.
-let private unimplementedFlagGuidance =
-  function
-  | Args.UnimplementedFlag.Proj
-  | Args.UnimplementedFlag.Sln ->
-    "The daemon no longer loads a project at startup — it always starts bare. Start `sagefs`, then create a session for your project from your editor, an MCP client, or the dashboard (http://localhost:37750/dashboard)."
-  | Args.UnimplementedFlag.NoWatch ->
-    "File watching has no daemon-startup or session-creation control today — every worker is spawned with watching on, and no client (MCP, dashboard, editors) can request otherwise yet. This flag is accepted for recognition but does nothing."
-
-/// `sagefs <unimplemented flags>` must refuse rather than silently start a
-/// daemon that ignored what was asked of it. Pure decision over the raw args:
-/// which unimplemented flags (if any) block startup, paired with the message
-/// to show for each.
-let unimplementedFlagRejection (args: string array) : (Args.UnimplementedFlag * string) list =
-  Args.UnimplementedFlag.detectAll (Array.toList args)
-  |> List.map (fun f -> f, unimplementedFlagGuidance f)
-
 /// Ownership rule 2 (multi-agent vision §3.1/§10 item 2): resolve
 /// `--owner-pid`/`--owner-start`/`--ttl` off the raw args, applying the
 /// nested-checkout default (a daemon started inside another checkout, with
@@ -1424,7 +1404,7 @@ let main args =
           0
 
   | Daemon _ ->
-    match unimplementedFlagRejection args with
+    match Args.UnimplementedFlag.rejection args with
     | (_ :: _) as rejected ->
       for (flag, guidance) in rejected do
         eprintfn "sagefs: %s is accepted for recognition but not implemented — refusing to start." (Args.UnimplementedFlag.text flag)
