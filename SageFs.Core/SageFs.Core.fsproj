@@ -39,6 +39,7 @@
         <Compile Include="SessionProjectTarget.fs" />
         <!-- Before Args: the daemon decides whether a worker is started for the delta route, and says so in its environment. -->
         <Compile Include="Features\MetadataDelta\MetadataDeltaFlag.fs" />
+        <Compile Include="ParentDeath.fs" />
         <Compile Include="Args.fs" />
         <Compile Include="OwnerMonitor.fs" />
         <Compile Include="McpResourceGate.fs" />
@@ -147,6 +148,7 @@
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />
+        <EmbeddedResource Include="ParentDeath.fs" LogicalName="FsiHost/ParentDeath.fs" />
         <EmbeddedResource Include="Measures.fs" LogicalName="FsiHost/Measures.fs" />
         <EmbeddedResource Include="Utils.fs" LogicalName="FsiHost/Utils.fs" />
         <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />

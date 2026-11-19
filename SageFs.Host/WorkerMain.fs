@@ -8,44 +8,6 @@ open SageFs.WorkerProtocol
 open SageFs.AppState
 open SageFs.WarmUp
 
-/// Parent-death monitor: workers self-exit when the daemon dies.
-/// When the daemon is killed hard (Task Manager, taskkill /F, crash, OS
-/// shutdown), no Shutdown message ever arrives — without this, worker
-/// processes become orphans that outlive the daemon (issue #126).
-///
-/// The pid-and-start-time-fenced decision core now lives in Core
-/// (`SageFs.OwnerMonitor`) so any owned process — worker, Run App child,
-/// `dotnet build`, or an externally-spawned daemon — can share it. This
-/// module is a thin, name-compatible wrapper kept for existing callers and
-/// tests that only ever had a bare pid (no fence, i.e. pid-reuse is NOT
-/// closed for these entry points — see the real worker usage below, which
-/// builds a fenced `OwnerMonitor.Owner` directly and does not go through
-/// this wrapper).
-module ParentMonitor =
-  /// Decide whether the given daemon PID is still alive (pid-only, no
-  /// start-time fence — see `SageFs.OwnerMonitor.isAlive` for the fenced
-  /// version used by the real watchdog below).
-  let isDaemonAlive (getProcessById: int -> System.Diagnostics.Process option) (daemonPid: int) : bool =
-    SageFs.OwnerMonitor.isAlive getProcessById (SageFs.OwnerMonitor.Owner.ofPid daemonPid)
-
-  /// Poll interval between daemon liveness checks.
-  let pollIntervalMs = SageFs.OwnerMonitor.pollIntervalMs
-
-  /// Run the monitor loop (pid-only fence). Cancels the provided CTS when
-  /// the daemon dies, which unwinds the worker's main wait (tcs in
-  /// WorkerMain.run) and shuts down the HTTP server, file watcher, and actor.
-  let run
-    (getProcessById: int -> System.Diagnostics.Process option)
-    (daemonPid: int)
-    (cts: CancellationTokenSource)
-    (log: string -> unit)
-    : Async<unit> =
-    SageFs.OwnerMonitor.run getProcessById (SageFs.OwnerMonitor.Owner.ofPid daemonPid) cts log
-
-  /// Real process lookup for production use.
-  let getProcessById (pid: int) : System.Diagnostics.Process option =
-    SageFs.OwnerMonitor.getProcessById pid
-
 /// The version of SageFs.Core THIS WORKER PROCESS has loaded, reflected from
 /// inside the process that actually loaded it — not the daemon's. Computed
 /// once: the assembly a running process has loaded cannot change under it.
@@ -639,6 +601,12 @@ let private reservePort (requested: int) : PortReservation =
 /// Run the worker process: create actor, start HTTP server, handle messages.
 let run (sessionId: string) (requestedPort: int) = async {
   enableStdoutAutoFlush ()
+  // The daemon owns this worker's lifetime. If the daemon is SIGKILLed it
+  // cannot send a shutdown, so the kernel has to close the gap: arm
+  // PR_SET_PDEATHSIG before starting the listener. No liveness decision is
+  // made here; the OS kills us when our parent dies.
+  if not (SageFs.ParentDeath.arm ()) then
+    failwith "could not arm the parent-death signal; refusing to run an unowned worker"
   let reservation = reservePort requestedPort
   let port = reservation.Port
   let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port

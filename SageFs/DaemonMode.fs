@@ -5321,8 +5321,8 @@ let run
     // Belt-and-suspenders for issue #126: if the process is exiting through a
     // path that skipped the graceful StopAll (e.g. Environment.Exit elsewhere,
     // taskkill without /F), sweep worker PIDs so they don't become orphans.
-    // The worker-side parent-death watchdog (WorkerMain.ParentMonitor) is the
-    // primary defense for hard kills that skip ProcessExit entirely.
+    // For a hard kill that skips ProcessExit entirely, the worker and FSI host
+    // carry PR_SET_PDEATHSIG, so the kernel ends them with this daemon.
     readSnapshot()
     |> SessionManager.QuerySnapshot.allSessions
     |> List.choose (fun session -> WorkerProtocol.SessionLifecycleStatus.workerPid session.Status)

@@ -485,8 +485,7 @@ let private run (fsiArgs: string list) : int =
 [<Literal>]
 let private ArgsFileExitCode = 4
 
-[<EntryPoint>]
-let main argv =
+let private runMain argv =
   let commandLine = FsiHostCommandLine.parse argv
   // First, before anything reads `Timeouts`, `DevReloadMode` or `EditorLink`: the settings the worker runs on.
   match commandLine with
@@ -514,3 +513,14 @@ let main argv =
   | Result.Ok(), Result.Error NotAnArgsFileCommand ->
     eprintfn "usage: FsiHost --args-file <path> [--settings <snapshot>]"
     2
+
+/// The worker owns this host's lifetime, and the daemon owns the worker's.
+/// If either parent is SIGKILLed it cannot send a shutdown, so ask the kernel
+/// to end this process with it. No liveness decision is made here.
+[<EntryPoint>]
+let main argv =
+  if not (SageFs.ParentDeath.arm ()) then
+    eprintfn "fsihost: could not arm the parent-death signal; refusing to run an unowned host"
+    4
+  else
+    runMain argv

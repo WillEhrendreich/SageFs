@@ -18,6 +18,7 @@ open SageFs.ProcessEnvironment
 /// The files that make up the host project, in the order they are written.
 let hostSourceNames =
   [ "FsiHost.fsproj"
+    "ParentDeath.fs"
     "Measures.fs"
     "Utils.fs"
     "FsiNaming.fs"
