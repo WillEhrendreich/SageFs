@@ -249,8 +249,13 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
   //    only redirects the daemon's output to the log; it does no scripting. The daemon starts in markDir and not in
   //    the repo: the ship runs from a throwaway worktree, and a daemon that keeps a removed worktree as its working
   //    directory can no longer start `dotnet build` (a hard reset with rebuild fails with a misleading PATH message).
+  //    The log is a SIBLING of markDir, never a child: the daemon watches its working directory for live testing, so a
+  //    log written inside it feeds every line back as a file-save event (observed 2026-11-19: 5.7 GB in 56 minutes,
+  //    with no sessions open).
   say "starting the new daemon"
-  let log = Path.Combine(markDir, sprintf "daemon-%s.log" short)
+  let logDir = markDir + "-logs"
+  Directory.CreateDirectory logDir |> ignore
+  let log = Path.Combine(logDir, sprintf "daemon-%s.log" short)
   run "setsid" [ "--fork"; "sh"; "-c"; sprintf "exec sagefs --no-resume > '%s' 2>&1 < /dev/null" log ] markDir |> ignore
   if not (waitUntil daemonStartTimeout daemonUp) then fail (NewDaemonNotUp log)
 
