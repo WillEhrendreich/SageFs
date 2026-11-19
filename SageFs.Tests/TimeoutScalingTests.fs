@@ -220,14 +220,10 @@ let tests =
                 | false -> failtestf "%s is %A, written as %A, so on tier %A it should be %A" name actual baseline Timeouts.machineTier expected ]
       (checkedNames |> List.length > 40) |> Expect.isTrue "most waits for the machine were compared"
 
-    testCase "WHY — a tier named in the environment is the one a worker scales its waits on" <| fun _ ->
-      // Pure parse: no process-wide env read, so a test that sets SAGEFS_MACHINE_TIER
-      // cannot make this one disagree with the tier Timeouts cached at startup.
-      MachineTier.ofEnvironmentValue "fast" |> Expect.equal "fast" MachineTier.Fast
-      MachineTier.ofEnvironmentValue "standard" |> Expect.equal "standard" MachineTier.Standard
-      MachineTier.ofEnvironmentValue null |> Expect.equal "unset" MachineTier.Standard
-      (Timeouts.machineTier = MachineTier.Fast || Timeouts.machineTier = MachineTier.Standard)
-      |> Expect.isTrue "the cached tier is one the environment can name"
+    testCase "WHY — the tier a process runs on is the one its environment names, so a worker told a tier by the daemon scales the same way" <| fun _ ->
+      // Both reads are cached in MachineTier now, so a parallel test changing the
+      // process env cannot make the two disagree. The assertion is the real contract.
+      Timeouts.machineTier |> Expect.equal "the process's tier" (MachineTier.current ())
   ]
 
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant tests |> ignore

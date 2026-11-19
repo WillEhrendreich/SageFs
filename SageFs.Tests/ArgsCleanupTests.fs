@@ -176,10 +176,13 @@ let workerSpawnConfigTests =
       |> Expect.isFalse "no --proj in args"
       (args.Contains "--session-id")
       |> Expect.isFalse "host takes positional args, not --session-id"
-      // A settings snapshot may be appended after the port, so assert the
-      // positional argument itself instead of the end of the whole string.
-      (args.Split ' ').[1]
-      |> Expect.equal "host takes positional httpPort (0 = ephemeral)" "0"
+      // Assert the parsed command line, not a position in a string an appended
+      // settings snapshot can move.
+      match WorkerCommandLine.parse (args.Split ' ') with
+      | Error e -> failtestf "worker command line parsed: %A" e
+      | Ok line ->
+        line.HttpPort |> Expect.equal "host takes positional httpPort (0 = ephemeral)" 0
+        line.SessionId |> Expect.equal "session id is positional" "sess1"
       envVars
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd

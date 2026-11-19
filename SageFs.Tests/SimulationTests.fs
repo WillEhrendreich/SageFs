@@ -221,7 +221,9 @@ let tests =
 /// The tier a process started with `SAGEFS_MACHINE_TIER=<tier>` works out, read through the same
 /// parser the product uses and the test suite's own environment isolation.
 let tierFromEnvironment (tier: MachineTier) : MachineTier =
-  TestInfrastructure.withEnvVar MachineTier.envVar (Some (MachineTier.toString tier)) MachineTier.current
+  // Pure parse, not MachineTier.current: current is cached for the process, so a
+  // withEnvVar helper that changes the process env cannot change it (by design).
+  MachineTier.ofEnvironmentValue (MachineTier.toString tier)
 
 /// `policy` as a machine of `tier` would have built it: every duration a wait for the machine, scaled
 /// the way `Timeouts` scales one (`RestartPolicy.defaultPolicy` does this to its startup-crash window).

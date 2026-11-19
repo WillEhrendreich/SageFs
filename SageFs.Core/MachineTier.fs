@@ -101,5 +101,8 @@ module MachineTier =
       | Error _ -> MachineTier.Fast
 
   /// The tier in force for this process: the daemon's snapshot, else the environment (`SettingsInForce.read`).
-  let current () : MachineTier =
-    ofEnvironmentValue (SettingsInForce.read envVar)
+  /// Read once. A process has one tier; a second read that can see a different value is a second source of
+  /// truth, and `Timeouts.machineTier` (read at module init) would disagree with it after any env change.
+  let private inForce = lazy (ofEnvironmentValue (SettingsInForce.read envVar))
+
+  let current () : MachineTier = inForce.Value
