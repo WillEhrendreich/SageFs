@@ -176,7 +176,10 @@ let workerSpawnConfigTests =
       |> Expect.isFalse "no --proj in args"
       (args.Contains "--session-id")
       |> Expect.isFalse "host takes positional args, not --session-id"
-      args |> Expect.stringEnds "host takes positional httpPort (0 = ephemeral)" "0"
+      // A settings snapshot may be appended after the port, so assert the
+      // positional argument itself instead of the end of the whole string.
+      (args.Split ' ').[1]
+      |> Expect.equal "host takes positional httpPort (0 = ephemeral)" "0"
       envVars
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd
