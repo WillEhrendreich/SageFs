@@ -18,11 +18,18 @@ open SageFs.Server
 // `Timeouts`: hence `DataDirChoice.dataDirectory`, a function that touches neither.) Help and version read nothing and wait for nothing, so they skip it,
 // and its probe.
 do
+  let args = Environment.GetCommandLineArgs() |> Array.skip 1
   let asksForNothing =
-    Environment.GetCommandLineArgs()
-    |> Array.skip 1
-    |> Array.exists (fun a -> a = "--help" || a = "-h" || a = "--version" || a = "-v")
-  match asksForNothing with
+    args |> Array.exists (fun a -> a = "--help" || a = "-h" || a = "--version" || a = "-v")
+  // The startup block belongs to the CLI process, not to any process that happens to load this assembly. In a test
+  // host it would install this machine's profile and saved settings as that process's settings snapshot, after
+  // `Timeouts` had already been read: the waits in force scaled for one tier, `MachineTier.current ()` answering
+  // another. `SettingsInForce.establish` is one-shot and process-global, so that cannot be undone afterwards.
+  let isTheCli =
+    match Assembly.GetEntryAssembly() with
+    | null -> false
+    | entry -> entry.GetName().Name = "SageFs"
+  match asksForNothing || not isTheCli with
   | true -> ()
   | false ->
     // What the Settings page saved is resolved against the environment (a person's variable wins), before the tier
