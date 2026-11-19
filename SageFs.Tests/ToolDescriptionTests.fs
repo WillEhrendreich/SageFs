@@ -58,6 +58,7 @@ let describedToolMethods =
 /// so the reflected schema matches what handlers actually accept.
 let requiredParamsByTool =
   [ "send_fsharp_code", set ["agentName"; "code"]
+    "write_back", set ["agentName"; "code"; "file_path"; "block_start_line"]
     "check_fsharp_code", set ["code"]
     "create_project_session", set ["project"; "working_directory"]
     "create_solution_session", set ["solution"; "working_directory"]
@@ -263,7 +264,7 @@ let descriptionPropertyTests =
       // + list_references: the rung below it, whose reply states its scope first.
       // + seat_conductor: a seated member asks, and a person's yes fills an empty conductor seat.
       // + profile: run F# under a recording of the session's host and report where the CPU time went.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 74
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 75
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

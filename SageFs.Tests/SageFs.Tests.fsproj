@@ -351,6 +351,7 @@
         <Compile Include="ReferenceCacheSimTests.fs" />
         <Compile Include="SessionReaperSimTests.fs" />
         <Compile Include="StopOffLoopSimTests.fs" />
+        <Compile Include="WriteBackSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
         <Compile Include="ConfirmationGateSimTests.fs" />
         <Compile Include="TweakerVersusProgramSimTests.fs" />
@@ -1013,6 +1014,9 @@
         <Compile Include="FrictionSendSafetyTests.fs" />
         <Compile Include="IntegrationRegistryTests.fs" />
         <Compile Include="RatchetRegistryTests.fs" />
+        <Compile Include="WriteBackPlanSimTests.fs" />
+        <Compile Include="WriteBackPlanTests.fs" />
+        <Compile Include="WriteBackRequestTests.fs" />
         <Compile Include="EvalWriteBackTests.fs" />
         <!-- Before the browser runner, which lists the journeys this file adds. -->
         <Compile Include="DashboardPanelVisibilityTests.fs" />

@@ -240,6 +240,18 @@ let showInlineResult (editor: TextEditor) (text: string) (durationMs: float opti
     blockDecorations <- Map.add line deco blockDecorations
     autoClearAfter line
 
+/// A small verdict marker after the declaration that was evaluated for a write.
+/// Two states, one glyph each, and the daemon's own sentence on hover. It is
+/// deliberately quiet: the eval result already says what the code produced;
+/// this only answers "did my source change?".
+let showWriteBackVerdict (editor: TextEditor) (verdict: string) (atLine: int) : unit =
+  let written = verdict.StartsWith("written back to", System.StringComparison.Ordinal)
+  let glyph = if written then "  ✓ persisted" else "  ⊘ not persisted"
+  let color = if written then "sagefs.successForeground" else "sagefs.warningForeground"
+  let lineText = editor.document.lineAt(float atLine).text
+  let deco, rangeWithHover = ghostTextDeco atLine lineText.Length color glyph verdict
+  editor.setDecorations(deco, ResizeArray [| box rangeWithHover |])
+
 // ── Binding value decorations (persistent, from bindings_snapshot) ────────
 
 /// Show binding values as persistent inline ghost text at their source lines.

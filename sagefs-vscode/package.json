@@ -48,6 +48,14 @@
         "icon": "$(play)"
       },
       {
+        "command": "sagefs.writeBack",
+        "title": "SageFs: Write Back Declaration to Source"
+      },
+      {
+        "command": "sagefs.planWriteBack",
+        "title": "SageFs: Choose Which Declarations to Write Back"
+      },
+      {
         "command": "sagefs.evalFile",
         "title": "SageFs: Evaluate Entire File"
       },
@@ -762,6 +770,15 @@
           "dark": "#f38ba8",
           "light": "#d20042",
           "highContrast": "#ff0000"
+        }
+      },
+      {
+        "id": "sagefs.warningForeground",
+        "description": "Foreground color for a write-back that was not persisted",
+        "defaults": {
+          "dark": "#f9e2af",
+          "light": "#df8e1d",
+          "highContrast": "#ffff00"
         }
       },
       {

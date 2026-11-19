@@ -1556,6 +1556,99 @@ let evalSelection (anchor: EvalAnchor) =
         )
   }
 
+/// Evaluate the declaration under the caret and write it back to its source.
+/// The daemon's verdict is a field on /exec, so the inline marker says exactly
+/// whether the file changed without scraping text.
+let writeBackSelection () =
+  promise {
+    match Window.getActiveTextEditor () with
+    | None ->
+      let! _ = Window.showWarningMessage "Open an F# file first." [||]
+      ()
+    | Some ed ->
+      let! ok = ensureEvalReady ()
+      match ok, codeForAnchor ed EvalAnchor.AtCursor with
+      | false, _ | _, None -> ()
+      | true, Some (code, blockStart, blockEnd) ->
+        let out = getOutput ()
+        do! Window.withProgress ProgressLocation.Window "SageFs: writing back..." (fun _ _ ->
+          promise {
+            match client, activeSessionId, activeSessionWorkingDirectory with
+            | Some c, Some sid, Some wd ->
+              let! answer = Client.evalCodeWithVerdict sid code wd ed.document.fileName (blockStart + 1) c
+              match answer with
+              | Result.Error msg ->
+                out.appendLine (sprintf "write back refused: %s" msg)
+                out.show true
+              | Result.Ok reply ->
+                out.appendLine (sprintf "write back: %s" reply.WriteBack)
+                if reply.WriteBack <> "" then
+                  InlineDeco.showWriteBackVerdict ed reply.WriteBack blockEnd
+                if reply.Result <> "" then out.appendLine reply.Result
+            | _ ->
+              out.appendLine "write back needs an active session with a working directory."
+              out.show true
+          })
+  }
+
+/// Show the chunks a submission would write and let the caller choose which
+/// ones land. Each accepted chunk is applied through /exec with its own source
+/// line, so the same journaled one-declaration door is the only write path.
+let planWriteBackSelection () =
+  promise {
+    match Window.getActiveTextEditor () with
+    | None ->
+      let! _ = Window.showWarningMessage "Open an F# file first." [||]
+      ()
+    | Some ed ->
+      let! ok = ensureEvalReady ()
+      match ok, codeForAnchor ed EvalAnchor.AtCursor with
+      | false, _ | _, None -> ()
+      | true, Some (code, _, _) ->
+        match client, activeSessionId, activeSessionWorkingDirectory with
+        | Some c, Some sid, Some wd ->
+          let out = getOutput ()
+          let! plan = Client.planWriteBack sid code wd ed.document.fileName c
+          match plan with
+          | Result.Error msg ->
+            out.appendLine (sprintf "write-back plan refused: %s" msg)
+            out.show true
+          | Result.Ok parsed ->
+            let chunks = fieldArray "chunks" parsed |> Option.defaultValue [||]
+            if Array.isEmpty chunks then
+              let! _ = Window.showInformationMessage "No declarations in this block can be written back." [||]
+              ()
+            else
+              let items =
+                chunks
+                |> Array.map (fun ch ->
+                  let name = fieldString "name" ch |> Option.defaultValue "?"
+                  let line = fieldInt "startLine" ch |> Option.defaultValue 0
+                  let status = fieldString "status" ch |> Option.defaultValue ""
+                  createObj [ "label" ==> name
+                              "description" ==> (sprintf "line %d" line)
+                              "detail" ==> status ])
+              let! picked = Window.showQuickPickMany items "Choose the declarations to write back"
+              match picked with
+              | None -> ()
+              | Some names ->
+                for ch in chunks do
+                  let name = fieldString "name" ch |> Option.defaultValue "?"
+                  if names |> Array.contains name then
+                    let replacement = fieldString "replacement" ch |> Option.defaultValue ""
+                    let line = fieldInt "startLine" ch |> Option.defaultValue 0
+                    let! answer = Client.evalCodeWithVerdict sid replacement wd ed.document.fileName line c
+                    match answer with
+                    | Result.Error msg -> out.appendLine (sprintf "%s: %s" name msg)
+                    | Result.Ok reply ->
+                      out.appendLine (sprintf "%s: %s" name reply.WriteBack)
+                      if reply.WriteBack <> "" then InlineDeco.showWriteBackVerdict ed reply.WriteBack (line - 1)
+                out.show true
+        | _ ->
+          let! _ = Window.showWarningMessage "Write-back needs an active session with a working directory." [||]
+          ()
+  }
+
 let evalFile () =
   promise {
     match Window.getActiveTextEditor () with
@@ -2708,6 +2801,8 @@ let activate (context: ExtensionContext) =
   // The argument is the CodeLens's block start line. Discarding it is what
   // made "▶ Eval" above one block evaluate a different one.
   reg "sagefs.eval" (fun args -> evalSelection (evalAnchorOfArgs args) |> promiseIgnoreLog logToOutput)
+  reg "sagefs.writeBack" (fun _ -> writeBackSelection () |> promiseIgnoreLog logToOutput)
+  reg "sagefs.planWriteBack" (fun _ -> planWriteBackSelection () |> promiseIgnoreLog logToOutput)
   reg "sagefs.evalFile" (fun _ -> evalFile () |> promiseIgnoreLog logToOutput)
   reg "sagefs.evalRange" (fun args -> evalRange args |> promiseIgnoreLog logToOutput)
   reg "sagefs.evalAdvance" (fun _ -> evalAdvance () |> promiseIgnoreLog logToOutput)

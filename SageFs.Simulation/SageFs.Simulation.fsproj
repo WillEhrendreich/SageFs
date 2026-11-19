@@ -176,6 +176,8 @@
         <Compile Include="TrunkFollowSim.fs" />
         <Compile Include="TrunkFollowInvariants.fs" />
         <Compile Include="TrunkFollowGenerators.fs" />
+        <Compile Include="WriteBackPlanSim.fs" />
+        <Compile Include="WriteBackSim.fs" />
         <Compile Include="BuildConfirmationSim.fs" />
         <Compile Include="BuildConfirmationInvariants.fs" />
         <Compile Include="BuildConfirmationGenerators.fs" />

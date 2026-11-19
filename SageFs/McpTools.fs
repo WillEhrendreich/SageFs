@@ -802,7 +802,7 @@ RETURN VALUE:
 - Use get_recent_fsi_events afterward to see the full event log if the return value is ambiguous.
 
 WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your compiler and runtime.""")>]
-    member _.send_fsharp_code(
+    member this.send_fsharp_code(
         [<Description(AgentNameIdentifyParam)>]
         agentName: string,
         code: string,
@@ -890,6 +890,53 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
             logger.LogWarning(ex, "send_fsharp_code: could not attach structuredContent; text result still returned")
           return result
         }
+
+    [<Description("""Evaluate one declaration in the live session and write it back to the source file it came from.
+
+This is the way to change a declaration in source through SageFs. It runs your code in the loaded session first, and only a successful eval that matches the declaration at block_start_line is spliced back into the file. run_app and the next build see the change. The journal covers it, so nudge_value with action=undo and the same file puts the old text back.
+
+Pass both file_path and block_start_line. They are required; a call without them is refused without evaluating anything. The code must be exactly one let value or let function with the same name as the declaration at that line. A type, a nested module, an open, a bare expression or several declarations is refused.
+
+The result carries writeBack: either 'written back to <file>:<line>' or 'not persisted: <reason>'. Read it before assuming the file changed. If the eval succeeded but the write did not, the reason says which guard refused and what to change.""")>]
+    [<McpServerTool>]
+    member this.write_back(
+        [<Description(AgentNameIdentifyParam)>]
+        agentName: string,
+        [<Description("The replacement declaration, as F# source. One let binding; no type, module, open or trailing expression.")>]
+        code: string,
+        [<Description("Source file this declaration was read from. Required; nothing is written without it.")>]
+        file_path: string,
+        [<Description("1-based line the declaration starts at in that file. Required; 0 is refused.")>]
+        block_start_line: int,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string,
+        [<Description("Seconds allowed (default 120, at most 600), then the eval is cancelled.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        timeout_seconds: int
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+      let request =
+        { SageFs.Features.Tweak.WriteBackRequest.Request.Code = code
+          SageFs.Features.Tweak.WriteBackRequest.Request.FilePath = file_path
+          SageFs.Features.Tweak.WriteBackRequest.Request.BlockStartLine = block_start_line }
+      task {
+        match SageFs.Features.Tweak.WriteBackRequest.plan request with
+        | Error refusal ->
+          // The pure core refused before IO. No eval, no session history, no
+          // file touched: the edge only renders the typed reason.
+          let result = ModelContextProtocol.Protocol.CallToolResult()
+          result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = SageFs.Features.Tweak.WriteBackRequest.Refusal.describe refusal))
+          result.IsError <- System.Nullable true
+          return result
+        | Ok plan ->
+          // One write-back implementation: the same eval, the same guards and
+          // the same journal as send_fsharp_code with a file and a block. Only
+          // the entry point is named for what the caller wants to do.
+          return! this.send_fsharp_code(agentName, plan.Code, working_directory, plan.FilePath, "block", plan.BlockStartLine, "write_back", session_id, timeout_seconds)
+      }
 
     [<Description("""Load and execute an F# script file (.fsx). The file is parsed into individual statements and each statement is sent to the FSI session separately, so partial progress is preserved if one statement fails.
 

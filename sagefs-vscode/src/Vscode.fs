@@ -318,6 +318,14 @@ module Window =
   let showQuickPick (items: string array) (placeHolder: string) =
     _showQuickPick windowExports items (createObj [ "placeHolder" ==> placeHolder ])
 
+  /// Multi-select QuickPickItem pick. Returns the labels of the picked items;
+  /// "none" means dismissed. The label is the chunk id in the write-back picker.
+  [<Emit("$0.showQuickPick($1, $2).then(ps => ps === undefined ? undefined : ps.map(p => p.label))")>]
+  let _showQuickPickMany (w: obj) (items: obj array) (opts: obj) : JS.Promise<string array option> = jsNative
+  let showQuickPickMany (items: obj array) (placeHolder: string) =
+    _showQuickPickMany windowExports items
+      (createObj [ "placeHolder" ==> placeHolder; "canPickMany" ==> true; "matchOnDetail" ==> true ])
+
   /// QuickPickItem-shaped pick. A string-array pick cannot carry a right-hand
   /// `description` or a `detail` line, so it cannot say which option you are
   /// already in — which is how "Switch Workflow" shipped with no current-state

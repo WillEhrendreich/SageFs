@@ -73,6 +73,7 @@ let availableTools (state: SessionState) : string list =
       "discover_features" ]
   | Ready ->
     [ "send_fsharp_code"
+      "write_back"
       "profile"
       "get_session_status"
       "get_recent_fsi_events"
@@ -260,6 +261,7 @@ let private gatingDomain : Map<string, ToolGate> =
     // State-gated tools — availability derives from availableTools for the
     // session's current lifecycle state.
     "send_fsharp_code", ToolGate.StateGated
+    "write_back", ToolGate.StateGated
     "profile", ToolGate.StateGated
     "get_recent_fsi_events", ToolGate.StateGated
     "check_fsharp_code", ToolGate.StateGated
@@ -665,6 +667,8 @@ type ToolName =
   | CancelEval
   // Evaluation. `send_fsharp_code` is arbitrary code as the daemon's OS user.
   | SendFsharpCode
+  /// The edit door: evaluate a declaration in the session, then splice it into its source file.
+  | WriteBack
   /// `profile` runs the same arbitrary code, so it is an eval tool.
   | Profile
   | ManageScratchPad
@@ -755,6 +759,7 @@ module ToolName =
     | ToolName.StopSession -> "stop_session"
     | ToolName.CancelEval -> "cancel_eval"
     | ToolName.SendFsharpCode -> "send_fsharp_code"
+    | ToolName.WriteBack -> "write_back"
     | ToolName.Profile -> "profile"
     | ToolName.ManageScratchPad -> "manage_scratch_pad"
     | ToolName.CheckFsharpCode -> "check_fsharp_code"
@@ -831,6 +836,7 @@ module ToolName =
       ToolName.StopSession
       ToolName.CancelEval
       ToolName.SendFsharpCode
+      ToolName.WriteBack
       ToolName.Profile
       ToolName.ManageScratchPad
       ToolName.CheckFsharpCode

@@ -35,7 +35,10 @@ module EndpointContracts =
   /// against their minimum required version to detect incompatibility.
   /// 4: `GET /api/dependency-graph` answers for one session (a `session` parameter, a `State` in the reply, and a 400
   /// when several sessions are open and none is named).
-  let apiVersion = 4
+  /// 5: `POST /exec` carries `writeBack` as a field, so an editor can say whether the file changed without
+  /// reading a verdict out of the result text. A `plan=true` request on the same route returns the
+  /// chunks a submission would write, for editor pickers, without evaluating or writing anything.
+  let apiVersion = 5
 
   /// All daemon endpoints grouped by category.
   let coreEndpoints = [

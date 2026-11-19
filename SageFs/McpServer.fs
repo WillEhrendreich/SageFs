@@ -2753,26 +2753,62 @@ let respondWithResult (ctx: Microsoft.AspNetCore.Http.HttpContext) (result: Resu
 }
 
 let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
-  app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+  // The planning half of a granular write-back, reached through /exec with
+  // plan=true. No new route, so the edge-access budget does not grow and there
+  // is still exactly one write door: a chosen chunk is applied by a second
+  // /exec call carrying its own replacement and source line.
+  let planWriteBackResponse
+    (ctx: Microsoft.AspNetCore.Http.HttpContext)
+    (code: string) (file: string) (wd: string option) (sid: string option) : Task<unit> =
     task {
-      use! json = readJsonBody ctx
-      let code = json.RootElement.GetProperty("code").GetString()
-      let wd =
-        match json.RootElement.TryGetProperty("working_directory") with
-        | true, prop -> Some (prop.GetString())
-        | false, _ -> None
-      let filePath =
-        match json.RootElement.TryGetProperty("file_path") with
-        | true, prop -> Some (prop.GetString())
-        | false, _ -> None
-      let evalMode =
-        match json.RootElement.TryGetProperty("eval_mode") with
-        | true, prop -> Some (prop.GetString())
-        | false, _ -> None
-      let blockStartLine =
-        match json.RootElement.TryGetProperty("block_start_line") with
-        | true, prop -> Some (prop.GetInt32())
-        | false, _ -> None
+      match! resolveMutatingRouteSession rctx sid with
+      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      | Ok sessionId ->
+        match! SageFs.McpNudge.ownedFilesOf rctx.McpContext (Some sessionId) wd with
+        | Error refusal ->
+          do! jsonResponse ctx 400
+                {| success = false; error = sprintf "%A" refusal |}
+        | Ok owned ->
+          let normalized = System.IO.Path.GetFullPath file
+          match owned.Paths |> Seq.tryFind (fun p -> System.String.Equals(System.IO.Path.GetFullPath p, normalized, System.StringComparison.Ordinal)) with
+          | None ->
+            do! jsonResponse ctx 400
+                  {| success = false; error = sprintf "%s is not a source file of any project this session owns" file |}
+          | Some path ->
+            match System.IO.File.ReadAllText path with
+            | source ->
+              match SageFs.Features.Tweak.WriteBackPlan.plan
+                      { SageFs.Features.Tweak.WriteBackPlan.PlanRequest.Code = code
+                        SageFs.Features.Tweak.WriteBackPlan.PlanRequest.File = path
+                        SageFs.Features.Tweak.WriteBackPlan.PlanRequest.Source = source } with
+              | Error refusal ->
+                do! jsonResponse ctx 400
+                      {| success = false; error = SageFs.Features.Tweak.WriteBackPlan.Refusal.describe refusal |}
+              | Ok plan ->
+                let chunks =
+                  plan.Chunks
+                  |> List.map (fun c ->
+                    {| id = c.Id
+                       name = c.Name
+                       file = c.File
+                       startLine = c.StartLine
+                       endLine = c.EndLine
+                       dependsOn = c.DependsOn
+                       replacement = c.Replacement
+                       status = match c.Status with
+                                | SageFs.Features.Tweak.WriteBackPlan.ChunkStatus.Ready -> "ready"
+                                | SageFs.Features.Tweak.WriteBackPlan.ChunkStatus.NeedsDependency ns -> "needs: " + String.concat ", " ns
+                                | SageFs.Features.Tweak.WriteBackPlan.ChunkStatus.Refused reason -> "refused: " + reason |})
+                do! jsonResponse ctx 200 {| success = true; plan = true; chunks = chunks |}
+    }
+  // Evaluate a submission and write the structured verdict back. Kept as its
+  // own function so /exec can dispatch to this or to the plan response without
+  // duplicating the read of the request body.
+  let evalResponse
+    (ctx: Microsoft.AspNetCore.Http.HttpContext)
+    (code: string) (wd: string option) (filePath: string option)
+    (evalMode: string option) (blockStartLine: int option) : Task<unit> =
+    task {
       // Notify editor plugins that eval is starting so they can mark decorations stale
       let sid = SseContext.activeSessionId rctx.SseContext
       let evalFp, evalBsl =
@@ -2802,7 +2838,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
                   rctx.SseContext.TestEventBroadcast.Trigger(SseFrame.ofSession sid hbStr)
             with :? System.OperationCanceledException -> ()
           } :> System.Threading.Tasks.Task))
-      let! result, outcome, _diags, _lastError, _, _ = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Editor None wd filePath evalMode blockStartLine None (SageFs.EvalLimit.Asked SageFs.Timeouts.evalCallCap)
+      let! result, outcome, _diags, _lastError, _, writeBack = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Editor None wd filePath evalMode blockStartLine None (SageFs.EvalLimit.Asked SageFs.Timeouts.evalCallCap)
       sw.Stop()
       heartbeatCts.Cancel()
       let! _ = heartbeatTask
@@ -2833,24 +2869,53 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       | _ -> ()
       // Truthful contract: success reflects the typed worker outcome (an eval
       // that failed to compile/run has success=false), never string sniffing.
-      // HTTP stays 200 for a request that WAS processed — the result text is
-      // for the client to display; editors treat non-2xx as transport
-      // failure. The failure body also carries `error` so standard
-      // { success, error } client parsers surface the diagnostic instead of
-      // "Unknown error". A request that never ran at all — the session
-      // couldn't be routed to, or the worker couldn't be reached — is a
-      // genuine infra failure and gets a real non-2xx status via the
-      // SageFsError algebra instead of being flattened into the same
-      // success=false shape as a compile error.
+      // HTTP 200 means the request WAS processed; the result text is for the
+      // client, and `error` carries the diagnostic for standard parsers. A
+      // request that never ran is a real non-2xx via the SageFsError algebra.
       match outcome with
       | SageFs.McpTools.Evaluated hadError ->
+        // A field, not a text line: the Editor channel carries the raw value.
+        let verdict = SageFs.Features.Tweak.EvalWriteBack.WriteBack.describe writeBack
         let body =
           match hadError with
-          | false -> {| success = true; result = result |} :> obj
-          | true -> {| success = false; result = result; error = result |} :> obj
+          | false -> {| success = true; result = result; writeBack = verdict |} :> obj
+          | true -> {| success = false; result = result; error = result; writeBack = verdict |} :> obj
         do! jsonResponse ctx 200 body
       | SageFs.McpTools.InfraFailure err ->
         do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+    }
+  app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      use! json = readJsonBody ctx
+      let code = json.RootElement.GetProperty("code").GetString()
+      let wd =
+        match json.RootElement.TryGetProperty("working_directory") with
+        | true, prop -> Some (prop.GetString())
+        | false, _ -> None
+      let filePath =
+        match json.RootElement.TryGetProperty("file_path") with
+        | true, prop -> Some (prop.GetString())
+        | false, _ -> None
+      let evalMode =
+        match json.RootElement.TryGetProperty("eval_mode") with
+        | true, prop -> Some (prop.GetString())
+        | false, _ -> None
+      let blockStartLine =
+        match json.RootElement.TryGetProperty("block_start_line") with
+        | true, prop -> Some (prop.GetInt32())
+        | false, _ -> None
+      let plan =
+        match json.RootElement.TryGetProperty("plan") with
+        | true, prop -> prop.ValueKind = System.Text.Json.JsonValueKind.True
+        | false, _ -> false
+      let requestedSid =
+        match json.RootElement.TryGetProperty("sessionId") with
+        | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String -> Some (prop.GetString())
+        | _ -> None
+      if plan then
+        do! planWriteBackResponse ctx code (filePath |> Option.defaultValue "") wd requestedSid
+      else
+        do! evalResponse ctx code wd filePath evalMode blockStartLine
     } :> Task
   ) |> ignore
   // Session-scoped MUTATING routes. Each takes an explicit sessionId and

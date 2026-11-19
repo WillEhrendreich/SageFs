@@ -37,6 +37,7 @@ module ToolSummaries =
     | ToolName.StopSession -> "Stop a session by id and release its worker. Anything defined in it is gone."
     | ToolName.CancelEval -> "Cancel the session's running eval."
     | ToolName.SendFsharpCode -> "Run F# in the session. End each statement with ';;' and send small blocks."
+    | ToolName.WriteBack -> "Evaluate one declaration in the session and write it back to its source file. Needs file_path and block_start_line; read writeBack for the verdict."
     | ToolName.Profile -> "Run F# and report where CPU time or allocations went."
     | ToolName.ManageScratchPad -> "View, export or promote the session's scratch pad snippets."
     | ToolName.CheckFsharpCode -> "Type-check F# against the session without running it."

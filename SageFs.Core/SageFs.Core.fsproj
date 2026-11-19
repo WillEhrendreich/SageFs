@@ -238,6 +238,8 @@
              the eval redefines, its range, the replacement text) or a NotPersisted reason. No IO: the door that
              journals and renames is SageFs/EvalWriteBackWire.fs. -->
         <Compile Include="Features\Tweak\EvalWriteBack.fs" />
+        <Compile Include="Features\Tweak\WriteBackRequest.fs" />
+        <Compile Include="Features\Tweak\WriteBackPlan.fs" />
         <!-- After ReloadPlanning: finds the callers of a re-signed or removed declaration in the project's other files, by the
              compiler's symbol resolution over the whole project or by name. -->
         <Compile Include="Features\CallerCheck.fs" />

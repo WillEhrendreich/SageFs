@@ -245,8 +245,10 @@ let endpointContractTests = testList "EndpointContracts" [
       // a client that does not know the field ignores it. What moved it to 4 was a behaviour a client
       // can see without reading a new field, a 400 from /api/dependency-graph when several sessions
       // are open and the request names none.
+      // 5: /exec carries writeBack as a field, so an editor can report whether
+      // the source changed without scraping a verdict out of the value text.
       apiVersion
-      |> Expect.equal "apiVersion should be 4 for current contract (4: /api/dependency-graph answers for one session)" 4
+      |> Expect.equal "apiVersion should be 5 for current contract (5: /exec carries writeBack)" 5
     }
 
     test "VS Code extension expectedApiVersion matches daemon apiVersion" {

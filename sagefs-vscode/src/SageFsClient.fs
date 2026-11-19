@@ -362,6 +362,54 @@ let evalCode (sessionId: string) (code: string) (workingDirectory: string) (file
   let bsl = blockStartLine |> Option.defaultValue 0
   postCommand c "/exec" (jsonStringify {| code = code; sessionId = sessionId; working_directory = workingDirectory; file_path = fp; eval_mode = em; block_start_line = bsl |}) 30000
 
+/// Ask the daemon what a submission would write, without evaluating or writing
+/// anything. Each chunk carries its source line and exact replacement so the
+/// picker can apply a chosen subset through the ordinary /exec write door.
+let planWriteBack (sessionId: string) (code: string) (workingDirectory: string) (filePath: string) (c: Client) =
+  promise {
+    let! resp =
+      httpPost c "/exec"
+        (jsonStringify {| code = code; sessionId = sessionId; working_directory = workingDirectory; file_path = filePath; plan = true |})
+        30000
+    return
+      if resp.statusCode >= 200 && resp.statusCode < 300 then
+        Result.Ok (jsonParse resp.body)
+      else
+        let parsed = try Some (jsonParse resp.body) with _ -> None
+        let message =
+          parsed |> Option.bind (fun p -> fieldString "error" p) |> Option.defaultValue (sprintf "HTTP %d" resp.statusCode)
+        Result.Error message
+  }
+
+/// The same eval, but keeps the write-back verdict the daemon now sends as a
+/// field. The Editor channel's result text is the raw value, so there is no
+/// verdict line to scrape out of it.
+let evalCodeWithVerdict (sessionId: string) (code: string) (workingDirectory: string) (filePath: string) (blockStartLine: int) (c: Client) =
+  promise {
+    try
+      let! resp =
+        httpPost c "/exec"
+          (jsonStringify {| code = code; sessionId = sessionId; working_directory = workingDirectory
+                            file_path = filePath; eval_mode = "block"; block_start_line = blockStartLine |})
+          30000
+      match resp.statusCode with
+      | s when s >= 200 && s < 300 ->
+        let parsed = jsonParse resp.body
+        return
+          Ok
+            {| Result = fieldString "result" parsed |> Option.defaultValue ""
+               WriteBack = fieldString "writeBack" parsed |> Option.defaultValue "" |}
+      | s ->
+        let parsed = try Some (jsonParse resp.body) with _ -> None
+        let message =
+          parsed
+          |> Option.bind (fun p -> fieldString "error" p |> Option.orElse (fieldString "message" p))
+          |> Option.defaultValue (sprintf "The daemon refused the request (HTTP %d)." s)
+        return Error message
+    with err ->
+      return Error (string err)
+  }
+
 /// Make a session the daemon's active one. Routes that cannot be told which session they mean act on this.
 let switchSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/switch" (jsonStringify {| sessionId = sessionId |}) 5000
@@ -616,7 +664,7 @@ let discoverDaemon (candidateMcpPorts: int list) (c: Client) =
 
   loop candidateMcpPorts
 
-let [<Literal>] expectedApiVersion = 4
+let [<Literal>] expectedApiVersion = 5
 
 let checkVersion (status: SystemStatus) : Result<unit, string> =
   match status.apiVersion with
