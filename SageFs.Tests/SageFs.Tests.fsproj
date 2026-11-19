@@ -1034,6 +1034,7 @@
         <Compile Include="CoverageTreemapTests.fs" />
         <Compile Include="FrictionClassificationTests.fs" />
         <Compile Include="FaultReasonSurfacingTests.fs" />
+        <Compile Include="SessionIdArgumentTests.fs" />
         <Compile Include="FaultReasonTests.fs" />
         <Compile Include="WorkerFetchLogTests.fs" />
         <Compile Include="PendingRunSummaryTests.fs" />

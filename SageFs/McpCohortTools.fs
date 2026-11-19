@@ -129,6 +129,9 @@ module McpCohortTools =
         | WarmingUp(sid, _)
         | Unroutable(sid, _)
         | FaultedSession(sid, _) -> Some sid
+        // Only an explicit argument can be malformed, and this resolves with
+        // None: an unusable id names no session to attribute outcomes to.
+        | InvalidSessionId _ -> None
         | Gone _ -> None
     }
 

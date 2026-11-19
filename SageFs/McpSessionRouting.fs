@@ -238,7 +238,23 @@ module McpSessionRouting =
     | WarmingUp of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
     | Unroutable of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
     | FaultedSession of sessionId: string * cause: FaultCause
+    /// The caller supplied an explicit `sessionId` that is not one. `given` is
+    /// the argument as it arrived: the shape this refusal exists for is an
+    /// error message copied back into the argument, and quoting it is the only
+    /// way the caller can see what was actually sent. `reason` is
+    /// `SessionId.validate`'s own words.
+    | InvalidSessionId of given: string * reason: string
     | Gone of message: string
+
+  /// The session id an explicit `sessionId` argument names, or the refusal to
+  /// send back. `SessionId.validate` is the only judge of the format; this
+  /// keeps its Error from being thrown away at the routing boundary, where an
+  /// argument that was not an id used to reach `toSessionId` and become an
+  /// exception the MCP layer could only render as "tool call threw".
+  let classifyExplicitSessionId (given: string) : Result<WorkerProtocol.SessionId, SessionResolution> =
+    match WorkerProtocol.SessionId.validate given with
+    | Ok id -> Result.Ok id
+    | Error reason -> Result.Error (InvalidSessionId (given, reason))
 
   /// Pure classification: decide the resolution from registry knowledge.
   /// INVARIANT: `Gone` is produced only when the session is absent from the
@@ -274,6 +290,8 @@ module McpSessionRouting =
       sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_session_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | FaultedSession (sid, cause) ->
       sprintf "Session '%s' is faulted. Why: %s\nRun reset_fsi_session or hard_reset_fsi_session to recover." sid (FaultCause.describe cause)
+    | InvalidSessionId (_, reason) ->
+      sprintf "The sessionId argument is not a session ID (%s). A session ID is 8 lowercase hex characters, for example '03b4e1a2'; call list_sessions to get one, or leave sessionId out to use the session bound to this connection." reason
     | Gone msg -> msg
 
   /// The session a tool call may use, or the typed refusal it answers with. The reason says what the session
@@ -289,4 +307,26 @@ module McpSessionRouting =
       Result.Error (SageFsError.SessionNotRoutable (sprintf "session '%s' exists (status: %s) but its worker is not routable yet, which usually means it is mid-restart." sid (WorkerProtocol.SessionLifecycleStatus.label status)))
     | FaultedSession (sid, cause) ->
       Result.Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "the session is faulted. Why: %s" (FaultCause.describe cause)))
+    // A caller-side argument error, not a session state: the resolution's own
+    // guidance is the whole answer ("not a session ID, here is the shape").
+    | InvalidSessionId _ ->
+      Result.Error (SageFsError.SessionNotRoutable (formatSessionResolution resolution))
     | Gone msg -> Result.Error (SageFsError.SessionNotRoutable msg)
+
+  /// The typed refusal a routing outcome stands for, for callers that record friction
+  /// rather than render guidance. `Gone` answers `None`: only the caller knows how many
+  /// sessions match its working directory, and that lookup is the IO the missing-session
+  /// split needs.
+  let routingErrorOf (resolution: SessionResolution) : SageFsError option =
+    match resolution with
+    | Routable _ -> None
+    | WarmingUp (sid, status) ->
+      Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is warming up (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
+    | Unroutable (sid, status) ->
+      Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is not yet routable (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
+    | FaultedSession (sid, cause) ->
+      Some (SageFsError.WorkerCommunicationFailed (sid, sprintf "session is faulted: %s" (FaultCause.describe cause)))
+    // The caller's argument is wrong, not the registry, and the resolution already
+    // carries the whole answer: what was sent, and what an id looks like.
+    | InvalidSessionId _ -> Some (SageFsError.SessionNotRoutable (formatSessionResolution resolution))
+    | Gone _ -> None
