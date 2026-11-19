@@ -160,3 +160,38 @@ module SessionHealth =
           match ctx.FailedOpens with
           | _ :: _ as failures -> SessionHealth.Degraded (autoOpenFailureReason failures)
           | [] -> SessionHealth.Degraded nothingLoadedReason
+
+  /// A rebuild that failed leaves the previous worker serving, so the lifecycle
+  /// stays Ready and the worker verdict alone reads Healthy beside a build that
+  /// never happened. This folds the rebuild record into that verdict: the
+  /// session is degraded (usable, but running code that is not what the files
+  /// say), and the build error is the reason. A reason the verdict already had
+  /// is kept beside it, and a real fault outranks the note.
+  let applyRebuild (rebuild: LastRebuild) (verdict: SessionHealth) : SessionHealth =
+    let degraded (message: string) =
+      match verdict with
+      | SessionHealth.Failed _ -> verdict
+      | SessionHealth.Degraded other -> SessionHealth.Degraded(sprintf "%s %s" message other)
+      | SessionHealth.Starting
+      | SessionHealth.Healthy -> SessionHealth.Degraded message
+    let failed (message: string) =
+      match verdict with
+      | SessionHealth.Failed _ -> verdict
+      | SessionHealth.Degraded other -> SessionHealth.Failed(sprintf "%s %s" message other)
+      | SessionHealth.Starting
+      | SessionHealth.Healthy -> SessionHealth.Failed message
+    match rebuild with
+    | LastRebuild.NeverRebuilt -> verdict
+    | LastRebuild.Latest (RebuildOutcome.InProgress _) -> verdict
+    | LastRebuild.Latest (RebuildOutcome.Succeeded _) -> verdict
+    | LastRebuild.Latest (RebuildOutcome.FailedStillServing (error, _)) ->
+      degraded (sprintf "The last rebuild failed, so the previous build is still serving. %s" (SageFsError.describeForAgent error))
+    | LastRebuild.Latest (RebuildOutcome.FailedNotServing (error, _)) ->
+      failed (sprintf "The last rebuild failed and no worker is serving this session. %s" (SageFsError.describeForAgent error))
+
+  /// The health of a session, from the facts every surface already has: the
+  /// worker it is running, what it loaded, what warmup said, and what its last
+  /// requested rebuild did. Surfaces call this instead of `classify` so a failed
+  /// rebuild cannot read Healthy on one and Degraded on another.
+  let ofSession (info: SessionInfo) (warmup: WarmupContext option) : SessionHealth =
+    classify info.Status info.ProjectRoles warmup |> applyRebuild info.Rebuild

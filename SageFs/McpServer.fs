@@ -1618,7 +1618,7 @@ let replayHealthSnapshot
           match ctx.GetWarmupContext with
           | Some getCtx -> getCtx sid
           | None -> Task.FromResult None
-        let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
+        let health = SageFs.SessionHealth.ofSession sess warmupOpt
         let frame = SseEvent.SessionHealthChanged(sid, health) |> SseEvent.frame
         match SseFrame.visibleTo stream frame with
         | true -> do! writeSseFrame body frame.Wire
@@ -1962,7 +1962,7 @@ let wireSessionHealthSubscription
             match ctx.GetWarmupContext with
             | Some getCtx -> getCtx sid
             | None -> Task.FromResult None
-          let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
+          let health = SageFs.SessionHealth.ofSession sess warmupOpt
           let changed =
             match lastKnown.TryGetValue sid with
             | true, prev -> prev <> health
@@ -3137,7 +3137,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
               match rctx.Config.GetWarmupContext with
               | Some getCtx -> getCtx (SageFs.WorkerProtocol.SessionId.value sess.Id)
               | None -> Task.FromResult None
-            let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
+            let health = SageFs.SessionHealth.ofSession sess warmupOpt
             let projectName =
               sess.Projects
               |> List.tryHead
@@ -3918,7 +3918,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
           match rctx.Config.GetWarmupContext with
           | Some getCtx -> getCtx (SageFs.WorkerProtocol.SessionId.value sess.Id)
           | None -> Task.FromResult None
-        let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
+        let health = SageFs.SessionHealth.ofSession sess warmupOpt
         let appView = SageFs.AppRun.toView sess.App
         results.Add(
           {| id = SageFs.WorkerProtocol.SessionId.value sess.Id

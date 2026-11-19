@@ -1365,7 +1365,7 @@ let liveSessionCards
   |> List.map (fun s ->
     let evals = evalCounts |> Map.tryFind s.Id |> Option.defaultValue 0
     let health =
-      SessionHealth.classify s.Status s.ProjectRoles (warmupContextFor s.Id)
+      SessionHealth.ofSession s (warmupContextFor s.Id)
       |> SilentHost.healthOf (WorkerProtocol.SessionId.value s.Id) s.Status
     sessionCardOf now (warmupProgress s.Id) evals health s)
 
