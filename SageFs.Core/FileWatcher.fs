@@ -313,6 +313,24 @@ let dropReason (config: WatchConfig) (filePath: string) : WatchDrop option =
   | _ when not (List.contains ext config.Extensions) -> Some WatchDrop.UnwatchedExtension
   | _ -> None
 
+/// Whether a dropped file earns a log line. An unwatched extension is not a
+/// source save that failed to reach a test run, so saying so is noise. It is
+/// also the one drop that can feed itself: a daemon whose stdout is redirected
+/// to a log inside the watched directory logs "not a watched file type" for
+/// every line it writes, and that line is another event. Reporting the other
+/// drops stays important — those are files that could have been build inputs.
+let shouldReportDrop (drop: WatchDrop) : bool =
+  match drop with
+  | WatchDrop.UnwatchedExtension -> false
+  | WatchDrop.TemporaryFile
+  | WatchDrop.BuildOutput
+  | WatchDrop.ExcludedByPattern
+  | WatchDrop.NestedCheckout
+  | WatchDrop.OutsideWatchedDirectory
+  | WatchDrop.FileGone
+  | WatchDrop.FileTooLarge
+  | WatchDrop.Unreadable -> true
+
 /// Pure: decide if a file change should trigger a rebuild.
 let shouldTriggerRebuild (config: WatchConfig) (filePath: string) : bool =
   dropReason config filePath |> Option.isNone

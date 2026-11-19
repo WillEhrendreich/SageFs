@@ -338,7 +338,7 @@ let fileSize : (string * int) list =
     // (until then a file not listed here was unbounded, which made "a file not in a budget table has a budget of zero"
     // false for this table). A budget above a file's real count fails, so `--ratchets --tighten` lowers these as the
     // files shrink; a file that grows fails. Never raise one.
-    "SageFs/DaemonMode.fs", 5524
+    "SageFs/DaemonMode.fs", 5523
     "SageFs/McpServer.fs", 5056
     "SageFs/DashboardFragments.fs", 4448
     "SageFs/Dashboard.fs", 4259

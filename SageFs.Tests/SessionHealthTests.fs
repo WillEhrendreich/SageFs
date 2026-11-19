@@ -1,7 +1,10 @@
 module SageFs.Tests.SessionHealthTests
 
+open System
 open Expecto
 open Expecto.Flip
+open FsCheck
+open FsCheck.FSharp
 open SageFs
 open SageFs.WorkerProtocol
 open SageFs.ProjectLoading
@@ -240,4 +243,63 @@ let sessionHealthRebuildTests =
         reason |> Expect.stringContains "the warmup failure is kept" "Warmup reported"
         reason |> Expect.stringContains "and the rebuild failure is added" "FS0001"
       | other -> failtestf "expected Degraded, got %A" other
+  ]
+
+// The four laws the examples above are instances of. These sweep the whole
+// verdict × rebuild-input space instead of trusting the five hand-picked rows,
+// and none is a restatement of the implementation: each is a promise a caller
+// of `ofSession` relies on.
+let private genVerdict : Gen<SessionHealth> =
+  Gen.elements
+    [ SessionHealth.Starting
+      SessionHealth.Healthy
+      SessionHealth.Degraded "warmup needs a build"
+      SessionHealth.Failed "the host is gone" ]
+
+let private genQuietRebuild : Gen<LastRebuild> =
+  let at = DateTime(2026, 11, 19, 0, 0, 0, DateTimeKind.Utc)
+  Gen.elements
+    [ LastRebuild.NeverRebuilt
+      LastRebuild.Latest (RebuildOutcome.InProgress at)
+      LastRebuild.Latest (RebuildOutcome.Succeeded at) ]
+
+let private genFailedRebuild : Gen<LastRebuild> =
+  let at = DateTime(2026, 11, 19, 0, 0, 0, DateTimeKind.Utc)
+  let error = SageFsError.HardResetFailed "FS0001 marker"
+  Gen.elements
+    [ LastRebuild.Latest (RebuildOutcome.FailedStillServing (error, at))
+      LastRebuild.Latest (RebuildOutcome.FailedNotServing (error, at)) ]
+
+[<Tests>]
+let sessionHealthRebuildLaws =
+  testList "SessionHealth.applyRebuild — sweep the verdict algebra" [
+
+    testProperty "a rebuild that did not fail is the identity on every verdict" <|
+      Prop.forAll (Arb.fromGen (gen { let! v = genVerdict
+                                      let! r = genQuietRebuild
+                                      return v, r })) (fun (v, r) ->
+        SessionHealth.applyRebuild r v = v)
+
+    testProperty "a real fault outranks any failed rebuild and keeps its own reason" <|
+      Prop.forAll (Arb.fromGen (gen { let! r = genFailedRebuild
+                                      return r })) (fun r ->
+        match SessionHealth.applyRebuild r (SessionHealth.Failed "the host is gone") with
+        | SessionHealth.Failed reason -> reason = "the host is gone"
+        | other -> failwithf "a fault must stay Failed, got %A" other)
+
+    testProperty "a failed rebuild can never leave a verdict reading Healthy or Starting" <|
+      Prop.forAll (Arb.fromGen (gen { let! v = genVerdict
+                                      let! r = genFailedRebuild
+                                      return v, r })) (fun (v, r) ->
+        match SessionHealth.applyRebuild r v with
+        | SessionHealth.Degraded _ | SessionHealth.Failed _ -> true
+        | other -> failwithf "a failed rebuild reads healthy-ish: %A" other)
+
+    testProperty "adding a rebuild failure keeps the reason a degraded verdict already had" <|
+      Prop.forAll (Arb.fromGen genFailedRebuild) (fun r ->
+        // FailedNotServing escalates to Failed; either way neither reason may be lost.
+        match SessionHealth.applyRebuild r (SessionHealth.Degraded "warmup needs a build") with
+        | SessionHealth.Degraded reason
+        | SessionHealth.Failed reason -> reason.Contains "warmup needs a build" && reason.Contains "FS0001 marker"
+        | other -> failwithf "expected Degraded or Failed with both reasons, got %A" other)
   ]

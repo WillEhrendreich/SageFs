@@ -62,8 +62,8 @@
       "existingSessionId": "test",
       "workingDirectory": "test"
     },
-    "message": "A session for this project already exists (session test, working directory test). Use switch_session to select it instead of creating a duplicate.",
-    "suggestedAction": "Run switch_session to select the existing session"
+    "message": "A session for this project already exists (session test, working directory test). Use switch_session to select it, or stop_session to remove it and create a fresh one.",
+    "suggestedAction": "Run switch_session to select the existing session, or stop_session to remove it and create a fresh one"
   },
   {
     "case": "UnsafeSessionPath",

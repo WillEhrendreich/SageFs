@@ -1423,12 +1423,9 @@ type LiveTestWatcherManager
 
       let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =
         let path = e.FullPath
-        // A file inside another checkout nested under the watched directory (a
-        // git worktree such as .claude/worktrees/*, a vendored repo) belongs
-        // to that project — feeding it to this session's live testing
-        // type-checked foreign copies of the session's own files. Pruning
-        // already keeps a nested checkout from ever being walked, so this is
-        // now defense in depth rather than the only guard.
+        // A nested checkout (worktree or vendored repo) belongs to its own
+        // project; feeding it here type-checks foreign copies. Pruning already
+        // stops the walk, so this check is defense in depth.
         let inNestedCheckout =
           directories |> List.exists (fun root -> SageFs.FileWatcher.isInNestedCheckout root path SageFs.FileWatcher.hasCheckoutMarker)
         let drop =
@@ -1440,7 +1437,9 @@ type LiveTestWatcherManager
         | None ->
           Log.info "[watcher] %s changed, queued for live testing" path
           inbox.Post (Core (LiveTestWatcherCore.FileSaved path))
-        | Some reason -> Log.info "[watcher] %s changed, dropped: %s" path (SageFs.FileWatcher.WatchDrop.toString reason)
+        | Some reason when SageFs.FileWatcher.shouldReportDrop reason ->
+          Log.info "[watcher] %s changed, dropped: %s" path (SageFs.FileWatcher.WatchDrop.toString reason)
+        | Some _ -> ()
 
       // What each build input said when last read, so a change is diffed against it. Owned by this loop alone.
       let buildInputs = LiveTestBuildInput.Store()

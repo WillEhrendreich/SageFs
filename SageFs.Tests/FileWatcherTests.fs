@@ -181,6 +181,27 @@ let fileWatcherTests =
           |> Array.map (fun c -> WatchDrop.toString (Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(c, [||]) :?> WatchDrop))
         texts |> Array.forall (fun t -> t <> "") |> Flip.Expect.isTrue "no reason has empty text"
         (Array.distinct texts).Length |> Flip.Expect.equal "no two reasons share text" cases.Length
+
+      testCase "WHY — a log written inside the watched directory cannot log itself into an infinite loop" <| fun () ->
+        // The daemon's own log used to be a sibling of the watched directory in
+        // install-local. Every line it wrote raised an event, and reporting that
+        // event wrote another line. The path, the drop, and the reporting decision
+        // are all production functions, so this is the loop itself, not a stand-in.
+        [ "/r/daemon-abc.log"; "/r/logs/daemon.log"; "/r/readme.md"; "/r/out.txt"; "/r/noext" ]
+        |> List.iter (fun path ->
+          match dropReason config path with
+          | Some reason ->
+            reason |> Flip.Expect.equal (sprintf "the reason for %s" path) WatchDrop.UnwatchedExtension
+            (shouldReportDrop reason) |> Flip.Expect.isFalse (sprintf "%s is silent, so it cannot feed itself" path)
+          | None -> failtestf "%s should be unwatched" path)
+
+      testCase "WHY — only an unwatched extension is silent; a drop that hid a source change still says why" <| fun () ->
+        let cases = Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<WatchDrop>
+        cases
+        |> Array.map (fun c -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(c, [||]) :?> WatchDrop)
+        |> Array.filter (fun d -> d <> WatchDrop.UnwatchedExtension)
+        |> Array.iter (fun d ->
+          (shouldReportDrop d) |> Flip.Expect.isTrue (sprintf "%A still reports" d))
     ]
 
     testList "shouldTriggerRebuild with ExcludePatterns" [
