@@ -163,3 +163,81 @@ let sessionHealthProjectionTests = testList "SessionHealth projections" [
     degraded.status |> Expect.equal "degraded status" "Degraded"
     degraded.reason |> Expect.equal "degraded reason" (Some "needs a build")
 ]
+
+/// A session whose status and rebuild record are the two inputs this needs.
+let private sessionInfoWith (status: SessionLifecycleStatus) (rebuild: LastRebuild) : SessionInfo =
+  { Id = SessionId.validate "abcd1234" |> Result.defaultWith (fun e -> failwithf "bad test session id: %s" e)
+    Name = None
+    Projects = [ myApp.Path ]
+    WorkingDirectory = "/repo"
+    SolutionRoot = None
+    CreatedAt = System.DateTime.UtcNow
+    LastActivity = System.DateTime.UtcNow
+    Status = status
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    ActiveProject = None
+    ProjectRoles = [ myApp ]
+    App = AppRun.AppRunState.NotRunning
+    Rebuild = rebuild
+    Reload = SessionReload.NoReloadYet
+    Freshness = ReplFreshness.InSync }
+
+[<Tests>]
+let sessionHealthRebuildTests =
+  testList "SessionHealth.ofSession — the last rebuild is part of the verdict" [
+
+    testCase "WHY — a failed rebuild that still serves reads Degraded with the compiler error, not Healthy beside its own FailedStillServing" <| fun _ ->
+      let error = SageFsError.HardResetFailed "error FS0001: This expression was expected to have type 'int' but here has type 'string'."
+      let info =
+        sessionInfoWith
+          (SessionLifecycleStatus.Ready handle)
+          (LastRebuild.Latest (RebuildOutcome.FailedStillServing (error, System.DateTime.UtcNow)))
+      match SessionHealth.ofSession info (Some healthyWarmup) with
+      | SessionHealth.Degraded reason ->
+        reason |> Expect.stringContains "the build error is the reason" "FS0001"
+        reason |> Expect.stringContains "and it says the previous build still serves" "previous build"
+      | other -> failtestf "expected Degraded, got %A" other
+
+    testCase "a failed rebuild with no worker left reads Failed" <| fun _ ->
+      let error = SageFsError.HardResetFailed "error FS0001: bad"
+      let info =
+        sessionInfoWith
+          (SessionLifecycleStatus.Ready handle)
+          (LastRebuild.Latest (RebuildOutcome.FailedNotServing (error, System.DateTime.UtcNow)))
+      match SessionHealth.ofSession info None with
+      | SessionHealth.Failed reason ->
+        reason |> Expect.stringContains "the build error is the reason" "FS0001"
+        reason |> Expect.stringContains "and it says nothing is serving" "no worker"
+      | other -> failtestf "expected Failed, got %A" other
+
+    testCase "WHY — a real fault outranks the rebuild note: the reason stays the fault, not a stale build" <| fun _ ->
+      let rebuildError = SageFsError.HardResetFailed "error FS0001: bad"
+      let info =
+        sessionInfoWith
+          (SessionLifecycleStatus.Faulted (FaultReason.Reported "the host is gone"))
+          (LastRebuild.Latest (RebuildOutcome.FailedStillServing (rebuildError, System.DateTime.UtcNow)))
+      match SessionHealth.ofSession info None with
+      | SessionHealth.Failed reason ->
+        reason |> Expect.stringContains "the fault is still the reason" "host is gone"
+      | other -> failtestf "expected Failed, got %A" other
+
+    testCase "a successful, in-progress, or never-started rebuild does not change the worker verdict" <| fun _ ->
+      for rebuild in
+        [ LastRebuild.NeverRebuilt
+          LastRebuild.Latest (RebuildOutcome.InProgress System.DateTime.UtcNow)
+          LastRebuild.Latest (RebuildOutcome.Succeeded System.DateTime.UtcNow) ] do
+        SessionHealth.ofSession (sessionInfoWith (SessionLifecycleStatus.Ready handle) rebuild) (Some healthyWarmup)
+        |> Expect.equal "no rebuild note for a rebuild that is not a failure" SessionHealth.Healthy
+
+    testCase "a degraded worker keeps its own reason and gains the rebuild's" <| fun _ ->
+      let error = SageFsError.HardResetFailed "error FS0001: bad"
+      let info =
+        sessionInfoWith
+          (SessionLifecycleStatus.Ready handle)
+          (LastRebuild.Latest (RebuildOutcome.FailedStillServing (error, System.DateTime.UtcNow)))
+      match SessionHealth.ofSession info (Some autoOpenFailureWarmup) with
+      | SessionHealth.Degraded reason ->
+        reason |> Expect.stringContains "the warmup failure is kept" "Warmup reported"
+        reason |> Expect.stringContains "and the rebuild failure is added" "FS0001"
+      | other -> failtestf "expected Degraded, got %A" other
+  ]

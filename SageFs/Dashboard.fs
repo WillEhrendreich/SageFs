@@ -1207,7 +1207,7 @@ let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading
     let viewedHealth =
       match sessions |> List.tryFind (fun s -> s.Id = sessionId) with
       | Some info ->
-        SessionHealth.classify info.Status info.ProjectRoles wCtx
+        SessionHealth.ofSession info wCtx
         |> SilentHost.healthOf (WorkerProtocol.SessionId.value info.Id) info.Status
       | None -> SessionHealth.Starting
     let failureNarrativesPanel =
