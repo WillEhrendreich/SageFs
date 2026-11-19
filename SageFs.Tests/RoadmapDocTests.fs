@@ -3,6 +3,7 @@
 /// from the code and keep the items inside the voice the rest of the docs use.
 module SageFs.Tests.RoadmapDocTests
 
+open System
 open System.IO
 open System.Text.RegularExpressions
 open Expecto
@@ -15,8 +16,20 @@ let private repoRoot = RepoPaths.repoPathFull [||]
 /// its own. It is the anchor `resolvePath` gives a path that climbs out of the tree.
 let private mainRoot = RepoPaths.mainCheckoutRoot repoRoot
 
+/// A landmark can live in a sibling repo (the sagefs.nvim items do). The CI
+/// workflow checks that repo out inside its workspace and names it with
+/// SAGEFS_NVIM_DIR; the gate's worktree resolves its sibling from the main
+/// checkout instead, which is a different place. Use the same env var the rest
+/// of the suite uses, so a worktree and a normal checkout judge a plugin
+/// landmark by the same file.
 let private readFromRepo (relative: string) : FileState =
-  let path = resolvePath repoRoot mainRoot relative
+  let nvimPrefix = "../sagefs.nvim/"
+  let nvimDir = Environment.GetEnvironmentVariable "SAGEFS_NVIM_DIR"
+  let path =
+    match nvimDir, relative.StartsWith(nvimPrefix, StringComparison.Ordinal) with
+    | dir, true when not (String.IsNullOrWhiteSpace dir) ->
+      Path.Combine(dir, relative.Substring(nvimPrefix.Length))
+    | _ -> resolvePath repoRoot mainRoot relative
   match File.Exists path with
   | true -> Lines(File.ReadAllLines path)
   | false -> Missing
