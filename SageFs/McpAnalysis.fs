@@ -436,6 +436,7 @@ module McpAnalysis =
         | WarmingUp _ -> Error (NotAvailableReason.SessionNotReady SessionReadiness.WarmingUp)
         | Unroutable _ -> Error (NotAvailableReason.SessionNotReady SessionReadiness.NotRoutable)
         | FaultedSession _ -> Error (NotAvailableReason.SessionNotReady SessionReadiness.Faulted)
+        | InvalidSessionId _ -> Error (NotAvailableReason.NoSessionResolved (formatSessionResolution resolution))
         | Gone why -> Error (NotAvailableReason.NoSessionResolved why)
     }
 

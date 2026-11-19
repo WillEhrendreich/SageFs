@@ -321,35 +321,37 @@ module McpTools =
     task {
       match sessionId with
       | Some sid ->
-        let validId = toSessionId sid
-        let! proxy = ctx.SessionOps.GetProxy validId
-        match proxy with
-        | Some _ -> return Routable sid
-        | None ->
-          let! info = ctx.SessionOps.GetSessionInfo validId
-          match info with
-          // The session EXISTS but has no proxy yet, so it is warming up,
-          // unroutable, or faulted — not gone. `classifySessionAvailability`
-          // takes the option, so pass `info` whole rather than the unwrapped
-          // value.
-          | Some _ -> return classifySessionAvailability info false
+        match classifyExplicitSessionId sid with
+        | Error refusal -> return refusal
+        | Ok validId ->
+          let! proxy = ctx.SessionOps.GetProxy validId
+          match proxy with
+          | Some _ -> return Routable sid
           | None ->
-            // Recovery from a dead session id is a POLICY, extracted to
-            // `StaleSessionRecovery` (several honest outcomes, and this file
-            // is a 4,400-line hub). A client that outlived a daemon restart
-            // used to be bricked here: the no-id branch resolved by working
-            // directory and re-bound, this branch checked only the given id.
-            let! sessions = ctx.SessionOps.GetAllSessions()
-            let candidatesFor wd =
-              sessionsMatchingWorkingDirDeep sessions wd
-              |> List.map (fun s -> s.Id)
+            let! info = ctx.SessionOps.GetSessionInfo validId
+            match info with
+            // The session EXISTS but has no proxy yet, so it is warming up,
+            // unroutable, or faulted — not gone. `classifySessionAvailability`
+            // takes the option, so pass `info` whole rather than the unwrapped
+            // value.
+            | Some _ -> return classifySessionAvailability info false
+            | None ->
+              // Recovery from a dead session id is a POLICY, extracted to
+              // `StaleSessionRecovery` (several honest outcomes, and this file
+              // is a 4,400-line hub). A client that outlived a daemon restart
+              // used to be bricked here: the no-id branch resolved by working
+              // directory and re-bound, this branch checked only the given id.
+              let! sessions = ctx.SessionOps.GetAllSessions()
+              let candidatesFor wd =
+                sessionsMatchingWorkingDirDeep sessions wd
+                |> List.map (fun s -> s.Id)
 
-            match StaleSessionRecovery.decide sid workingDirectory candidatesFor with
-            | StaleSessionRecovery.Recovery.ReBind(matchedId, why) ->
-              setActiveSessionId ctx agent matchedId
-              Log.info "session '%s' is gone; re-bound to '%s' (%s)" sid matchedId why
-              return Routable matchedId
-            | StaleSessionRecovery.Recovery.Gone why -> return Gone why
+              match StaleSessionRecovery.decide sid workingDirectory candidatesFor with
+              | StaleSessionRecovery.Recovery.ReBind(matchedId, why) ->
+                setActiveSessionId ctx agent matchedId
+                Log.info "session '%s' is gone; re-bound to '%s' (%s)" sid matchedId why
+                return Routable matchedId
+              | StaleSessionRecovery.Recovery.Gone why -> return Gone why
 
       | None ->
         let! candidateResult =
@@ -544,13 +546,6 @@ module McpTools =
       : Task<SageFsError option> =
     task {
       match resolution with
-      | Routable _ -> return None
-      | WarmingUp (sid, status) ->
-        return Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is warming up (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
-      | Unroutable (sid, status) ->
-        return Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is not yet routable (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
-      | FaultedSession (sid, cause) ->
-        return Some (SageFsError.WorkerCommunicationFailed (sid, sprintf "session is faulted: %s" (FaultCause.describe cause)))
       | Gone _ ->
         match sessionId with
         | Some sid -> return Some (SageFsError.SessionNotFound sid)
@@ -563,6 +558,7 @@ module McpTools =
               return Some (SageFsError.AmbiguousSessions (matches |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id)))
             | _ -> return Some SageFsError.NoActiveSessions
           | _ -> return Some SageFsError.NoActiveSessions
+      | other -> return routingErrorOf other
     }
 
   let setSnapshotStatus (ctx: McpContext) (sid: string) (status: WorkerProtocol.SessionLifecycleStatus) =
@@ -801,8 +797,8 @@ module McpTools =
         let! refusal =
           match Affordances.ToolName.tryParse toolName |> Option.bind SessionAction.ofTool, resolution with
           | Some action, Routable sid -> sessionAccessRefusalForCall ctx action sid
-          | Some _, (WarmingUp _ | Unroutable _ | FaultedSession _ | Gone _)
-          | None, (Routable _ | WarmingUp _ | Unroutable _ | FaultedSession _ | Gone _) -> Task.FromResult None
+          | Some _, (WarmingUp _ | Unroutable _ | FaultedSession _ | InvalidSessionId _ | Gone _)
+          | None, (Routable _ | WarmingUp _ | Unroutable _ | FaultedSession _ | InvalidSessionId _ | Gone _) -> Task.FromResult None
         match refusal with
         | Some error -> return Error(SageFsError.describeForAgent error)
         | None ->
@@ -829,6 +825,9 @@ module McpTools =
           // No session reachable: code tools are refused with the routing reason, not "wait for Ready".
           | Gone message ->
             Task.FromResult (allowedIn SessionState.Uninitialized |> Result.mapError (fun _ -> message))
+          // Not a session at all: the same refusal shape as Gone, carrying the
+          // argument's own guidance instead of a session state.
+          | InvalidSessionId _ -> Task.FromResult (allowedIn SessionState.Uninitialized |> Result.mapError (fun _ -> formatSessionResolution resolution))
         return verdict |> Result.map (fun () -> admission (GateResolution.Resolved resolution))
       | None ->
         return allowedIn SessionState.Uninitialized |> Result.map (fun () -> admission GateResolution.NotResolved)
@@ -1327,8 +1326,8 @@ module McpTools =
       | Routable sid ->
         // Defensive only — see INVARIANT above. Never expected in practice.
         return Json.serialize Json.standard {| state = "Rebuilding"; sessionId = sid; message = "" |}
-      | Gone msg ->
-        return Json.serialize Json.standard {| state = "NoSession"; message = msg |}
+      | Gone _ | InvalidSessionId _ ->
+        return Json.serialize Json.standard {| state = "NoSession"; message = formatSessionResolution resolution |}
     }
 
   let getDaemonStatus (ctx: McpContext) : Task<string> =
@@ -1435,11 +1434,11 @@ module McpTools =
     task {
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
       match resolution with
-      | Gone message ->
+      | Gone _ | InvalidSessionId _ ->
         return Json.serialize Json.standard (
           {| state = "NoSession"
              scope = "Session"
-             message = message |})
+             message = formatSessionResolution resolution |})
       | WarmingUp (sid, status) | Unroutable (sid, status) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
@@ -1546,7 +1545,7 @@ module McpTools =
           | WarmingUp (sid, _)
           | Unroutable (sid, _)
           | FaultedSession (sid, _) -> Some sid
-          | Gone _ -> None
+          | InvalidSessionId _ | Gone _ -> None
         match target with
         | None -> return SessionStatusPayload.StatusWait.notWaited
         | Some sid ->
