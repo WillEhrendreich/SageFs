@@ -217,6 +217,14 @@ let tests =
           dir |> Expect.equal "carries the rejected working directory" dupe.Dir
         | _ -> failtest "expected DuplicateSession"
 
+    testCase "WHY — a duplicate refusal names stop_session as well as switch_session, because the existing session may be Faulted" <| fun _ ->
+      let refusal = SageFsError.DuplicateSession("aaaaaaaa", "/repo/a")
+      let text = SageFsError.describe refusal
+      text |> Expect.stringContains "selecting it is one remedy" "switch_session"
+      text |> Expect.stringContains "and removing a faulted one is the other" "stop_session"
+      SageFsError.suggestedAction refusal
+      |> Expect.stringContains "the next-step line carries it too" "stop_session"
+
     testCase "tryFindDuplicate performs no status filtering itself — liveness is the removeSession invariant, not this predicate" <| fun _ ->
       // Characterization test, not a claim about reachable production state:
       // production never leaves a Stopped-status session in the map (every
