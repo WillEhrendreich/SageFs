@@ -601,12 +601,11 @@ let private reservePort (requested: int) : PortReservation =
 /// Run the worker process: create actor, start HTTP server, handle messages.
 let run (sessionId: string) (requestedPort: int) = async {
   enableStdoutAutoFlush ()
-  // The daemon owns this worker's lifetime. If the daemon is SIGKILLed it
-  // cannot send a shutdown, so the kernel has to close the gap: arm
-  // PR_SET_PDEATHSIG before starting the listener. No liveness decision is
-  // made here; the OS kills us when our parent dies.
+  // A SIGKILLed daemon cannot send a shutdown, so the kernel closes the gap:
+  // PR_SET_PDEATHSIG ends us with our parent. No liveness decision is made here.
   if not (SageFs.ParentDeath.arm ()) then
-    failwith "could not arm the parent-death signal; refusing to run an unowned worker"
+    Log.error "Worker %s: could not arm the parent-death signal; refusing to run an unowned worker" sessionId
+    System.Environment.Exit 4
   let reservation = reservePort requestedPort
   let port = reservation.Port
   let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port
