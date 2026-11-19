@@ -178,7 +178,12 @@ let workerSpawnConfigTests =
       |> Expect.isFalse "no --proj in args"
       (args.Contains "--session-id")
       |> Expect.isFalse "host takes positional args, not --session-id"
-      args |> Expect.stringEnds "host takes positional httpPort (0 = ephemeral)" "0"
+      // The host takes POSITIONAL args: `<sessionId> <httpPort> [<snapshot>]`. The snapshot is present
+      // whenever any setting is in force (a machine tier in the environment is one), so asserting the
+      // string's LAST character made this test depend on the ambient environment rather than on the port.
+      let positional = args.Split(' ', System.StringSplitOptions.RemoveEmptyEntries)
+      positional.[0] |> Expect.equal "session id is positional" "sess1"
+      positional.[1] |> Expect.equal "host takes positional httpPort (0 = ephemeral)" "0"
       envVars
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd

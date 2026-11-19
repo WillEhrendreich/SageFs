@@ -218,10 +218,13 @@ let tests =
 
 // ── The simulations do not depend on the machine tier ──
 
-/// The tier a process started with `SAGEFS_MACHINE_TIER=<tier>` works out, read through the same
-/// parser the product uses and the test suite's own environment isolation.
+/// The tier a process told `SAGEFS_MACHINE_TIER=<tier>` works out. The value goes through the same
+/// parser `MachineTier.current` uses, without setting the process environment: Expecto runs test
+/// lists in parallel, and a variable set here is visible to every other list mid-run. That raced
+/// `TimeoutScalingTests` (`Timeouts.machineTier` is captured at module init, so it saw the tier the
+/// process started with while `MachineTier.current ()` saw the one this temporary setting named).
 let tierFromEnvironment (tier: MachineTier) : MachineTier =
-  TestInfrastructure.withEnvVar MachineTier.envVar (Some (MachineTier.toString tier)) MachineTier.current
+  MachineTier.ofEnvironmentValue (MachineTier.toString tier)
 
 /// `policy` as a machine of `tier` would have built it: every duration a wait for the machine, scaled
 /// the way `Timeouts` scales one (`RestartPolicy.defaultPolicy` does this to its startup-crash window).
