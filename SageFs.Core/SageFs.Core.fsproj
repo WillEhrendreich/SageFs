@@ -542,6 +542,9 @@
              Features\DaemonHealth.fs (see the comment there) — this is only
              the supervisory decision built on top of it. -->
         <Compile Include="MemorySupervisor.fs" />
+        <!-- The CI switch for the supervisor's session-admission refusal; after MemorySupervisor
+             because it filters that module's Decision. Actions only, never Level or Reason. -->
+        <Compile Include="Features\MemoryAdmission.fs" />
         <!-- After MemorySupervisor: the stateful wrapper that persists its
              PressureLevel across calls (same split as HealthWatch/HealthAnomaly). -->
         <Compile Include="Features\MemoryPressureWatch.fs" />

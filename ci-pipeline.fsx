@@ -478,7 +478,15 @@ let tierTimings = Collections.Concurrent.ConcurrentDictionary<string, TierSchedu
 /// quiet, 26% at the medians when not). Turning off concurrent GC cost CPU in 6 of 6 pairs against TieredPGO=0 alone, and the
 /// tiering knobs did nothing beyond it, so only TieredPGO=0 is adopted. These are runtime settings, not code: a process that
 /// lives ten seconds never earns back the instrumentation tier-0 code carries to feed profile-guided optimization.
-let tierRuntimeEnvironment : (string * string) list = [ "DOTNET_TieredPGO", "0" ]
+/// A CI daemon shares its machine with external work it cannot reclaim. The supervisor's session
+/// admission refusal frees none of that memory and only fails the test that asked; the gate's tier
+/// admission (8 GiB reserve + recorded peak) decides machine room across all tiers. Shedding (reap
+/// dead, stop idle) stays on — it genuinely frees memory. A user's daemon keeps the protected default.
+let tierRuntimeEnvironment : (string * string) list =
+  [ "DOTNET_TieredPGO", "0"
+    // Literal here: this script runs standalone and does not reference SageFs.Core, where
+    // MemoryAdmission.environmentVariable names the same string. Keep the two in step.
+    "SAGEFS_MEMORY_ADMISSION", "off" ]
 
 // ---- fail fast -------------------------------------------------------------------
 //

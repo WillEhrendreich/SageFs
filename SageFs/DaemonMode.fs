@@ -435,12 +435,8 @@ let memorySessionSnapshotOf
     Status = status
     IsUserActive = isUserActive si.Id }
 
-/// Machine memory admission gate — mirrors `checkMailboxAdmission` above,
-/// one level up: that one refuses when the MAILBOX is overloaded, this one
-/// refuses when the MACHINE is short on memory
-/// (`MemoryPressure.Critical`). Checked and refused
-/// BEFORE posting, same as the mailbox gate, so a starving machine never
-/// gains one more session to feed.
+/// Machine memory gate: like `checkMailboxAdmission` one level up, refuses BEFORE posting when the
+/// MACHINE is short (`MemoryPressure.Critical`), so a starving machine gains no session to feed.
 let private checkMemoryAdmission (readSnapshot: unit -> SessionManager.QuerySnapshot) : Result<unit, SageFsError> =
   let now = System.DateTime.UtcNow
   let sessions =
@@ -449,7 +445,9 @@ let private checkMemoryAdmission (readSnapshot: unit -> SessionManager.QuerySnap
   let reading = Features.MemoryPressureWatch.live ()
   let machine = Features.MemoryPressureWatch.machineStatsOf reading
   let decision = Features.MemoryPressureWatch.evaluate reading MemorySupervisor.defaultThresholds machine sessions
-  decision.Actions
+  // SAGEFS_MEMORY_ADMISSION=off (CI daemons): drop only the refusal, keep shedding. See MemoryAdmission.
+  MemoryAdmission.apply (MemoryAdmission.fromEnvironment ()) decision
+  |> fun d -> d.Actions
   |> List.tryPick (function MemorySupervisor.ShedAction.RefuseNewSessions reason -> Some reason | _ -> None)
   |> function
      | Some reason ->
