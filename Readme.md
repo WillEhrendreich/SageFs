@@ -155,7 +155,7 @@ flowchart TB
 
 ## Get Started
 
-The short version, for people who read the last page of the book first:
+Get running in five steps:
 
 1. `dotnet tool install --global SageFs`, then make sure `~/.dotnet/tools` is on your `PATH`.
 2. `sagefs check` tells you what's missing, with a fix next to each failure.
