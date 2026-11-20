@@ -17,7 +17,7 @@ let private lines = [| "let answer = 42"; "let double x = x * 2"; "" |]
 let private req (file: string) (line: int) (column: int) : SignatureQuery.Request =
   { File = file; Line = line; Column = column }
 
-let private answer (tooltip: string) : SignatureQuery.FcsAnswer =
+let private answer (tooltip: string) : SignatureQuery.CandidateText =
   { Name = "double"
     Tooltip = tooltip
     Kind = "Method" }
@@ -79,26 +79,42 @@ let signatureQueryTests =
         |> Expect.equal "refuses line 9" (Error(SignatureQuery.Refusal.LinePastEnd(9, 3)))
     ]
 
-    testList "wordAt / pickIndex — resolve the identifier under the caret" [
-      testCase "WHY — a caret on a letter includes that letter in the word" <| fun _ ->
-        SignatureQuery.wordAt "let double x = x * 2" 10 |> Expect.equal "the whole name" "double"
+    testList "wordAt / pickIndex — resolve the identifier before the caret" [
+      testCase "WHY — a caret just after a name returns that whole name" <| fun _ ->
+        // column 11 is before the space that follows 'double'; FCS reads the same partial here.
+        SignatureQuery.wordAt "let double x = x * 2" 11 |> Expect.equal "the whole name" "double"
 
-      testCase "WHY — a caret mid-word returns the word up to the caret, not past it" <| fun _ ->
-        SignatureQuery.wordAt "let double x = x * 2" 9 |> Expect.equal "up to the caret" "doubl"
+      testCase "WHY — a caret mid-word returns only the letters before it" <| fun _ ->
+        SignatureQuery.wordAt "let double x = x * 2" 9 |> Expect.equal "up to the caret" "doub"
+
+      testCase "WHY — a caret at the start of a name has no word before it" <| fun _ ->
+        SignatureQuery.wordAt "let double x = x * 2" 5 |> Expect.equal "no word before caret" ""
 
       testCase "WHY — a caret on whitespace has no word" <| fun _ ->
-        SignatureQuery.wordAt "let double x = x * 2" 11 |> Expect.equal "no word" ""
+        SignatureQuery.wordAt "let double x = x * 2" 12 |> Expect.equal "no word" ""
+
+      testCase "WHY — wordAt agrees with FCS's GetPartialLongNameEx(text, caret-1) at every column" <| fun _ ->
+        // FCS reads the partial name ending at (cursorPosition - 1); cursorPosition is caretOf's result.
+        // These are the exact pairs proved in the REPL. A drift here is the off-by-one that made the
+        // tool resolve 'doub' when the caret named 'double'.
+        let line = "let double x = x * 2"
+        let expected =
+          [ 5, ""; 6, "d"; 9, "doub"; 10, "doubl"; 11, "double"; 12, "" ]
+        for col, want in expected do
+          SignatureQuery.wordAt line col
+          |> Expect.equal (sprintf "column %d matches the compiler's partial name" col) want
 
       testCase "WHY — only an exact-name candidate is picked" <| fun _ ->
         SignatureQuery.pickIndex "double" [| "double"; "downcast" |]
-        |> Expect.equal "exact match" (Some 0)
+        |> Expect.equal "exact match" (Ok 0)
 
       testCase "WHY — a prefix does not silently resolve to a longer name" <| fun _ ->
         SignatureQuery.pickIndex "doub" [| "double"; "downcast" |]
-        |> Expect.equal "no match" None
+        |> Expect.equal "named refusal" (Error(SignatureQuery.Refusal.NoMatchingCandidate "doub"))
 
-      testCase "WHY — an empty word never picks a candidate" <| fun _ ->
-        SignatureQuery.pickIndex "" [| "double" |] |> Expect.equal "no match" None
+      testCase "WHY — an empty word is refused with the no-word reason" <| fun _ ->
+        SignatureQuery.pickIndex "" [| "double" |]
+        |> Expect.equal "named refusal" (Error SignatureQuery.Refusal.NoWordAtCaret)
     ]
 
     testList "render — the compiler's answer becomes a signature" [
@@ -144,7 +160,7 @@ let signatureQueryTests =
           Description = "accepting column = length + 2 would let a caret past the line through"
           Apply = fun _ _ -> Ok 0 }
 
-      let blankInsteadOfRefusal : Mutant<SignatureQuery.FcsAnswer -> Result<SignatureQuery.View, SignatureQuery.Refusal>> =
+      let blankInsteadOfRefusal : Mutant<SignatureQuery.CandidateText -> Result<SignatureQuery.View, SignatureQuery.Refusal>> =
         { Name = "empty_tooltip_becomes_a_blank_signature"
           Description = "showing a blank signature instead of refusing hides 'no symbol here'"
           Apply = fun _ a ->

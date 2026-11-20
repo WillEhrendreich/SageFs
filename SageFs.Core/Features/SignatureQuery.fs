@@ -13,6 +13,7 @@ module SignatureQuery =
   [<RequireQualifiedAccess>]
   type Refusal =
     | NoFilePath
+    | FileUnreadable of path: string
     | LineBeforeOne of line: int
     | ColumnBeforeOne of column: int
     | LinePastEnd of line: int * count: int
@@ -25,6 +26,7 @@ module SignatureQuery =
     let describe (r: Refusal) =
       match r with
       | Refusal.NoFilePath -> "signature: file_path is required. Pass the source file the caret is in."
+      | Refusal.FileUnreadable p -> sprintf "signature: the source file '%s' could not be read. Check it exists, is a file, and is readable by this process." p
       | Refusal.LineBeforeOne l -> sprintf "signature: line must be 1-based, got %d. Pass the declaration's first line." l
       | Refusal.ColumnBeforeOne c -> sprintf "signature: column must be 1-based, got %d. Pass the caret's column." c
       | Refusal.LinePastEnd(l, n) -> sprintf "signature: line %d is past the file's %d lines." l n
@@ -39,8 +41,9 @@ module SignatureQuery =
       Line: int
       Column: int }
 
-  /// What the FCS seam reports. Named fields so two strings cannot be swapped across the wire.
-  type FcsAnswer =
+  /// The already-extracted text of one completion candidate. Named fields so two strings cannot be
+  /// swapped, and named to say what it is: the compiler's tooltip and kind label, not an FCS object.
+  type CandidateText =
     { Name: string
       Tooltip: string
       Kind: string }
@@ -67,25 +70,32 @@ module SignatureQuery =
       let before = lines |> Array.take (r.Line - 1) |> Array.sumBy (fun l -> l.Length + 1)
       Ok(before + r.Column - 1)
 
-  /// The identifier token under a 1-based caret. The caret points at a character, so that character is
-  /// included; a caret on whitespace or punctuation has no word and is refused at the edge.
+  /// The identifier immediately BEFORE a 1-based editor caret. An editor caret sits between characters:
+  /// column N is before character N-1 (0-based), and column length+1 is end of line. FCS reads the partial
+  /// name as `GetPartialLongNameEx(text, cursorPosition - 1)`, so the word is the identifier ending at
+  /// `column - 1` — an exclusive end. Both this and `caretOf` must use that convention or the word we look
+  /// up and the candidates the compiler returns drift apart (proved at every column in the REPL).
   let wordAt (line: string) (column: int) : string =
     if isNull line || line.Length = 0 then ""
     else
-      let idx = min (max 0 (column - 1)) (line.Length - 1)
-      let prefix = line.Substring(0, idx + 1)
+      let idx = min (max 0 (column - 1)) line.Length
+      let prefix = line.Substring(0, idx)
       let ident c = Char.IsLetterOrDigit c || c = '_'
       prefix |> Seq.rev |> Seq.takeWhile ident |> Seq.rev |> Seq.toArray |> String
 
   /// Which completion candidate is the word under the caret. An exact match only: a prefix like `doub`
-  /// must not silently resolve to `double`, nor a name to a different overload spelt differently.
-  let pickIndex (word: string) (candidates: string[]) : int option =
-    if String.IsNullOrEmpty word then None
-    else candidates |> Array.tryFindIndex (fun c -> c = word)
+  /// must not silently resolve to `double`. The named reason travels with the failure; the edge never
+  /// reconstructs it from a bare `None`.
+  let pickIndex (word: string) (candidates: string[]) : Result<int, Refusal> =
+    if String.IsNullOrEmpty word then Error Refusal.NoWordAtCaret
+    else
+      match candidates |> Array.tryFindIndex (fun c -> c = word) with
+      | Some index -> Ok index
+      | None -> Error(Refusal.NoMatchingCandidate word)
 
   /// The signature is the first line of the compiler's tooltip, trimmed. An empty first line means
   /// the compiler had nothing to say at that position, which is a refusal rather than a blank result.
-  let render (a: FcsAnswer) : Result<View, Refusal> =
+  let render (a: CandidateText) : Result<View, Refusal> =
     let firstLine =
       a.Tooltip.Split('\n')
       |> Array.tryHead

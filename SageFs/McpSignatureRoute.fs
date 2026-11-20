@@ -28,14 +28,15 @@ module McpSignatureRoute =
   let private renderView (v: SignatureQuery.View) =
     sprintf "%s : %s\nKind: %s" v.Name v.Signature v.Kind
 
-  /// Read the source file at the edge. A missing or unreadable file is a named refusal, never an exception.
+  /// Read the source file at the edge. A missing path and an unreadable file are distinct named
+  /// refusals, so a caller told "provide file_path" is never really "the file is locked".
   let private readSource (path: string) : Result<string[], SignatureQuery.Refusal> =
-    if String.IsNullOrWhiteSpace path || not (File.Exists path) then
-      Error(SignatureQuery.Refusal.NoFilePath)
+    if String.IsNullOrWhiteSpace path then Error SignatureQuery.Refusal.NoFilePath
+    elif not (File.Exists path) then Error SignatureQuery.Refusal.NoFilePath
     else
       try Ok(File.ReadAllLines path)
-      with :? System.IO.IOException -> Error(SignatureQuery.Refusal.NoFilePath)
-         | :? System.UnauthorizedAccessException -> Error(SignatureQuery.Refusal.NoFilePath)
+      with :? System.IO.IOException -> Error(SignatureQuery.Refusal.FileUnreadable path)
+         | :? System.UnauthorizedAccessException -> Error(SignatureQuery.Refusal.FileUnreadable path)
 
   let signatureAt
     (ctx: McpContext)
@@ -56,15 +57,17 @@ module McpSignatureRoute =
           match readSource request.File with
           | Error refusal -> return renderRefusal refusal
           | Ok source ->
-            let lineText = if request.Line - 1 < source.Length then source.[request.Line - 1] else ""
-            let word = SignatureQuery.wordAt lineText request.Column
+            // Validate the address first: caretOf is the only bounds check, so an out-of-range line
+            // must be refused here rather than becoming an empty line and a misleading "no word".
+            match SignatureQuery.caretOf source request with
+            | Error refusal -> return renderRefusal refusal
+            | Ok caret ->
+              let lineText = source.[request.Line - 1]
+              let word = SignatureQuery.wordAt lineText request.Column
 
-            if String.IsNullOrEmpty word then
-              return renderRefusal SignatureQuery.Refusal.NoWordAtCaret
-            else
-              match SignatureQuery.caretOf source request with
-              | Error refusal -> return renderRefusal refusal
-              | Ok caret ->
+              if String.IsNullOrEmpty word then
+                return renderRefusal SignatureQuery.Refusal.NoWordAtCaret
+              else
                 // The completion path wants the whole source and an absolute cursor; the caret from
                 // SignatureQuery is exactly that. Every member so the exact name is present.
                 let fullSource = String.concat "\n" source
@@ -75,18 +78,18 @@ module McpSignatureRoute =
                 | CompletionAnswer.Answered(items, _) ->
                   let names = items |> Seq.map (fun i -> i.DisplayText) |> Seq.toArray
                   match SignatureQuery.pickIndex word names with
-                  | None -> return renderRefusal (SignatureQuery.Refusal.NoMatchingCandidate word)
-                  | Some index ->
+                  | Error refusal -> return renderRefusal refusal
+                  | Ok index ->
                     let item = items |> Seq.item index
                     let tooltip =
                       match item.GetDescription with
                       | Some getText -> getText () |> Array.map (fun t -> t.Text) |> String.concat ""
                       | None -> ""
-                    let fcsAnswer : SignatureQuery.FcsAnswer =
+                    let candidate : SignatureQuery.CandidateText =
                       { Name = item.DisplayText
                         Tooltip = tooltip
-                        Kind = item.Kind.ToString() }
-                    match SignatureQuery.render fcsAnswer with
+                        Kind = CompletionKind.label item.Kind }
+                    match SignatureQuery.render candidate with
                     | Error refusal -> return renderRefusal refusal
                     | Ok view -> return renderView view
       | other ->
