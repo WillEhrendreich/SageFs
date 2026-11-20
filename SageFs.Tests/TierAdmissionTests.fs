@@ -190,6 +190,20 @@ let tests =
       decideNow starved Admission.patienceSeconds schedule
       |> Expect.equal "after the patience it starts, and says why" (Admit StarvationGuard)
 
+    testCase "WHY — the starvation guard does not admit into external CPU pressure: an Exclusive tier's 'machine to myself' is false and its sessions get refused" <| fun _ ->
+      // With none of our units running, measured pressure is entirely external. The gate that shipped
+      // admitted here after the patience, and the browser tier's session-create was refused at 7.7%
+      // available — a false red from a load spike. Wait instead; the guard is for a calm-but-full machine.
+      let pressured = { calm with Pressure = Measured 95.0; Memory = AvailableBytes 0L }
+      decideNow pressured Admission.patienceSeconds (scheduleWith [] NeverAdmitted)
+      |> Expect.equal "external pressure holds the guard back" (Wait(MemoryShort(Admission.memoryReserveBytes + head.PeakBytes, 0L)))
+
+      // Unmeasured pressure is not evidence of a busy machine: the guard still fires, so a neighbour
+      // that cannot be measured cannot starve the gate.
+      let unknown = { calm with Pressure = NotMeasured "unknown"; Memory = AvailableBytes 0L }
+      decideNow unknown Admission.patienceSeconds (scheduleWith [] NeverAdmitted)
+      |> Expect.equal "unmeasured pressure still lets the guard fire" (Admit StarvationGuard)
+
     testCase "WHY — the starvation guard never fires while one of our own units runs: it frees memory by finishing" <| fun _ ->
       let starved = { calm with Memory = AvailableBytes 0L }
       match decideNow starved (Admission.patienceSeconds * 10.0) (scheduleWith [ running "u1" 0.0 ] (AdmittedAt 0.0)) with

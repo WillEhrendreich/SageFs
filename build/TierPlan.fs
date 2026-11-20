@@ -571,7 +571,17 @@ let decide (policy: Policy) (reading: Reading) (now: float) (schedule: Schedule)
               match available >= needed with
               | true -> Admit Fits
               | false ->
-                match running = 0 && now - schedule.HeadSince >= limits.PatienceSeconds with
+                // The starvation guard is for a neighbour that holds memory but leaves the CPU calm. When
+                // measured pressure is at or over the bound, the machine is busy with work OUTSIDE the gate —
+                // with none of our units running, that pressure is entirely external. Admitting an Exclusive
+                // tier into it breaks its whole premise ("the machine to myself"): its sessions get refused
+                // by the product's memory floor and its wall-clock assertions fail. Keep waiting instead; a
+                // guard that fires into external pressure turns a load spike into a false red, not progress.
+                let externalPressureBusy =
+                  match reading.Pressure with
+                  | Measured percent -> percent >= limits.CpuPressureBound
+                  | NotMeasured _ -> false
+                match running = 0 && not externalPressureBusy && now - schedule.HeadSince >= limits.PatienceSeconds with
                 | true -> Admit StarvationGuard
                 | false -> Wait (MemoryShort (needed, available))
 
