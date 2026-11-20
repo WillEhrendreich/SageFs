@@ -1015,6 +1015,7 @@
         <Compile Include="IntegrationRegistryTests.fs" />
         <Compile Include="RatchetRegistryTests.fs" />
         <Compile Include="WriteBackPlanSimTests.fs" />
+        <Compile Include="SignatureQueryTests.fs" />
         <Compile Include="WriteBackPlanTests.fs" />
         <Compile Include="WriteBackRequestTests.fs" />
         <Compile Include="EvalWriteBackTests.fs" />
