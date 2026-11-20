@@ -36,13 +36,19 @@ let memoryAdmissionTests =
         for value in [ "wat"; ""; "yes"; "disable" ] do
           MemoryAdmission.parse value |> Expect.equal (sprintf "%s is a typo" value) MemoryAdmission.Mode.Protected
 
-      testCase "WHY — the gate's literal matches the module's name, so the CI switch actually reaches test daemons" <| fun _ ->
-        // ci-pipeline.fsx runs standalone and cannot reference SageFs.Core, so it spells the variable
-        // literally. This test is the one place that sees both and fails if they drift apart.
-        let root = RepoPaths.repoPath [| "ci-pipeline.fsx" |]
-        let script = System.IO.File.ReadAllText root
+      testCase "WHY — the gate uses the shared constant, not a magic literal, so writer and reader cannot drift" <| fun _ ->
+        // ci-pipeline.fsx runs standalone, so it #loads build/MemoryAdmissionEnv.fs rather than
+        // referencing Core. This test fails if anyone reintroduces a hand-copied string in the script.
+        let script = System.IO.File.ReadAllText(RepoPaths.repoPath [| "ci-pipeline.fsx" |])
+        script.Contains("#load \"build/MemoryAdmissionEnv.fs\"")
+        |> Expect.isTrue "the gate loads the shared constant file"
         script.Contains(sprintf "\"%s\", \"off\"" MemoryAdmission.environmentVariable)
-        |> Expect.isTrue "the gate sets the module's variable to off for every tier"
+        |> Expect.isFalse "the gate has no hand-typed env name"
+
+      testCase "WHY — the shared file and the module agree on the name" <| fun _ ->
+        let shared = System.IO.File.ReadAllText(RepoPaths.repoPath [| "build"; "MemoryAdmissionEnv.fs" |])
+        shared.Contains(sprintf "let environmentVariable = \"%s\"" MemoryAdmission.environmentVariable)
+        |> Expect.isTrue "one home for the name"
     ]
 
     testList "apply — filter the decision's actions only" [

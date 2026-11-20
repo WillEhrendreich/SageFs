@@ -244,6 +244,7 @@ let writeReleaseManifest () =
 // the fast suite if a registered tier is not declared here, or if a test run
 // bypasses `testTier`.
 
+#load "build/MemoryAdmissionEnv.fs"
 #load "build/TierPlan.fs"
 #load "build/TierCost.fs"
 #load "build/FailureReport.fs"
@@ -484,9 +485,7 @@ let tierTimings = Collections.Concurrent.ConcurrentDictionary<string, TierSchedu
 /// dead, stop idle) stays on — it genuinely frees memory. A user's daemon keeps the protected default.
 let tierRuntimeEnvironment : (string * string) list =
   [ "DOTNET_TieredPGO", "0"
-    // Literal here: this script runs standalone and does not reference SageFs.Core, where
-    // MemoryAdmission.environmentVariable names the same string. Keep the two in step.
-    "SAGEFS_MEMORY_ADMISSION", "off" ]
+    SageFs.MemoryAdmissionEnv.environmentVariable, "off" ]
 
 // ---- fail fast -------------------------------------------------------------------
 //

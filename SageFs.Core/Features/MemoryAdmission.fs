@@ -17,9 +17,9 @@ type Mode =
   /// Never refuse admission; still shed idle/dead sessions (for a CI test daemon).
   | Unrestricted
 
-/// The environment variable that sets it. The gate sets `off` for every tier, inherited by every
-/// test daemon it spawns; a user's shell normally leaves it unset.
-let environmentVariable = "SAGEFS_MEMORY_ADMISSION"
+/// The environment variable that sets it — the one shared with the gate script via
+/// build/MemoryAdmissionEnv.fs, so the writer and reader cannot drift.
+let environmentVariable = SageFs.MemoryAdmissionEnv.environmentVariable
 
 let defaultMode : Mode = Mode.Protected
 
