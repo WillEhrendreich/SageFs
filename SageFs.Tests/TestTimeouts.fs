@@ -180,7 +180,11 @@ module TestTimeouts =
   /// Ceiling on ONE measured edit reaching its verdict on the live-testing stream. A healthy edit takes
   /// about a second; reaching this means the daemon stopped answering, and it is generous because a cold
   /// runner pays for a type-check cache and a JIT that nobody warmed. A passing run never waits it out.
-  let liveTestingVerdictCeiling = secs 30.
+  /// It is a generous multiple because the gate shares this box with other CI: a 30s ceiling read the
+  /// verdict frame late at load 8 and failed a case that passed 3/3 alone. These waits are correctness
+  /// ceilings, not latency measurements (the p95 assertions live in LiveTestingLatencyTests and read the
+  /// real time regardless of how long the ceiling allows), so headroom costs nothing on a quiet box.
+  let liveTestingVerdictCeiling = secs 120.
   /// Ceiling on the HTTP request that holds a test for a debugger, and on the one that releases
   /// it. Holding waits for the host to reach the test, and releasing waits for the test to
   /// finish, so both outlast an ordinary request. The daemon gives up at its own window
@@ -247,8 +251,11 @@ module TestTimeouts =
   let appFirstAnswer = secs 30.
   /// The worker reporting that a file is watched after watch-all.
   let watchRegistered = secs 10.
-  /// A hot-reload save reaching its first verdict.
-  let saveVerdict = secs 60.
+  /// A hot-reload save reaching its first verdict. A generous multiple for the same reason as
+  /// `liveTestingVerdictCeiling`: the gate shares the box with other CI, and a landing verdict read
+  /// at 60s under load 8 failed a case that passed 3/3 alone. This is a correctness ceiling, not a
+  /// measurement; the latency series assert their own bounds on the real time.
+  let saveVerdict = secs 180.
   /// A patch ending in confirmed or never-entered. Outlasts `Timeouts.patchConfirmation`, the
   /// bound the worker itself gives the patched code to run.
   let patchOutcome = secs 40.
