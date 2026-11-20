@@ -186,7 +186,7 @@ module Capability =
           "get_recent_fsi_events"; "switch_session"; "list_members"; "list_references" ]
       | ToolClass.Feedback -> [ "report_friction" ]
       | ToolClass.CodeAnalysis ->
-        [ "check_fsharp_code"; "diagnose"; "coverage_intel"; "impact_forecast"; "suggest_next_action"; "plan_ripple"
+        [ "check_fsharp_code"; "signature_at_caret"; "diagnose"; "coverage_intel"; "impact_forecast"; "suggest_next_action"; "plan_ripple"
           "preview_what_if"; "suggest_next_cell"; "get_cell_dependencies"; "decompose_pipeline"; "explain_test_failure"
           "list_tests"; "suggest_repair"; "get_session_filmstrip"; "get_eval_timeline"; "get_eval_diff"
           "get_message_journal"; "export_notebook"; "export_session_transcript" ]
@@ -430,7 +430,7 @@ module Capability =
       @ tagged
           RouteKind.OnSession
           [ "get_session_status"; "list_runnable_projects"; "discover_features"; "get_recent_fsi_events"
-            "switch_session"; "check_fsharp_code"; "diagnose"; "coverage_intel"; "impact_forecast"
+            "switch_session"; "check_fsharp_code"; "signature_at_caret"; "diagnose"; "coverage_intel"; "impact_forecast"
             "suggest_next_action"; "plan_ripple"; "preview_what_if"; "suggest_next_cell"
             "get_cell_dependencies"; "explain_test_failure"; "list_tests"; "suggest_repair"
             "get_session_filmstrip"; "get_eval_timeline"; "get_eval_diff"; "get_message_journal"

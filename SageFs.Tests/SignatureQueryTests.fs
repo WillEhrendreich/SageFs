@@ -19,11 +19,8 @@ let private req (file: string) (line: int) (column: int) : SignatureQuery.Reques
 
 let private answer (tooltip: string) : SignatureQuery.FcsAnswer =
   { Name = "double"
-    FullName = "Program.double"
     Tooltip = tooltip
-    Kind = "Method"
-    DefinitionFile = Some "/repo/App.fs"
-    DefinitionLine = Some 2 }
+    Kind = "Method" }
 
 let private signatureOf (r: Result<SignatureQuery.View, SignatureQuery.Refusal>) =
   match r with
@@ -82,6 +79,28 @@ let signatureQueryTests =
         |> Expect.equal "refuses line 9" (Error(SignatureQuery.Refusal.LinePastEnd(9, 3)))
     ]
 
+    testList "wordAt / pickIndex — resolve the identifier under the caret" [
+      testCase "WHY — a caret on a letter includes that letter in the word" <| fun _ ->
+        SignatureQuery.wordAt "let double x = x * 2" 10 |> Expect.equal "the whole name" "double"
+
+      testCase "WHY — a caret mid-word returns the word up to the caret, not past it" <| fun _ ->
+        SignatureQuery.wordAt "let double x = x * 2" 9 |> Expect.equal "up to the caret" "doubl"
+
+      testCase "WHY — a caret on whitespace has no word" <| fun _ ->
+        SignatureQuery.wordAt "let double x = x * 2" 11 |> Expect.equal "no word" ""
+
+      testCase "WHY — only an exact-name candidate is picked" <| fun _ ->
+        SignatureQuery.pickIndex "double" [| "double"; "downcast" |]
+        |> Expect.equal "exact match" (Some 0)
+
+      testCase "WHY — a prefix does not silently resolve to a longer name" <| fun _ ->
+        SignatureQuery.pickIndex "doub" [| "double"; "downcast" |]
+        |> Expect.equal "no match" None
+
+      testCase "WHY — an empty word never picks a candidate" <| fun _ ->
+        SignatureQuery.pickIndex "" [| "double" |] |> Expect.equal "no match" None
+    ]
+
     testList "render — the compiler's answer becomes a signature" [
       testCase "WHY — only the first tooltip line is the signature, trimmed" <| fun _ ->
         SignatureQuery.render (answer "  val double: x:int -> int  \nthe long docs")
@@ -96,11 +115,11 @@ let signatureQueryTests =
         SignatureQuery.render (answer "\n  val double: x:int -> int")
         |> Expect.equal "refuses leading blank" (Error SignatureQuery.Refusal.EmptySignature)
 
-      testCase "WHY — the definition travels with the signature" <| fun _ ->
+      testCase "WHY — the name and kind travel with the signature" <| fun _ ->
         match SignatureQuery.render (answer "val double: x:int -> int") with
         | Ok v ->
-          v.DefinitionFile |> Expect.equal "definition file" (Some "/repo/App.fs")
-          v.DefinitionLine |> Expect.equal "definition line" (Some 2)
+          v.Name |> Expect.equal "name" "double"
+          v.Kind |> Expect.equal "kind" "Method"
         | Error e -> failtestf "expected a signature, got %A" e
     ]
 
@@ -129,8 +148,7 @@ let signatureQueryTests =
         { Name = "empty_tooltip_becomes_a_blank_signature"
           Description = "showing a blank signature instead of refusing hides 'no symbol here'"
           Apply = fun _ a ->
-            Ok { Name = a.Name; FullName = a.FullName; Signature = ""; Kind = a.Kind
-                 DefinitionFile = a.DefinitionFile; DefinitionLine = a.DefinitionLine } }
+            Ok { Name = a.Name; Signature = ""; Kind = a.Kind } }
 
       let lineZeroAccepted : Mutant<SignatureQuery.Request -> Result<SignatureQuery.Request, SignatureQuery.Refusal>> =
         { Name = "line_zero_accepted"

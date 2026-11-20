@@ -2607,6 +2607,27 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         SageFs.McpReferencesRoute.listReferences ctx "mcp" (SageFs.QualifiedName qualified_name) offset target |> withEcho ctx "list_references"
 
     [<McpServerTool>]
+    [<Description("""The inferred signature at a 1-based (line, column) caret in a source file, from the session's live compiler. Reply: name and signature, then kind, or a named reason (bad path or address, caret not on an identifier, name not found, no session). No file is changed.""")>]
+    member _.signature_at_caret(
+        [<Description("Source file the caret is in.")>]
+        file_path: string,
+        [<Description("1-based caret line.")>]
+        line: int,
+        [<Description("1-based caret column; one past the last character is end-of-line.")>]
+        column: int,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
+        logger.LogDebug("MCP-TOOL: signature_at_caret called, file={File}, line={Line}, column={Column}", file_path, line, column)
+        SageFs.McpSignatureRoute.signatureAt ctx (SageFs.McpSignatureRoute.Agent "mcp") sid wd (SageFs.McpSignatureRoute.SourcePath file_path) (SageFs.McpSignatureRoute.CaretLine line) (SageFs.McpSignatureRoute.CaretColumn column) |> withEcho ctx "signature_at_caret"
+
+    [<McpServerTool>]
     [<Description("""Run F# in the session like send_fsharp_code while the daemon records the session's FSI host from outside it with an installed dotnet-trace, then reply with the eval's own output followed by a ranked table. mode=cpu (the default): where managed CPU time went, methods by self time and your own code by total time, each with its share, and what was not counted (time in native code or waiting, which is where idle threads sit). mode=alloc: the bytes the runtime sampled allocating (about one sample for every 100 KB), by type and by type at the nearest frame of your code. Bindings persist, as with send_fsharp_code. Code you type into the session is yours (FSI-ASSEMBLY frames), and so are frames of the projects the session loaded. The eval needs to run about a second or more (cpu) or allocate a few hundred KB (alloc) to be sampled; percentages are of what was sampled, and sampled time runs under the wall clock. A refusal names what to do next and the code did not run: dotnet-trace missing (the reply gives the install command), the recorder could not attach, the session has no process of its own (an in-process session) or no running FSI. A host that ends while recorded gives HostGone, and the eval's own reply is kept. Linux and macOS only. The recording and its files are removed when the call returns.""")>]
     member _.profile(
         [<Description(AgentNameIdentifyParam)>]

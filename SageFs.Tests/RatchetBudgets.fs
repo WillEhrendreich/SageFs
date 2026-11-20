@@ -353,7 +353,10 @@ let fileSize : (string * int) list =
     // 3157 -> 3204: the write_back tool, the one door for editing source through a
     // live session. Approved raise for a core edit tool; the pure request decision
     // lives in its own module so this file only carries the MCP edge.
-    "SageFs/McpTools.fs", 3204
+    // 3204 -> 3225: signature_at_caret's MCP edge. The pure decision lives in
+    // SignatureQuery.fs and the session/IO composition in McpSignatureRoute.fs, so
+    // this accretion hub carries only the tool member.
+    "SageFs/McpTools.fs", 3225
     "SageFs.Host/WorkerMain.fs", 2460
     "SageFs.Core/Cohort.fs", 2475
     "SageFs/DashboardTypes.fs", 2159
@@ -456,7 +459,10 @@ let analyzerFindings : (string * int) list =
     // swappable-primitive shape as send_fsharp_code (strings for name/code/file/
     // routing, ints for line/timeout). Approved with the core edit tool; the
     // request decision itself is a typed DU in WriteBackRequest.
-    "SageFs/SAGE-005", 213
+    // 213 -> 215: signature_at_caret's flat MCP params (strings for file/routing,
+    // ints for line/column). Approved; the route takes single-case wrappers and
+    // the pure decision is a typed module, so only the MCP edge carries this.
+    "SageFs/SAGE-005", 215
     "SageFs/SAGE-006", 3
     "SageFs/SAGE-007", 100
     "SageFs/SAGE-009", 42 ]
@@ -477,7 +483,10 @@ let toolList : (string * int) list =
   // 38222 -> 39382: write_back joins the catalog. Approved raise for a core
   // edit tool whose summary names the required arguments and the verdict field;
   // the starter list is unchanged because the tool needs a Ready session.
-  [ "full catalog characters", 39382
+  // 39382 -> 40098: signature_at_caret joins the catalog as a Ready-session
+  // analysis tool, so the starter list is still unchanged. Its summary names the
+  // caret arguments and the named refusals it can return.
+  [ "full catalog characters", 40098
     "starter list characters", 5395 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =

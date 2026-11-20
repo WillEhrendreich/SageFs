@@ -24,6 +24,7 @@ module ToolSummaries =
     | ToolName.ListRunnableProjects -> "List the session's projects and which of them run_app can run."
     | ToolName.ListMembers -> "List the members of a namespace, module or type, one page at a time. Names only."
     | ToolName.ListReferences -> "Every definition and use of a qualified name across the session's projects, led by a scope line."
+    | ToolName.SignatureAtCaret -> "The inferred signature of the declaration at a source caret, from the session's live compiler."
     | ToolName.GetFrictionReport -> "A structured report of the local friction records, for an agent to act on."
     | ToolName.GetFrictionSummary -> "A compact summary of the local friction records."
     | ToolName.GetRecentFsiEvents -> "The last N evals of a session with their outcomes, timestamps and durations."

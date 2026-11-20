@@ -102,7 +102,9 @@ let requiredParamsByTool =
     // The rung below it: the name to find references to is required; the offset and the directory default.
     "list_references", set ["qualified_name"]
     // The profile tool: who is asking and the code are required; the mode and the routing default.
-    "profile", set ["agentName"; "code"] ]
+    "profile", set ["agentName"; "code"]
+    // The signature tool: the caret address is required; the routing defaults.
+    "signature_at_caret", set ["file_path"; "line"; "column"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -264,7 +266,7 @@ let descriptionPropertyTests =
       // + list_references: the rung below it, whose reply states its scope first.
       // + seat_conductor: a seated member asks, and a person's yes fills an empty conductor seat.
       // + profile: run F# under a recording of the session's host and report where the CPU time went.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 75
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 76
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

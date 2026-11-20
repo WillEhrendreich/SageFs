@@ -196,10 +196,10 @@ let affordanceAlgebraTests =
 let toolRegistrationTests =
   testList "tool registration completeness" [
 
-    testCase "affordance module covers exactly 47 unique tool names" <| fun _ ->
+    testCase "affordance module covers exactly 48 unique tool names" <| fun _ ->
       allAffordanceTools
       |> List.length
-      |> Expect.equal "unique affordance tools" 47
+      |> Expect.equal "unique affordance tools" 48
 
     testCase "all affordance tool names are non-empty and non-whitespace"
     <| fun _ ->
@@ -218,7 +218,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 75 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 76 (reflection)"
     <| fun _ ->
       let methods = mcpToolMethods ()
       // 42 (incl. switch_workflow, finally [<McpServerTool>]-registered) + the
@@ -234,9 +234,10 @@ let toolRegistrationTests =
       // list_members (the progressive map's first rung) + list_references (the rung below it) +
       // seat_conductor (a seated member asks, a person's yes fills an empty conductor seat) +
       // profile (run F# under a recording of the session's host and report where the CPU time went) +
-      // write_back (the one door for changing source through a verified eval).
+      // write_back (the one door for changing source through a verified eval) +
+      // signature_at_caret (the inferred signature under a source caret).
       methods.Length
-        |> Expect.equal "MCP tool method count" 75
+        |> Expect.equal "MCP tool method count" 76
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -299,7 +300,7 @@ let stateTransitionSafetyTests =
               "checkToolAvailability threw for (%A, %s): %s"
               state tool ex.Message))
       tested
-          |> Expect.equal "should test all 235 state×tool combos" 235
+          |> Expect.equal "should test all 240 state×tool combos" 240
 
     testCase "all rejections return ToolNotAvailable specifically" <| fun _ ->
       allStates

@@ -214,6 +214,8 @@
         <Compile Include="McpListMembers.fs" />
         <Compile Include="McpMembersReply.fs" />
         <Compile Include="McpMembersRoute.fs" />
+        <!-- The signature-at-caret route: composes the pure SignatureQuery with the existing completion path. -->
+        <Compile Include="McpSignatureRoute.fs" />
         <!-- Slice 3 of the progressive map: the references rung. The page (scope line first, totals before paging) is pure;
              the route asks the session's worker. -->
         <Compile Include="McpReferencesPage.fs" />

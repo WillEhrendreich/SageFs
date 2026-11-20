@@ -79,6 +79,7 @@ let availableTools (state: SessionState) : string list =
       "get_recent_fsi_events"
       "get_friction_report"
       "check_fsharp_code"
+      "signature_at_caret"
       "targeted_verify"
       "list_tests"
       "run_tests"
@@ -265,6 +266,7 @@ let private gatingDomain : Map<string, ToolGate> =
     "profile", ToolGate.StateGated
     "get_recent_fsi_events", ToolGate.StateGated
     "check_fsharp_code", ToolGate.StateGated
+    "signature_at_caret", ToolGate.StateGated
     "targeted_verify", ToolGate.StateGated
     "list_tests", ToolGate.StateGated
     "run_tests", ToolGate.StateGated
@@ -651,6 +653,7 @@ type ToolName =
   | ListRunnableProjects
   | ListMembers
   | ListReferences
+  | SignatureAtCaret
   | GetFrictionReport
   | GetFrictionSummary
   | GetRecentFsiEvents
@@ -745,6 +748,7 @@ module ToolName =
     | ToolName.GetAvailableProjects -> "get_available_projects"
     | ToolName.ListMembers -> "list_members"
     | ToolName.ListReferences -> "list_references"
+    | ToolName.SignatureAtCaret -> "signature_at_caret"
     | ToolName.ListRunnableProjects -> "list_runnable_projects"
     | ToolName.GetFrictionReport -> "get_friction_report"
     | ToolName.GetFrictionSummary -> "get_friction_summary"
@@ -823,6 +827,7 @@ module ToolName =
       ToolName.ListRunnableProjects
       ToolName.ListMembers
       ToolName.ListReferences
+      ToolName.SignatureAtCaret
       ToolName.GetFrictionReport
       ToolName.GetFrictionSummary
       ToolName.GetRecentFsiEvents
