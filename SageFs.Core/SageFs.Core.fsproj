@@ -542,8 +542,9 @@
              Features\DaemonHealth.fs (see the comment there) — this is only
              the supervisory decision built on top of it. -->
         <Compile Include="MemorySupervisor.fs" />
-        <!-- The shared env-var name, #load'ed by ci-pipeline.fsx too; before MemoryAdmission, which uses it. -->
-        <Compile Include="../build/MemoryAdmissionEnv.fs" Link="Build\MemoryAdmissionEnv.fs" />
+        <!-- The shared env-var name, #load'ed by ci-pipeline.fsx too; before MemoryAdmission, which uses it.
+             Lives inside Core so the self-host fixture, which copies Core's sources, carries it. -->
+        <Compile Include="MemoryAdmissionEnv.fs" />
         <!-- The CI switch for the supervisor's session-admission refusal; after MemorySupervisor
              because it filters that module's Decision. Actions only, never Level or Reason. -->
         <Compile Include="Features\MemoryAdmission.fs" />

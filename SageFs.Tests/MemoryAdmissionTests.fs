@@ -40,13 +40,13 @@ let memoryAdmissionTests =
         // ci-pipeline.fsx runs standalone, so it #loads build/MemoryAdmissionEnv.fs rather than
         // referencing Core. This test fails if anyone reintroduces a hand-copied string in the script.
         let script = System.IO.File.ReadAllText(RepoPaths.repoPath [| "ci-pipeline.fsx" |])
-        script.Contains("#load \"build/MemoryAdmissionEnv.fs\"")
+        script.Contains("#load \"SageFs.Core/MemoryAdmissionEnv.fs\"")
         |> Expect.isTrue "the gate loads the shared constant file"
         script.Contains(sprintf "\"%s\", \"off\"" MemoryAdmission.environmentVariable)
         |> Expect.isFalse "the gate has no hand-typed env name"
 
       testCase "WHY — the shared file and the module agree on the name" <| fun _ ->
-        let shared = System.IO.File.ReadAllText(RepoPaths.repoPath [| "build"; "MemoryAdmissionEnv.fs" |])
+        let shared = System.IO.File.ReadAllText(RepoPaths.repoPath [| "SageFs.Core"; "MemoryAdmissionEnv.fs" |])
         shared.Contains(sprintf "let environmentVariable = \"%s\"" MemoryAdmission.environmentVariable)
         |> Expect.isTrue "one home for the name"
     ]

@@ -18,7 +18,7 @@ type Mode =
   | Unrestricted
 
 /// The environment variable that sets it — the one shared with the gate script via
-/// build/MemoryAdmissionEnv.fs, so the writer and reader cannot drift.
+/// SageFs.Core/MemoryAdmissionEnv.fs, so the writer and reader cannot drift.
 let environmentVariable = SageFs.MemoryAdmissionEnv.environmentVariable
 
 let defaultMode : Mode = Mode.Protected

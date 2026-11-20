@@ -244,7 +244,7 @@ let writeReleaseManifest () =
 // the fast suite if a registered tier is not declared here, or if a test run
 // bypasses `testTier`.
 
-#load "build/MemoryAdmissionEnv.fs"
+#load "SageFs.Core/MemoryAdmissionEnv.fs"
 #load "build/TierPlan.fs"
 #load "build/TierCost.fs"
 #load "build/FailureReport.fs"
