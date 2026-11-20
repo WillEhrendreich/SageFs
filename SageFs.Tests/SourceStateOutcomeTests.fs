@@ -186,7 +186,14 @@ let private rebuildRows (client: McpClient) (httpClient: Net.Http.HttpClient) : 
     // A run asked for while the rebuild runs says so, however it passes: the old worker is still serving the old build.
     let! mid, midText = runTests client
     stateOf mid |> Expect.equal (sprintf "the receipt says Rebuilding. Text: %s" midText) "Rebuilding"
-    verdictOf mid |> Expect.equal "a pass during a rebuild is never AllPassed" "PassedWhileRebuilding"
+    // A run asked for mid-rebuild is never a clean green. If every test still passed in this run the verdict
+    // is PassedWhileRebuilding; under load the rebuild can swap the worker mid-run, a result goes unattributed
+    // and the honest verdict is Incomplete. Both satisfy the contract; AllPassed and SomeFailed do not. The
+    // exact verdict depended on timing, which made this case flake in the gate, so assert the invariant.
+    let midVerdict = verdictOf mid
+    (midVerdict = "PassedWhileRebuilding" || midVerdict = "Incomplete")
+    |> Expect.isTrue
+      (sprintf "a pass during a rebuild is never AllPassed. Verdict: %s. Text: %s" midVerdict midText)
     // The old worker stays Ready while the new build is made, so the status wait has nothing to park on. The rebuild is over when
     // its record says it succeeded and the session is Ready.
     let last = ref ""
