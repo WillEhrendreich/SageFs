@@ -22,14 +22,21 @@ let private mainRoot = RepoPaths.mainCheckoutRoot repoRoot
 /// checkout instead, which is a different place. Use the same env var the rest
 /// of the suite uses, so a worktree and a normal checkout judge a plugin
 /// landmark by the same file.
-let private readFromRepo (relative: string) : FileState =
-  let nvimPrefix = "../sagefs.nvim/"
+let private nvimPrefix = "../sagefs.nvim/"
+
+/// Where a landmark's file lives. Every test that touches a landmark path must go
+/// through this: the folder-existence check used to call `resolvePath` directly,
+/// which ignored SAGEFS_NVIM_DIR and went red in CI's ungated full-pipeline run
+/// even though the env var pointed at a real checkout. One resolver, one answer.
+let private landmarkPath (relative: string) : string =
   let nvimDir = Environment.GetEnvironmentVariable "SAGEFS_NVIM_DIR"
-  let path =
-    match nvimDir, relative.StartsWith(nvimPrefix, StringComparison.Ordinal) with
-    | dir, true when not (String.IsNullOrWhiteSpace dir) ->
-      Path.Combine(dir, relative.Substring(nvimPrefix.Length))
-    | _ -> resolvePath repoRoot mainRoot relative
+  match nvimDir, relative.StartsWith(nvimPrefix, StringComparison.Ordinal) with
+  | dir, true when not (String.IsNullOrWhiteSpace dir) ->
+    Path.Combine(dir, relative.Substring(nvimPrefix.Length)) |> Path.GetFullPath
+  | _ -> resolvePath repoRoot mainRoot relative
+
+let private readFromRepo (relative: string) : FileState =
+  let path = landmarkPath relative
   match File.Exists path with
   | true -> Lines(File.ReadAllLines path)
   | false -> Missing
@@ -105,7 +112,7 @@ let tests =
           match item.Arrival with
           | NoLandmarkYet -> None
           | Marked landmark ->
-            let folder = Path.GetDirectoryName(resolvePath repoRoot mainRoot landmark.Path)
+            let folder = Path.GetDirectoryName(landmarkPath landmark.Path)
             match landmark.Symbol.Trim() <> "" && Directory.Exists folder with
             | true -> None
             | false -> Some (sprintf "%s -> %s (%s)" item.Id landmark.Path landmark.Symbol))
