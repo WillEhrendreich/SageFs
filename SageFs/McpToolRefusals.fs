@@ -42,6 +42,7 @@ module McpToolRefusals =
     | WorkerProtocol.WorkerResponse.CheckResult _ -> "CheckResult"
     | WorkerProtocol.WorkerResponse.TypeCheckWithSymbolsResult _ -> "TypeCheckWithSymbolsResult"
     | WorkerProtocol.WorkerResponse.CompletionResult _ -> "CompletionResult"
+    | WorkerProtocol.WorkerResponse.DescriptionResult _ -> "DescriptionResult"
     | WorkerProtocol.WorkerResponse.ReferencesResult _ -> "ReferencesResult"
     | WorkerProtocol.WorkerResponse.HostProcessResult _ -> "HostProcessResult"
     | WorkerProtocol.WorkerResponse.StatusResult _ -> "StatusResult"

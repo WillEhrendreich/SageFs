@@ -39,6 +39,8 @@ module HttpWorkerClient =
       withBody WorkerRoute.TypecheckSymbols (Serialization.serialize {| code = code; filePath = filePath; replyId = rid |})
     | WorkerMessage.GetCompletions(code, cursorPos, limit, rid) ->
       withBody WorkerRoute.Completions (Serialization.serialize {| code = code; cursorPos = cursorPos; limit = limit; replyId = rid |})
+    | WorkerMessage.DescribeCompletion(code, cursorPos, name, rid) ->
+      withBody WorkerRoute.CompletionDescription (Serialization.serialize {| code = code; cursorPos = cursorPos; name = name; replyId = rid |})
     | WorkerMessage.GetReferences(qualifiedName, rid) ->
       withBody WorkerRoute.References (Serialization.serialize {| qualifiedName = qualifiedName; replyId = rid |})
     | WorkerMessage.GetHostProcess rid ->

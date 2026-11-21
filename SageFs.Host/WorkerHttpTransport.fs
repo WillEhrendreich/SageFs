@@ -412,6 +412,15 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.GetCompletions(code, cursorPos, limit, rid))
       })) |> ignore
 
+      map WorkerRoute.CompletionDescription (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let code = (jsonProp doc "code").GetString()
+        let cursorPos = (jsonProp doc "cursorPos").GetInt32()
+        let name = (jsonProp doc "name").GetString()
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.DescribeCompletion(code, cursorPos, name, rid))
+      })) |> ignore
       map WorkerRoute.References (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)

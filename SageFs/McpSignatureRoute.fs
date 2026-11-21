@@ -81,10 +81,17 @@ module McpSignatureRoute =
                   | Error refusal -> return renderRefusal refusal
                   | Ok index ->
                     let item = items |> Seq.item index
-                    let tooltip =
-                      match item.GetDescription with
-                      | Some getText -> getText () |> Array.map (fun t -> t.Text) |> String.concat ""
-                      | None -> ""
+                    // The completion wire drops FCS's description closure. Ask the worker that holds the
+                    // compiler for the one tooltip we need; a missing answer is the named EmptySignature
+                    // refusal in SignatureQuery.render, never a made-up signature from the name alone.
+                    let! description =
+                      McpCompletionDescription.get
+                        ctx
+                        (McpCompletionDescription.CompletionSource fullSource)
+                        caret
+                        (McpCompletionDescription.Candidate item.DisplayText)
+                        (McpCompletionDescription.Session sid)
+                    let tooltip = description |> Option.defaultValue ""
                     let candidate : SignatureQuery.CandidateText =
                       { Name = item.DisplayText
                         Tooltip = tooltip

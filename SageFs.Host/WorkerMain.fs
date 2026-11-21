@@ -21,16 +21,6 @@ let workerCoreVersion : string =
   |> Option.map (fun v -> v.ToString())
   |> Option.defaultValue "unknown"
 
-/// Convert internal Diagnostic to WorkerDiagnostic for transport.
-let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
-  { Severity = d.Severity
-    Message = d.Message
-    StartLine = d.Range.StartLine
-    StartColumn = d.Range.StartColumn
-    EndLine = d.Range.EndLine
-    EndColumn = d.Range.EndColumn
-    ErrorNumber = d.ErrorNumber }
-
 /// Convert the session's status + EvalStats to WorkerStatusSnapshot.
 let toStatusSnapshot
   (status: SessionStatus)
@@ -176,7 +166,7 @@ let handleMessage
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Repl
-      let diags = response.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
+      let diags = response.Diagnostics |> Array.map WorkerWireHelpers.toWorkerDiagnostic |> Array.toList
       let result = response.EvaluationResult |> Result.mapError (toWorkerError SageFsError.EvalFailed)
       let metadata =
         response.Metadata
@@ -203,14 +193,14 @@ let handleMessage
       let! diags =
         actor.PostAndAsyncReply(fun rc -> GetDiagnostics(code, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Check
-      let workerDiags = diags |> Array.map toWorkerDiagnostic |> Array.toList
+      let workerDiags = diags |> Array.map WorkerWireHelpers.toWorkerDiagnostic |> Array.toList
       return WorkerResponse.CheckResult(replyId, workerDiags)
 
     | WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId) ->
       let! result =
         actor.PostAndAsyncReply(fun rc -> GetTypeCheckWithSymbols(code, filePath, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Check
-      let workerDiags = result.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
+      let workerDiags = result.Diagnostics |> Array.map WorkerWireHelpers.toWorkerDiagnostic |> Array.toList
       let workerSymRefs = result.SymbolRefs |> List.map WorkerProtocol.WorkerSymbolRef.fromDomain
       return WorkerResponse.TypeCheckWithSymbolsResult(replyId, workerDiags, workerSymRefs)
 
@@ -222,6 +212,9 @@ let handleMessage
       // The kind FCS gave each candidate and the size of the set cross the wire with the names.
       return WorkerResponse.CompletionResult(replyId, answer |> SageFs.Features.AutoCompletion.CompletionAnswer.map SageFs.Features.AutoCompletion.CompletionEntry.ofItem)
 
+    | WorkerMessage.DescribeCompletion(code, cursorPos, name, replyId) ->
+      let! description = WorkerWireHelpers.describe actor (WorkerWireHelpers.CompletionSource code) cursorPos (WorkerWireHelpers.Candidate name)
+      return WorkerResponse.DescriptionResult(replyId, description)
     | WorkerMessage.CancelEval ->
       let! cancelled = actor.PostAndAsyncReply(fun rc -> CancelEval rc)
       return WorkerResponse.EvalCancelled cancelled

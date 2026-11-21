@@ -29,6 +29,7 @@ let private oneOfEachMessage : WorkerMessage list =
     WorkerMessage.CheckCode("1", "r")
     WorkerMessage.TypeCheckWithSymbols("1", "f.fsx", "r")
     WorkerMessage.GetCompletions("1", 0, Features.AutoCompletion.CompletionLimit.EveryMember, "r")
+    WorkerMessage.DescribeCompletion("1", 0, "One", "r")
     WorkerMessage.GetReferences("A.b", "r")
     WorkerMessage.GetHostProcess "r"
     WorkerMessage.CancelEval

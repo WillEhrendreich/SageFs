@@ -357,7 +357,7 @@ let fileSize : (string * int) list =
     // SignatureQuery.fs and the session/IO composition in McpSignatureRoute.fs, so
     // this accretion hub carries only the tool member.
     "SageFs/McpTools.fs", 3225
-    "SageFs.Host/WorkerMain.fs", 2460
+    "SageFs.Host/WorkerMain.fs", 2453
     "SageFs.Core/Cohort.fs", 2475
     "SageFs/DashboardTypes.fs", 2159
     "SageFs.Core/Middleware/HotReloadCore.fs", 1963

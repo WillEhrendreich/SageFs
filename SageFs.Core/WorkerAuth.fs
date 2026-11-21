@@ -67,6 +67,7 @@ module WorkerAuth =
     | WorkerRoute.Check
     | WorkerRoute.TypecheckSymbols
     | WorkerRoute.Completions
+    | WorkerRoute.CompletionDescription
     | WorkerRoute.References
     | WorkerRoute.HostProcess
     | WorkerRoute.Cancel

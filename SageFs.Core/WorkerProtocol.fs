@@ -353,6 +353,10 @@ module WorkerProtocol =
     | CheckCode of code: string * replyId: string
     | TypeCheckWithSymbols of code: string * filePath: string * replyId: string
     | GetCompletions of code: string * cursorPos: int * limit: Features.AutoCompletion.CompletionLimit * replyId: string
+    /// The FCS tooltip for the named candidate at a caret. CompletionEntry carries no description across the worker
+    /// wire (a closure cannot be serialized), so the signature tool asks the one process holding FCS for just the one
+    /// tooltip it needs — one extra completion query instead of a description for every candidate in the set.
+    | DescribeCompletion of code: string * cursorPos: int * name: string * replyId: string
     /// Every definition and use of a qualified name in the session's projects, each checked by the compiler under one
     /// budget (`Timeouts.referencesCheck`). The answer says which projects it covers.
     | GetReferences of qualifiedName: string * replyId: string
@@ -492,6 +496,9 @@ module WorkerProtocol =
     | TypeCheckWithSymbolsResult of replyId: string * diagnostics: WorkerDiagnostic list * symbolRefs: WorkerSymbolRef list
     /// The candidates with the kind FCS gave each and the size of the set they came from, or why none could be listed.
     | CompletionResult of replyId: string * answer: Features.AutoCompletion.CompletionAnswer<Features.AutoCompletion.CompletionEntry>
+    /// Reply to DescribeCompletion: the candidate's tooltip text, empty when the name is not in the set or FCS
+    /// offered no description. An empty tooltip is an answer, not a failure to reach the worker.
+    | DescriptionResult of replyId: string * description: string
     /// Reply to GetReferences: what each project of the session said. The scope a reader may claim is derived from it
     /// (`ReferenceReply.ofAnswer`), never carried beside it.
     | ReferencesResult of replyId: string * answer: Features.ReferencesAnswer
@@ -555,6 +562,7 @@ module WorkerProtocol =
       | WorkerMessage.CheckCode _
       | WorkerMessage.TypeCheckWithSymbols _
       | WorkerMessage.GetCompletions _
+      | WorkerMessage.DescribeCompletion _
       | WorkerMessage.GetReferences _
       | WorkerMessage.LoadScript _
       | WorkerMessage.RunTests _
@@ -617,6 +625,7 @@ module WorkerProtocol =
       | WorkerMessage.CheckCode _
       | WorkerMessage.TypeCheckWithSymbols _
       | WorkerMessage.GetCompletions _
+      | WorkerMessage.DescribeCompletion _
       | WorkerMessage.GetReferences _
       | WorkerMessage.CancelEval
       | WorkerMessage.CancelEvalRequest _
@@ -665,6 +674,7 @@ module WorkerProtocol =
       | WorkerResponse.CheckResult _
       | WorkerResponse.TypeCheckWithSymbolsResult _
       | WorkerResponse.CompletionResult _
+      | WorkerResponse.DescriptionResult _
       | WorkerResponse.ReferencesResult _
       | WorkerResponse.HostProcessResult _
       | WorkerResponse.StatusResult _

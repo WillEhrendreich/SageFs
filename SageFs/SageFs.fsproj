@@ -206,6 +206,7 @@
         <Compile Include="McpRunTests.fs" />
         <!-- The completions routes, out of Mcp.fs: the symbol ladder (McpListMembers) and the editors' HTTP routes share them. -->
         <Compile Include="McpCompletions.fs" />
+        <Compile Include="McpCompletionDescription.fs" />
         <Compile Include="McpMemberKinds.fs" />
         <Compile Include="McpMemberPage.fs" />
         <Compile Include="McpNamePath.fs" />

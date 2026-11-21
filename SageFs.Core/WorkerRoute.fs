@@ -34,6 +34,8 @@ type WorkerRoute =
   | Check
   | TypecheckSymbols
   | Completions
+  /// The FCS tooltip for one named completion candidate. Asks the compiler a question, like Completions.
+  | CompletionDescription
   /// Runs the compiler over the session's projects, so it is a POST like the other routes that ask the compiler.
   | References
   /// Asks which process the session's FSI runs in. A POST with a body, like the other routes the daemon asks one question of.
@@ -98,6 +100,7 @@ module WorkerRoute =
     | WorkerRoute.Check -> "/check"
     | WorkerRoute.TypecheckSymbols -> "/typecheck-symbols"
     | WorkerRoute.Completions -> "/completions"
+    | WorkerRoute.CompletionDescription -> "/completion-description"
     | WorkerRoute.References -> "/references"
     | WorkerRoute.HostProcess -> "/host-process"
     | WorkerRoute.Cancel -> "/cancel"
@@ -152,6 +155,7 @@ module WorkerRoute =
     | WorkerRoute.Check
     | WorkerRoute.TypecheckSymbols
     | WorkerRoute.Completions
+    | WorkerRoute.CompletionDescription
     | WorkerRoute.References
     | WorkerRoute.HostProcess
     | WorkerRoute.Cancel

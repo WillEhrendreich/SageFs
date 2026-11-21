@@ -273,6 +273,7 @@ let private sampleMessages : WorkerMessage list = [
   WorkerMessage.CheckCode("1", "r")
   WorkerMessage.TypeCheckWithSymbols("1", "a.fs", "r")
   WorkerMessage.GetCompletions("S", 1, CompletionFixtures.editorLimit, "r")
+  WorkerMessage.DescribeCompletion("S", 1, "S", "r")
   WorkerMessage.CancelEval
   WorkerMessage.CancelEvalRequest "r"
   WorkerMessage.LoadScript("a.fsx", "r")

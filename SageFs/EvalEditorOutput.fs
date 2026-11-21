@@ -30,6 +30,7 @@ module EvalEditorOutput =
     | WorkerResponse.CheckResult _
     | WorkerResponse.TypeCheckWithSymbolsResult _
     | WorkerResponse.CompletionResult _
+    | WorkerResponse.DescriptionResult _
     | WorkerResponse.ReferencesResult _
     | WorkerResponse.HostProcessResult _
     | WorkerResponse.StatusResult _

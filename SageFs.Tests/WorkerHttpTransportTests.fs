@@ -139,6 +139,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.TypeCheckWithSymbolsResult(rid, [], [])
   | WorkerMessage.GetCompletions(_, _, _, rid) ->
     return WorkerResponse.CompletionResult(rid, CompletionFixtures.namesOf SageFs.Features.AutoCompletion.CompletionKind.Namespace ["System"; "String"])
+  | WorkerMessage.DescribeCompletion(_, _, _, rid) ->
+    return WorkerResponse.DescriptionResult(rid, "val it: string")
   | WorkerMessage.GetReferences(_, rid) ->
     return WorkerResponse.ReferencesResult(rid, SageFs.Features.ReferencesAnswer.NoProjectLoaded)
   | WorkerMessage.GetHostProcess rid ->

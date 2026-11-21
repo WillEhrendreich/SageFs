@@ -84,7 +84,7 @@ let errorNumberClassificationTests =
             Range = { StartLine = 5; StartColumn = 1; EndLine = 5; EndColumn = 9 }
             Severity = DiagnosticSeverity.Blocking
             ErrorNumber = 1 }
-        let wd = SageFs.Server.WorkerMain.toWorkerDiagnostic d
+        let wd = SageFs.Server.WorkerWireHelpers.toWorkerDiagnostic d
         wd.ErrorNumber |> Expect.equal "ErrorNumber should survive Diagnostic -> wd" 1
       }
 
@@ -95,7 +95,7 @@ let errorNumberClassificationTests =
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 3 }
             Severity = DiagnosticSeverity.Blocking
             ErrorNumber = 10 }
-        let there = SageFs.Server.WorkerMain.toWorkerDiagnostic original
+        let there = SageFs.Server.WorkerWireHelpers.toWorkerDiagnostic original
         let back = WorkerDiagnostic.toDiagnostic there
         back.ErrorNumber |> Expect.equal "ErrorNumber survives Diagnostic -> WorkerDiagnostic -> Diagnostic" original.ErrorNumber
       }

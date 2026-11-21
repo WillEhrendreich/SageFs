@@ -402,6 +402,7 @@
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="ShutdownLifecycleTests.fs" />
         <Compile Include="CompletionsContractTests.fs" />
+        <Compile Include="SignatureAtCaretRouteTests.fs" />
         <Compile Include="CleanStdoutTests.fs" />
         <Compile Include="DiffEmitTests.fs" />
         <Compile Include="SyntaxHighlightTests.fs" />
