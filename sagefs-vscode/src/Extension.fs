@@ -186,78 +186,22 @@ let cycleDensity () =
 
 // ── File Annotation Decorations (coverage gutters + inline failures) ──
 
-let initFileAnnotationDecoTypes () =
-  covPassingDecoType <- Some (
-    Window.createTextEditorDecorationType (
-      createObj [
-        "isWholeLine" ==> false
-        "gutterIconPath" ==> ""
-        "overviewRulerColor" ==> newThemeColor "testing.iconPassed"
-        "overviewRulerLane" ==> 1
-        "before" ==> createObj [
-          "contentText" ==> "│"
-          "color" ==> newThemeColor "testing.iconPassed"
-          "margin" ==> "0 0.3em 0 0"
-        ]
-      ]))
-  covFailingDecoType <- Some (
-    Window.createTextEditorDecorationType (
-      createObj [
-        "isWholeLine" ==> false
-        "overviewRulerColor" ==> newThemeColor "testing.iconFailed"
-        "overviewRulerLane" ==> 1
-        "before" ==> createObj [
-          "contentText" ==> "│"
-          "color" ==> newThemeColor "testing.iconFailed"
-          "margin" ==> "0 0.3em 0 0"
-        ]
-      ]))
-  covNoneDecoType <- Some (
-    Window.createTextEditorDecorationType (
-      createObj [
-        "isWholeLine" ==> false
-        "before" ==> createObj [
-          "contentText" ==> "│"
-          "color" ==> newThemeColor "disabledForeground"
-          "margin" ==> "0 0.3em 0 0"
-        ]
-      ]))
-  branchFullDecoType <- Some (
-    Window.createTextEditorDecorationType (
-      createObj [
-        "isWholeLine" ==> false
-        "overviewRulerColor" ==> newThemeColor "testing.iconPassed"
-        "overviewRulerLane" ==> 1
-        "before" ==> createObj [
-          "contentText" ==> "▐"
-          "color" ==> newThemeColor "testing.iconPassed"
-          "margin" ==> "0 0.3em 0 0"
-        ]
-      ]))
-  branchPartialDecoType <- Some (
-    Window.createTextEditorDecorationType (
-      createObj [
-        "isWholeLine" ==> false
-        "overviewRulerColor" ==> newThemeColor "testing.iconQueued"
-        "overviewRulerLane" ==> 1
-        "before" ==> createObj [
-          "contentText" ==> "◐"
-          "color" ==> newThemeColor "testing.iconQueued"
-          "margin" ==> "0 0.3em 0 0"
-        ]
-      ]))
-  branchNoneDecoType <- Some (
-    Window.createTextEditorDecorationType (
-      createObj [
-        "isWholeLine" ==> false
-        "overviewRulerColor" ==> newThemeColor "testing.iconFailed"
-        "overviewRulerLane" ==> 1
-        "before" ==> createObj [
-          "contentText" ==> "▌"
-          "color" ==> newThemeColor "testing.iconFailed"
-          "margin" ==> "0 0.3em 0 0"
-        ]
-      ]))
+/// Coverage and branch state is drawn in the glyph margin at a fixed column.
+/// The old inline `before` glyphs occupied text width and pushed the source right;
+/// the overview-ruler bars on the right edge moved nothing and read as noise.
+let initFileAnnotationDecoTypes (extensionPath: string) =
+  let gutter name =
+    createObj [
+      "isWholeLine" ==> false
+      "gutterIconPath" ==> GutterIcons.icon extensionPath name
+      "gutterIconSize" ==> "contain"
+    ]
+  covPassingDecoType <- Some (Window.createTextEditorDecorationType (gutter "pass"))
+  covFailingDecoType <- Some (Window.createTextEditorDecorationType (gutter "fail"))
+  covNoneDecoType <- Some (Window.createTextEditorDecorationType (gutter "none"))
+  branchFullDecoType <- Some (Window.createTextEditorDecorationType (gutter "pass"))
+  branchPartialDecoType <- Some (Window.createTextEditorDecorationType (gutter "partial"))
+  branchNoneDecoType <- Some (Window.createTextEditorDecorationType (gutter "fail"))
 
 let disposeFileAnnotationDecoTypes () =
   covPassingDecoType |> Option.iter (fun d -> d.dispose ())
@@ -3354,14 +3298,14 @@ let activate (context: ExtensionContext) =
           null
     }
     // Initialize inline test decorations
-    TestDeco.initialize ()
+    TestDeco.initialize context.extensionPath
     trackDaemonConnectionDisposable {
       new Disposable with
         member _.dispose () =
           TestDeco.dispose ()
           null
     }
-    initFileAnnotationDecoTypes ()
+    initFileAnnotationDecoTypes context.extensionPath
     trackDaemonConnectionDisposable {
       new Disposable with
         member _.dispose () =

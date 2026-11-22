@@ -49,6 +49,7 @@
     <Compile Include="TestControllerAdapter.fs" />
     <Compile Include="InlineDecorationsPure.fs" />
     <Compile Include="TestDecorationsPure.fs" />
+    <Compile Include="GutterIcons.fs" />
     <Compile Include="TestDecorations.fs" />
     <Compile Include="TestCodeLensProvider.fs" />
     <Compile Include="CoverageViewCodeLensProvider.fs" />

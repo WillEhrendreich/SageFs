@@ -17,11 +17,14 @@ let mutable coveredFailingType: TextEditorDecorationType option = None
 let mutable notCoveredType: TextEditorDecorationType option = None
 let mutable diagnosticCollection: DiagnosticCollection option = None
 
-let initialize () =
+let initialize (extensionPath: string) =
+  // Result marks sit after the line, where they cannot push the source right.
+  // State lives in the glyph margin through real gutter icons, not inline `before`
+  // text, so the marks line up in one fixed column. There is no overview ruler
+  // bar: the red bar on the right edge was noise and moved nothing.
   passedType <- Some (
     Window.createTextEditorDecorationType (
       createObj [
-        "gutterIconPath" ==> ""
         "isWholeLine" ==> true
         "after" ==> createObj [
           "contentText" ==> " ✓"
@@ -29,8 +32,6 @@ let initialize () =
           "fontStyle" ==> "italic"
           "margin" ==> "0 0 0 1em"
         ]
-        "overviewRulerColor" ==> newThemeColor "testing.iconPassed"
-        "overviewRulerLane" ==> 1
       ]))
   failedType <- Some (
     Window.createTextEditorDecorationType (
@@ -42,8 +43,6 @@ let initialize () =
           "fontStyle" ==> "italic"
           "margin" ==> "0 0 0 1em"
         ]
-        "overviewRulerColor" ==> newThemeColor "testing.iconFailed"
-        "overviewRulerLane" ==> 1
         "backgroundColor" ==> "rgba(244, 71, 71, 0.08)"
       ]))
   runningType <- Some (
@@ -63,31 +62,22 @@ let initialize () =
     Window.createTextEditorDecorationType (
       createObj [
         "isWholeLine" ==> false
-        "before" ==> createObj [
-          "contentText" ==> "▸"
-          "color" ==> newThemeColor "testing.iconPassed"
-          "margin" ==> "0 0.5em 0 0"
-        ]
+        "gutterIconPath" ==> GutterIcons.icon extensionPath "pass"
+        "gutterIconSize" ==> "contain"
       ]))
   coveredFailingType <- Some (
     Window.createTextEditorDecorationType (
       createObj [
         "isWholeLine" ==> false
-        "before" ==> createObj [
-          "contentText" ==> "▸"
-          "color" ==> newThemeColor "testing.iconFailed"
-          "margin" ==> "0 0.5em 0 0"
-        ]
+        "gutterIconPath" ==> GutterIcons.icon extensionPath "fail"
+        "gutterIconSize" ==> "contain"
       ]))
   notCoveredType <- Some (
     Window.createTextEditorDecorationType (
       createObj [
         "isWholeLine" ==> false
-        "before" ==> createObj [
-          "contentText" ==> "○"
-          "color" ==> newThemeColor "disabledForeground"
-          "margin" ==> "0 0.5em 0 0"
-        ]
+        "gutterIconPath" ==> GutterIcons.icon extensionPath "none"
+        "gutterIconSize" ==> "contain"
       ]))
 
 // ── Decoration application ──────────────────────────────────────
