@@ -1882,7 +1882,10 @@ let tests =
       if msg.Type = "error" then
         consoleErrors.Add(sprintf "[console] %s" msg.Text))
     page.PageError.Add(fun err -> consoleErrors.Add(sprintf "[pageerror] %s" err))
-    let switcher = page.Locator(sprintf "#%s" DomIds.WorkflowSwitcher)
+    // The picker is per-session now; resolve its id from the session in view
+    // rather than looking for a global control that no longer exists.
+    let! viewingSessionId = page.EvaluateAsync<string>("() => document.querySelector('#main').getAttribute('data-viewing-session-id')")
+    let switcher = page.Locator(sprintf "#%s-%s" DomIds.WorkflowSwitcher viewingSessionId)
     do! PlaywrightExpect.isVisibleAsync switcher "workflow switcher visible once a session is selected"
     let switchViaDropdown (value: string) = task {
       let! _ = switcher.SelectOptionAsync(value)

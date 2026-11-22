@@ -55,6 +55,14 @@ let private headerBadge (html: string) : string =
   html.Substring(start, html.IndexOf("</span>", start) - start)
 
 [<Tests>]
+let headerHeightTests =
+  testList "header height" [
+    testCase "WHY — the header is one 36px row at every width, because the two-row rule outlived the element it arranged" <| fun _ ->
+      let css = System.IO.File.ReadAllText(System.IO.Path.Combine(System.AppContext.BaseDirectory, "../../../../SageFs/dashboard.css"))
+      css.Contains "--tabline-h: 72px" |> Expect.isFalse "no stale narrow-width 72px override"
+      css.Contains "grid-template-rows: 36px 36px" |> Expect.isFalse "no empty second header row"
+      css |> Expect.stringContains "the single-row height remains" "--tabline-h: 36px"
+  ]
 let tests =
   testList "Dashboard header badge and fault notice" [
 

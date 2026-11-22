@@ -96,16 +96,17 @@ let sessionCardHealthRenderingTests =
       html.Contains("session-health-reason") |> Expect.isFalse "no reason line for Healthy"
       // The one disclosure a card has holds its secondary facts (session-card-more). Health is never in it.
       let disclosures = html.Split("<details").Length - 1
-      let folded = (html.Split("<details class=\"session-card-more\"").Length - 1) + (html.Split("<details class=\"session-card-help\"").Length - 1)
-      disclosures |> Expect.equal "every disclosure on the card is the folded facts or the button help, never a health one" folded)
+      let folded = html.Split("<details class=\"session-card-more\"").Length - 1
+      disclosures |> Expect.equal "the only disclosure on the card is the folded facts, never a health one" folded
+      html.Contains "session-card-help" |> Expect.isFalse "the ? button help disclosure is gone")
 
-    testCase "WHY — the card's buttons carry their words in the markup, not in CSS content: a word drawn by ::before cannot be selected, searched, translated or read by a test, and it hid a different label for the same button behind a later rule" (fun () ->
+    testCase "WHY — the card's buttons name themselves in title and aria-label, with no word-span crowding the 28px square" (fun () ->
       let s = Fixtures.card SessionHealth.Healthy (Fixtures.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
       let html = renderSessionsForSession "0a2b3c4d" [ s ] false |> renderNode
       for word in [ "Stop"; "Close"; "Delete" ] do
-        html |> Expect.stringContains (sprintf "the %s button says its word" word) (sprintf "class=\"session-btn-word\">%s</span>" word)
-      System.Text.RegularExpressions.Regex.IsMatch(html, "class=\"session-btn-word\">Auto-open: (on|off)</span>")
-      |> Expect.isTrue "the auto-open button says whether it is on")
+        html |> Expect.stringContains (sprintf "the %s button still carries its name in a tooltip" word) (sprintf "title=\"%s —" word)
+      html.Contains "session-btn-word" |> Expect.isFalse "no word is drawn inside the square buttons"
+      html |> Expect.stringContains "the auto-open button still names its state in a tooltip" "title=\"Warmup auto-open is ")
 
     testCase "a Degraded card's reason is plain, unconditional HTML — never behind a <details> or hover-only title" (fun () ->
       let s = Fixtures.card (SessionHealth.Degraded "Session is Ready but nothing was loaded: 0 assemblies, 0 namespaces opened.") (Fixtures.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
@@ -190,9 +191,9 @@ let evalStatsDuplicateIdRegressionTests =
 
 [<Tests>]
 let workflowBadgeTests =
-  testList "the tabline renders the real workflow, read-only (roast §4.1)" [
+  testList "the workflow picker lives on each session card, not the global header (roast §4.1)" [
 
-    testCase "WorkflowLabel appears in the rendered tabline when a session is in play" (fun () ->
+    testCase "WHY — the workflow label no longer appears in the global header; each card carries its own mode picker" (fun () ->
       let snap =
         { DashboardSnapshot.Version = "0.0.0"
           SessionId = "t"; WorkingDir = "/w"
@@ -210,7 +211,8 @@ let workflowBadgeTests =
           App = SageFs.AppRun.AppRunState.NotRunning
           EvalToPixelP50Ms = None; EvalToPixelP99Ms = None }
       let html = renderMainContent snap |> renderNode
-      html |> Expect.stringContains "the word 'workflow' problem: the ACTUAL workflow now renders" "LiveTesting")
+      html.Contains "LiveTesting" |> Expect.isFalse "the global header no longer renders the workflow"
+      html |> Expect.stringContains "the output header still shows the session id as a reading aid" "output-session-id")
   ]
 
 [<Tests>]

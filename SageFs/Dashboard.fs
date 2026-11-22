@@ -440,6 +440,10 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
 /// `teardowns` is what the daemon is taking down at this moment (`TeardownRegistry`). Each listed session in it
 /// gets a card that says so, so the POST that asked for a stop and every stream push after it draw the same card.
 /// A session in `teardowns` that the list no longer carries has nothing to draw and is left out.
+/// Per-session workflow labels, built from the same SessionInfos as the cards.
+let private workflowLabelsOf (sessions: WorkerProtocol.SessionInfo list) : Map<string, string> =
+  sessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.Workflow |> WorkflowTypes.SessionWorkflow.label) |> Map.ofList
+
 let buildSessionCardsFrom
   (q: DashboardQueries)
   (teardowns: Map<WorkerProtocol.SessionId, TeardownRegistry.Teardown>)
@@ -516,11 +520,9 @@ let private buildOutputPanelsFrom
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode * ParsedSession list> =
   task {
     let! previous = q.GetPreviousSessions ()
-    // The cards are returned with the panels: the header's readiness and eval count are read from the VIEWED card, so the
-    // header and the card are one reading of one session and cannot differ by a poll.
-    let cards = buildSessionCardsFrom q (infra.Teardowns.Current ()) (Some (sessionId, wCtx)) sessions
-    let creating = q.IsCreatingSession ()
-    let sessionsPanel = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards creating
+    // Cards and header are one reading of the viewed session.
+    let cards, creating = buildSessionCardsFrom q (infra.Teardowns.Current ()) (Some (sessionId, wCtx)) sessions, q.IsCreatingSession ()
+    let sessionsPanel = renderSessionsForSessionWithLabels (WorkerProtocol.SessionId.value sessionId) cards creating (workflowLabelsOf sessions)
     let sessionPicker =
       match cards.IsEmpty && not creating with
       // This is a rare defensive fallback (a specific session was requested
@@ -2363,7 +2365,7 @@ let createWorkflowSwitchHandler
         // BEFORE awaiting the restart (which can take seconds — a rebuild if
         // the worker needs one) — the teardown path's own best pattern
         // (renderTeardownCard, roast UX-8), applied here.
-        do! ssePatchNode ctx (renderWorkflowSwitcherPending targetLabel)
+        do! ssePatchNode ctx (renderWorkflowSwitcherPending targetLabel sessionId)
         let! result = switchWorkflow sessionId target
         match result with
         | Ok message ->
@@ -2803,7 +2805,7 @@ let createSessionActionHandler
         let! sessionsNow = q.GetAllSessions ()
         let! warmupOfTarget = q.GetWarmupContext target
         let cards = buildSessionCardsFrom q (infra.Teardowns.Current ()) (Some (target, warmupOfTarget)) sessionsNow
-        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value target) cards (q.IsCreatingSession ()))
+        do! ssePatchNode ctx (renderSessionsForSessionWithLabels (WorkerProtocol.SessionId.value target) cards (q.IsCreatingSession ()) (workflowLabelsOf sessionsNow))
         let targetState = q.GetSessionState target
         let readiness = viewedReadiness targetState target cards
         let display =
@@ -2946,10 +2948,8 @@ let createHygieneTidyHandler (q: DashboardQueries) (infra: DashboardInfra) (plan
 let createClearOutputHandler : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
-    let emptyOutput = Elem.div [ Attr.id DomIds.OutputPanel ] [
-      Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
-    ]
-    do! ssePatchNode ctx emptyOutput
+    // A bare div would drop the follow attributes and signals.
+    do! ssePatchNode ctx (renderOutputForSession "" 0 [] "No output yet")
   }
 
 /// Result of a friction send attempt. Rendered into the dashboard so

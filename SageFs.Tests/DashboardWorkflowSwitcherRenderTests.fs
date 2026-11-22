@@ -8,10 +8,14 @@ module SageFs.Tests.DashboardWorkflowSwitcherRenderTests
 open Expecto
 open Expecto.Flip
 open Falco.Markup
+open SageFs
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
 let private html node = node |> renderNode
+
+let private sessionId =
+  WorkerProtocol.SessionId.validate "0a0b0c0d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
 
 [<Tests>]
 let switcherTests =
@@ -19,7 +23,7 @@ let switcherTests =
     testCase "WHY — a real session renders a <select> with all three workflows, not a static badge" <| fun _ ->
       let out = renderWorkflowSwitcher "REPL" "0a0b0c0d" |> html
       out |> Expect.stringContains "should be a select, not a span/badge" "<select"
-      out |> Expect.stringContains "id carries the shared DOM id for morphing" (sprintf "id=\"%s\"" DomIds.WorkflowSwitcher)
+      out |> Expect.stringContains "id carries the per-session DOM id for morphing" (sprintf "id=\"%s-0a0b0c0d\"" DomIds.WorkflowSwitcher)
       for label in [ "REPL"; "Live Testing"; "Hot Reload" ] do
         out |> Expect.stringContains (sprintf "option '%s' present" label) label
 
@@ -41,6 +45,11 @@ let switcherTests =
     testCase "WHY — the picked value is set as a SIGNAL before @post, not handed to @post as its (ignored) options argument — that was the actual bug: Datastar's @post destructures only known option keys (payload/headers/contentType/...) out of its second argument, so an arbitrary {workflowTarget: w} there never reaches the server" <| fun _ ->
       let out = renderWorkflowSwitcher "REPL" "0a0b0c0d" |> html
       out |> Expect.stringContains "the onchange handler assigns the workflowTarget signal" "$workflowTarget = event.target.value"
+      out |> Expect.stringContains "the handler first pins the viewed session to this card's session" "$viewingSessionId = "
+      out |> Expect.stringContains "the handler names this card's session" "0a0b0c0d"
+      let viewingIdx = out.IndexOf("$viewingSessionId = ")
+      let postIdx = out.IndexOf("@post('/dashboard/switch-workflow')")
+      (viewingIdx >= 0 && postIdx > viewingIdx) |> Expect.isTrue "the viewed-session signal is set before the post reads it"
       out |> Expect.stringContains "@post is called with no second argument, so its default payload is the current signal set" "@post('/dashboard/switch-workflow')"
       Expect.isFalse
         "must NOT pass the picked value as @post's options object — that argument is fetch-style request options, not a body, and a non-option key inside it is silently dropped"
@@ -59,12 +68,12 @@ let switcherTests =
 [<Tests>]
 let pendingTests =
   testList "renderWorkflowSwitcherPending" [
-    testCase "WHY — the optimistic control shares the switcher's DOM id, so the SSE morph replaces it in place" <| fun _ ->
-      let out = renderWorkflowSwitcherPending "Hot Reload" |> html
-      out |> Expect.stringContains "same id as the real switcher" (sprintf "id=\"%s\"" DomIds.WorkflowSwitcher)
+    testCase "WHY — the optimistic control shares the switcher's per-session DOM id, so the SSE morph replaces it in place" <| fun _ ->
+      let out = renderWorkflowSwitcherPending "Hot Reload" sessionId |> html
+      out |> Expect.stringContains "same id as the real switcher" (sprintf "id=\"%s-0a0b0c0d\"" DomIds.WorkflowSwitcher)
 
     testCase "WHY — the optimistic control names the TARGET workflow being switched to, so the user sees what's happening before the restart completes" <| fun _ ->
-      let out = renderWorkflowSwitcherPending "Hot Reload" |> html
+      let out = renderWorkflowSwitcherPending "Hot Reload" sessionId |> html
       out |> Expect.stringContains "names the target workflow" "Hot Reload"
       out |> Expect.stringContains "carries a status role for a11y" "role=\"status\""
   ]

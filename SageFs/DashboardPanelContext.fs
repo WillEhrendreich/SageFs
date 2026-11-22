@@ -140,6 +140,9 @@ type QuietBecause =
   | FrictionNotRequested
   | NoTestsDiscovered
   | NoCoverageYet
+  /// The panel belongs to the other workflow. Its absence is expected, so it
+  /// renders nothing rather than telling the user a mode they chose is off.
+  | OtherWorkflow
 
 [<RequireQualifiedAccess>]
 type PanelPresence =
@@ -197,6 +200,7 @@ module QuietBecause =
     | QuietBecause.FrictionNotRequested -> "friction reports are off until a tab asks for them"
     | QuietBecause.NoTestsDiscovered -> "no tests discovered"
     | QuietBecause.NoCoverageYet -> "no coverage yet"
+    | QuietBecause.OtherWorkflow -> "the other workflow"
 
 /// Why a part of the cohort panel that is on the page has nothing in it. The cohort is running, so a missing lane view, trunk
 /// list or scrubber needs a word, or it reads as a broken panel.
@@ -281,7 +285,7 @@ module PanelContext =
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, _) ->
         PanelPresence.Hidden(HiddenBecause.SessionInReplMode, useWorkflowSwitcher)
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.LiveTesting, _) ->
-        PanelPresence.Hidden(HiddenBecause.SessionInLiveTestingMode, useWorkflowSwitcher)
+        PanelPresence.Quiet QuietBecause.OtherWorkflow
     | ContextPanel.LiveTesting ->
       match facts.Viewed with
       | ViewedSession.NoSession -> PanelPresence.Hidden(HiddenBecause.NoSessionSelected panel, NextStep.NoNextStep)

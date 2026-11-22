@@ -1830,7 +1830,7 @@ module PanelVisibility =
     match panel with
     | ContextPanel.Friction -> Text.raw ""
     | ContextPanel.Alarms -> Elem.div [ Attr.id DomIds.AlarmBanner; Attr.style "display:none;" ] []
-    | ContextPanel.HotReload -> Elem.div [ Attr.id DomIds.HotReloadPanel ] []
+    | ContextPanel.HotReload -> Text.raw "" // The other workflow is not a pending panel.
     | ContextPanel.LiveTesting -> Elem.div [ Attr.id DomIds.LiveTestingPanel ] []
     | ContextPanel.Cohort -> Elem.div [ Attr.id DomIds.CohortPanel ] []
     | ContextPanel.Diagnostics -> Elem.div [ Attr.id DomIds.DiagnosticsPanel ] []

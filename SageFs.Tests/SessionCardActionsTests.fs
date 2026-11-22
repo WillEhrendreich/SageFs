@@ -25,6 +25,9 @@ let private mkCardSession (id: string) (projects: (string * ProjectLoading.Proje
 let private render viewing sessions =
   renderSessionsForSession viewing sessions false |> renderNode
 
+let private renderLabelled viewing labels sessions =
+  renderSessionsForSessionWithLabels viewing sessions false (labels |> Map.ofList) |> renderNode
+
 [<Tests>]
 let tests = testList "Session card actions" [
   test "WHY — run buttons — several executables render as a dropdown + one Run button, not a wall of per-project buttons, because switching is rare and N labeled buttons crowded the card" {
@@ -65,6 +68,29 @@ let tests = testList "Session card actions" [
     html.Contains "/dashboard/session/switch/0a2b3c4e" |> Expect.isFalse "the viewed card must not switch to itself"
   }
 
+  test "WHY — card controls — action buttons carry glyphs only, with a hover title, because words spilling out of a square button cut the label off on screen" {
+    let s = mkCardSession "0a2b3c4d" [ "/a/App.fsproj", ProjectLoading.ProjectRole.Executable ]
+    let html = render "0a2b3c4e" [ s ]
+    html.Contains "session-btn-word" |> Expect.isFalse "no button draws a word inside a 28px square"
+    html |> Expect.stringContains "Run still has a hover name" "title=\"Run App with hot reload"
+    html |> Expect.stringContains "Stop still has a hover name" "title=\"Stop —"
+    html |> Expect.stringContains "Close still has a hover name" "title=\"Close —"
+    html |> Expect.stringContains "Delete still has a hover name" "title=\"Delete —"
+  }
+  test "WHY — card controls — the ? help disclosure is gone because every control now names itself on hover" {
+    let html = render "0a2b3c4e" [ mkCardSession "0a2b3c4d" [] ]
+    html.Contains "session-card-help" |> Expect.isFalse "no ? disclosure remains"
+    html.Contains "session-card-hint" |> Expect.isFalse "no duplicated teardown sentence remains"
+  }
+  test "WHY — mode is a per-session setting — each card carries its own workflow picker, and the Output header no longer does" {
+    let live = mkCardSession "0a2b3c4d" []
+    let repl = mkCardSession "0a2b3c4e" []
+    let html = renderLabelled "0a2b3c4e" [ "0a2b3c4d", "Live Testing"; "0a2b3c4e", "Interactive" ] [ live; repl ]
+    html |> Expect.stringContains "each card names its own mode" "aria-label=\"Workflow: Live Testing"
+    html |> Expect.stringContains "the second card has its own mode" "aria-label=\"Workflow: Interactive"
+    html.Contains "Workflow: Live Testing — choose a workflow" |> Expect.isTrue "the picker lives on the card"
+    html.Contains "id=\"workflow-switcher\"" |> Expect.isFalse "no global switcher in the output header"
+  }
   test "WHY — session switching — the card ignores clicks that land on its own buttons and links because Stop/Run clicks bubbled into a switch" {
     let html = render "0a2b3c4e" [ mkCardSession "0a2b3c4d" [] ]
     html |> Expect.stringContains "card click guard" "evt.target.closest('button, a') ||"

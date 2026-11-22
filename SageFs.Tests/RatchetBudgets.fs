@@ -344,7 +344,7 @@ let fileSize : (string * int) list =
     // planning half of the core edit tool; applying a chunk still goes through
     // /exec, so there is one write door and no new route. Approved with that tool.
     "SageFs/McpServer.fs", 5121
-    "SageFs/DashboardFragments.fs", 4448
+    "SageFs/DashboardFragments.fs", 4444
     "SageFs/Dashboard.fs", 4259
     // 3717 -> 3812: the write_back command and its quiet persisted/not-persisted
     // marker, plus the chunk picker that chooses which declarations land. All

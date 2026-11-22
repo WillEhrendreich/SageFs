@@ -3770,54 +3770,19 @@ h2 {
   font-family: inherit;
 }
 
-/* The header below 820px. Four segments want about 850px with the longest status badge ("Ready, running older code"): the
-   brand, the badge, the session with its workflow switcher, and the theme picker. At 600px the session was squeezed to a few
-   letters with no sign that anything had been cut, and the badge is the one that must never be cut. So below 820px the header is
-   two rows: the brand, the badge and the theme picker on the first, the session and its workflow switcher on a row of their
-   own. The evals count (the session card carries it) drops out whole. The row height is the one variable the page offsets read,
-   so the rest of the page moves down with it. The header's own inline styles set display, height and padding, so the rules that
-   undo them need !important. */
+/* At narrow widths the header stays one 36px row. It used to become two rows
+   when the session id and workflow picker lived there, but both moved to the
+   session card and output header, leaving the second row empty. Only the
+   narrow-width rules that still arrange real content remain. */
 @media (width < 51.312em) {
-  :root {
-    --tabline-h: 72px;
-  }
-
-  .app-header {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-rows: 36px 36px;
-  }
-
-  /* The centre group's children become cells of the header's grid, so the session can take a row to itself. */
-  .tabline-menu {
-    display: contents !important;
-  }
-
   .tabline-brand {
-    grid-column: 1;
-    grid-row: 1;
     padding: 0 8px !important;
   }
 
   .tabline-status {
-    grid-column: 2;
-    grid-row: 1;
     min-width: 0;
     padding: 0 8px !important;
     overflow: hidden;
-  }
-
-  .tabline-right {
-    grid-column: 3;
-    grid-row: 1;
-  }
-
-  .tabline-info:not(.tabline-evals) {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    border-top: 1px solid var(--border-normal);
-    border-right: none !important;
-    padding: 0 12px !important;
   }
 
   .tabline-evals {

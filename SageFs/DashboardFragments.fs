@@ -180,7 +180,7 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
   | false -> Elem.span [ Attr.id DomIds.WorkflowSwitcher ] []
   | true ->
     Elem.select
-      [ Attr.id DomIds.WorkflowSwitcher
+      [ Attr.id (sprintf "%s-%s" DomIds.WorkflowSwitcher sessionId)
         Attr.class' "badge workflow-select"
         Attr.style "font-size:0.857rem;margin-left:6px;"
         Sink.attr "aria-label" (UserText.ofString (sprintf "Workflow: %s — choose a workflow to switch (restarts the session)" currentLabel))
@@ -197,7 +197,10 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
         // Setting `$workflowTarget` puts it in @post's default payload (the
         // current signal set), the same way the cursor tracker's
         // `$cursorPos = ...` already works.
-        Sink.onEvent (DomEvent.Change, sprintf "$%s = event.target.value; @post('/dashboard/switch-workflow')" Signals.WorkflowTarget) ]
+        Sink.onEvent
+          (DomEvent.Change,
+           sprintf "$%s = %s; $%s = event.target.value; @post('/dashboard/switch-workflow')"
+             Signals.ViewingSessionId (Sink.jsArg (UserText.ofString sessionId)) Signals.WorkflowTarget) ]
       (WorkflowSwitch.options |> List.map (fun w ->
         let lbl = WorkflowTypes.SessionWorkflow.label w
         Elem.option
@@ -208,9 +211,9 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
 /// teardown path's `renderTeardownCard` pattern (roast UX-8: "swap the card
 /// for a status message BEFORE awaiting") applied to the workflow switcher:
 /// this is pushed before the restart is awaited, not after it resolves.
-let renderWorkflowSwitcherPending (targetLabel: string) : XmlNode =
+let renderWorkflowSwitcherPending (targetLabel: string) (sessionId: WorkerProtocol.SessionId) : XmlNode =
   Elem.span
-    [ Attr.id DomIds.WorkflowSwitcher
+    [ Attr.id (sprintf "%s-%s" DomIds.WorkflowSwitcher (WorkerProtocol.SessionId.value sessionId))
       Attr.class' "badge"
       Attr.style "font-size:0.857rem;margin-left:6px;"
       Sink.attr "aria-label" (UserText.ofString (sprintf "Switching workflow to %s…" targetLabel))
@@ -518,8 +521,7 @@ let renderAutoOpenToggleIcon (enabled: bool) =
       Sink.attr "aria-label"(UserText.ofString tooltip)
       Sink.attr "title" (UserText.ofString tooltip)
       Sink.onClick (Sink.post endpoint) ]
-    [ textEnc glyph
-      buttonWord (match enabled with | true -> "Auto-open: on" | false -> "Auto-open: off") ]
+    [ textEnc glyph ]
 
 /// Context-aware warmup auto-open toggle (full-width variant).
 /// Kept for potential use in panels where a labeled button fits better than
@@ -1815,7 +1817,9 @@ let renderTeardownCard (teardown: Teardown) (sessionId: WorkerProtocol.SessionId
       ] ]
 
 /// Render sessions as an HTML fragment with action buttons.
-let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession list) (creating: bool) =
+/// Per-session workflow labels, supplied by callers with live SessionInfos.
+let renderSessionsForSessionWithLabels (viewingSessionId: string) (sessions: ParsedSession list) (creating: bool) (workflowLabels: Map<string, string>) =
+  let labelFor (sid: WorkerProtocol.SessionId) = workflowLabels |> Map.tryFind (WorkerProtocol.SessionId.value sid) |> Option.defaultValue "Interactive"
   Elem.div [ Attr.id DomIds.SessionsPanel ] [
     match creating with
     | true ->
@@ -2221,6 +2225,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                      [ Text.raw "⏎" ]
                  ]
             Elem.div [ Attr.class' "session-card-actions" ] [
+              // The picker sets the viewed-session signal first, so switching another card cannot retarget this one.
+              renderWorkflowSwitcher (labelFor s.Id) (WorkerProtocol.SessionId.value s.Id)
               // Warmup auto-open state icon (color-coded on/off, tooltip explains, click toggles)
               (match s.WorkingDir.Length with
                | 0 -> renderAutoOpenToggleIcon true
@@ -2232,7 +2238,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.create "aria-label""Switch — show this session's output here"
                     Attr.create "title" "Switch — show this session's output here"
                     Sink.onClick (Sink.post (sprintf "/dashboard/session/switch/%s" sid)) ]
-                  [ Text.raw "⇄"; buttonWord "Switch" ]
+                  [ Text.raw "⇄" ]
               | true -> ()
               // Run App — for sessions that own an executable project. Every app
               // state has its own control: starting, running (with a link), and
@@ -2257,7 +2263,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.rel "noopener"
                       Sink.attr "aria-label"(UserText.ofString (sprintf "Open %s — save a source file to hot reload it" url))
                       Sink.attr "title" (UserText.ofString (sprintf "Open %s — save a source file to hot reload it" url)) ]
-                    [ textEnc (Glyphs.text Glyph.Open); buttonWord "Open app" ]
+                    [ textEnc (Glyphs.text Glyph.Open) ]
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
@@ -2265,14 +2271,14 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Sink.attr "aria-label"(UserText.ofString (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Sink.attr "title" (UserText.ofString (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Sink.onClick (Sink.post (sprintf "/dashboard/stop-app/%s" sid)) ]
-                  [ Text.raw "■"; buttonWord "Stop app" ]
+                  [ Text.raw "■" ]
               | _, AppRun.AppRunState.Starting _ ->
                 Elem.button
                   [ Attr.class' "session-btn"
                     Attr.disabled
                     Sink.attr "aria-label"(UserText.ofString (AppRun.describeState s.App))
                     Sink.attr "title" (UserText.ofString (AppRun.describeState s.App)) ]
-                  [ textEnc (Glyphs.text Glyph.Busy); buttonWord "Starting" ]
+                  [ textEnc (Glyphs.text Glyph.Busy) ]
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
@@ -2280,7 +2286,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Sink.attr "aria-label"(UserText.ofString (runTitle (AppRun.projectName project.Path)))
                     Sink.attr "title" (UserText.ofString (runTitle (AppRun.projectName project.Path)))
                     Sink.onClick (Sink.post (sprintf "/dashboard/run-app/%s" sid)) ]
-                  [ Text.raw "▶"; buttonWord "Run app" ]
+                  [ Text.raw "▶" ]
               | projects, _ ->
                 // Several executables: a dropdown to choose which to run
                 // (defaulting to the session's active/loaded project) plus one
@@ -2318,20 +2324,20 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                            "@post(%s + encodeURIComponent(document.getElementById(%s).value))"
                            (Sink.jsArg (UserText.ofString (sprintf "/dashboard/run-app/%s/" (Uri.EscapeDataString sid))))
                            (Sink.jsArg (UserText.ofString selectId))) ]
-                    [ Text.raw "▶"; buttonWord "Run app" ]
+                    [ Text.raw "▶" ]
                 ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Sink.attr "aria-label" (UserText.ofString (TeardownButton.name TeardownButton.Stop))
                   Sink.attr "title" (UserText.ofString (TeardownButton.name TeardownButton.Stop))
                   Sink.onClick (Sink.post (sprintf "/dashboard/session/stop/%s" sid)) ]
-                [ Text.raw "■"; buttonWord (TeardownButton.word TeardownButton.Stop) ]
+                [ Text.raw "■" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
                   Sink.attr "aria-label" (UserText.ofString (TeardownButton.name TeardownButton.Close))
                   Sink.attr "title" (UserText.ofString (TeardownButton.name TeardownButton.Close))
                   Sink.onClick (Sink.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
-                [ Text.raw "⌫"; buttonWord (TeardownButton.word TeardownButton.Close) ]
+                [ Text.raw "⌫" ]
               // Purge is the irreversible teardown level — it deletes binaries
               // AND the manifest entry, not just the running session — and it
               // sits 28px from Stop with no other affordance distinguishing
@@ -2349,20 +2355,9 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                        "if(confirm(%s)){%s}"
                        (Sink.jsArg (UserText.ofString (sprintf "Delete session %s? This deletes its saved binaries and manifest entry. This cannot be undone." sid)))
                        (Sink.post (sprintf "/dashboard/session/purge/%s" sid))) ]
-                [ textEnc (Glyphs.text Glyph.Remove); buttonWord (TeardownButton.word TeardownButton.Delete) ]
+                [ textEnc (Glyphs.text Glyph.Remove) ]
             ]
-            // What the three that take a session down do, in words on the card: three reviewers saw Stop, Dispose and Purge side by
-            // side with no hint of how they differ, and a tooltip is not on screen for a person who does not hover.
-            Elem.details [ Attr.class' "session-card-help" ] [
-              Elem.summary
-                [ Attr.class' "session-card-help-trigger"
-                  Attr.create "title" "What do these buttons do?"
-                  Sink.attr "aria-label" (UserText.ofString "What do these buttons do?") ]
-                [ textEnc "?" ]
-              Elem.div
-                [ Attr.class' "session-card-hint"
-                  Attr.create "data-testid" "session-card-hint" ]
-                [ textEnc "Stop unloads the session and keeps its saved state. Close ends it. Delete ends it and removes the saved state, after asking." ] ]
+            // Each control now carries its own hover title and accessible name.
             // Collapsible test status grid (one legible cell per test)
             match PanelContext.testGrid s.TestTreemapEntries.Length with
             | PanelPresence.Hidden _
@@ -2437,6 +2432,10 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
 
 
 
+
+/// Backwards-compatible wrapper for callers that do not have live SessionInfos.
+let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession list) (creating: bool) =
+  renderSessionsForSessionWithLabels viewingSessionId sessions creating Map.empty
 
 /// Render session eval history as a visual filmstrip — one card per recent eval.
 /// Collapsed by default; the summary line shows count + recent outcome icons at a glance.
@@ -2656,13 +2655,10 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
             Elem.div [ Attr.class' "output-header" ] [
               Elem.div [ Attr.style "display:flex;align-items:center;gap:16px;" ] [
                 Elem.h2 [] [ Text.raw "Output" ]
-                // Session id and Mode moved here from the app header: they are session facts,
-                // so they belong with the output of that session, not above the whole page.
+                // The picker is on the card; the header keeps the id only as a reading aid.
                 match snap.SessionId with
-                | "" -> renderWorkflowSwitcher snap.WorkflowLabel ""
-                | sid ->
-                  Elem.span [ Attr.class' "output-session-id"; Attr.style "color:var(--fg-dim);font-size:0.857rem;" ] [ textEnc sid ]
-                  renderWorkflowSwitcher snap.WorkflowLabel sid
+                | "" -> ()
+                | sid -> Elem.span [ Attr.class' "output-session-id"; Attr.style "color:var(--fg-dim);font-size:0.857rem;" ] [ textEnc sid ]
               ]
               // Evaluate is a small button out of the way (it pops a box open); the live bindings own the bottom region.
               Elem.div [ Attr.class' "output-actions" ] [

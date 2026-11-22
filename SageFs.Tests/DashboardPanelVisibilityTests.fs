@@ -107,6 +107,11 @@ let dashboardPanelVisibilityTests =
         |> List.map (fun wf -> isShown { replFacts with Viewed = ViewedSession.Viewing(wf, off) } ContextPanel.HotReload)
         |> Expect.equal "REPL no, Live Testing no, Hot Reload yes" [ false; false; true ]
 
+      testCase "WHY — a Live Testing session does not say Hot reload is off, because the modes are mutually exclusive" <| fun _ ->
+        let facts = { replFacts with Viewed = ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.LiveTesting, off) }
+        let html = PanelVisibility.apply facts (snapshotWith off []) |> renderMainContent |> renderNode
+        html.Contains "Hot reload: off" |> Expect.isFalse "the other mode's absence is not a defect"
+        html.Contains DomIds.HiddenReasonHotReload |> Expect.isFalse "no reason bar for an irrelevant panel"
       testCase "live testing shows only when it's on for the viewed session" <| fun _ ->
         [ off; running; Features.LiveTestActivity.LiveTestActivity.Discovering ]
         |> List.map (fun activity -> isShown { replFacts with Viewed = ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, activity) } ContextPanel.LiveTesting)
@@ -190,7 +195,7 @@ let dashboardPanelVisibilityTests =
 
       testCase "live testing on renders its panel" <| fun _ ->
         renderedIds { replFacts with Viewed = ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.LiveTesting, running) } (snapshotWith running joined)
-        |> Expect.equal "just live testing" [ DomIds.LiveTestingPanel ]
+        |> Expect.equal "just live testing; the other workflow draws nothing at all" [ DomIds.LiveTestingPanel ]
 
       testCase "a running cohort renders the cohort panel and its lanes" <| fun _ ->
         renderedIds { replFacts with Cohort = PanelFacts.cohortPresence (frameOf joined) } (snapshotWith off joined)

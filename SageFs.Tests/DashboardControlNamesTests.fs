@@ -1,8 +1,9 @@
 /// A control is named by the word on it, is big enough to hit, and a label never stands over an empty value.
 ///
-/// Three adjacent buttons on a session card read Stop, Close and Delete on screen and Stop, Dispose and Purge to a
-/// screen reader. The "timing" toggle was a 42 by 15 pixel text button, the smallest target on the page. The header
-/// printed "Session:" with nothing after it when no session was in view.
+/// Three adjacent buttons on a session card are glyph-only squares that name themselves Stop, Close and Delete through
+/// a hover title and accessible name, after the words drawn inside them were cut off. The "timing" toggle was a 42 by
+/// 15 pixel text button, the smallest target on the page. The header printed "Session:" with nothing after it when no
+/// session was in view.
 module SageFs.Tests.DashboardControlNamesTests
 
 open System
@@ -53,13 +54,14 @@ let tests =
         (TeardownButton.name button).StartsWith(TeardownButton.word button)
         |> Expect.isTrue (sprintf "%A: %s" button (TeardownButton.name button))
 
-    testCase "WHY — the card's Stop, Close and Delete buttons are named Stop, Close and Delete, and Dispose and Purge are gone" <| fun _ ->
+    testCase "WHY — the card's Stop, Close and Delete buttons keep their accessible names after the words left the square" <| fun _ ->
       let buttons = cardButtons cardHtml
       for button in allTeardown do
-        let word = TeardownButton.word button
-        match buttons |> List.tryFind (fun (_, visible) -> visible.EndsWith word) with
-        | Some(name, _) -> name |> Expect.equal (sprintf "%s button's name" word) (TeardownButton.name button)
-        | None -> failtestf "no button reads %s in %A" word buttons
+        let name = TeardownButton.name button
+        match buttons |> List.tryFind (fun (aria, _) -> aria = name) with
+        | Some(found, _) -> found |> Expect.equal (sprintf "%s button's accessible name" name) name
+        | None -> failtestf "no button named %s in %A" name buttons
+      cardHtml.Contains "session-btn-word" |> Expect.isFalse "no button draws a word inside the 28px square"
       cardHtml.Contains "Dispose" |> Expect.isFalse "no second vocabulary for Close"
       cardHtml.Contains "Purge —" |> Expect.isFalse "no second vocabulary for Delete"
 
@@ -81,7 +83,7 @@ let tests =
       let page snapshot = renderMainContent snapshot |> renderNode
       let none = page { snapshotWith off [] with SessionId = "" }
       none.Contains "tabline-session-label" |> Expect.isFalse "no Session: label with nothing after it"
-      none |> Expect.stringContains "the empty switcher target is still on the page" DomIds.WorkflowSwitcher
+      none.Contains DomIds.WorkflowSwitcher |> Expect.isFalse "the workflow picker no longer lives in the global header"
       let some = page (snapshotWith off [])
       some |> Expect.stringContains "with a session the id is in the Output header" "output-session-id"
       some |> Expect.stringContains "and so is the id" "abcd1234"

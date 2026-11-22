@@ -20,6 +20,16 @@ let private apply (model: SageFsModel) (ev: TuiEvent) =
   SageFsUpdate.update (SageFsMsg.Event ev) model |> fst
 
 [<Tests>]
+let clearOutputTests =
+  testList "clear output keeps following" [
+    testCase "WHY — the Clear handler patches the real output renderer, not a bare div, so follow attributes survive" <| fun _ ->
+      let source = System.IO.File.ReadAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "../../../../SageFs/Dashboard.fs"))
+      let start = source.IndexOf("let createClearOutputHandler")
+      (start >= 0) |> Expect.isTrue "the handler exists"
+      let handler = source.Substring(start, min 700 (source.Length - start))
+      handler |> Expect.stringContains "it keeps the follow attributes" "renderOutputForSession"
+      handler.Contains "Elem.div [ Attr.id DomIds.OutputPanel ]" |> Expect.isFalse "no bare replacement"
+  ]
 let tests = testList "Output panel chat-style following" [
   testList "finished-eval count" [
     testCase "completed, failed and cancelled evals each count once for their session" <| fun _ ->
