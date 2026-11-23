@@ -539,6 +539,47 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     |> Expect.isTrue "the check is reported as cancelled"
   }
 
+  // WHY — a second rebuild request while one is in flight is refused with
+  // RestartRefusal.alreadyInProgress. That refusal is not the outcome of the
+  // rebuild: the first one is still building. RequestRebuild treats every
+  // RestartSession error as a failed rebuild and dispatches
+  // RebuildCompleted(Error ...), which overwrites the in-flight outcome and
+  // paints the rows as a failed build. A refuses-to-duplicate signal is not a
+  // failure and must be left to the rebuild that is already running.
+  testTask "WHY — RequestRebuild — a refusal to duplicate an in-flight rebuild is not reported as a failed rebuild" {
+    let log = TestDeps.createLog ()
+    let restarts = ref 0
+    let attempted = TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
+    let deps =
+      { TestDeps.singleSession log (fun _ -> WorkerResponse.WorkerReady) with
+          RestartSession = fun _ _ -> async {
+            restarts.Value <- restarts.Value + 1
+            attempted.TrySetResult true |> ignore
+            return Error (SageFsError.HardResetFailed SageFs.RestartRefusal.alreadyInProgress) } }
+    let req : Features.LiveTesting.TestRunRequest =
+      { Tests = [||]
+        Trigger = Features.LiveTesting.RunTrigger.FileSave
+        TreeSitterElapsed = TimeSpan.Zero
+        FcsElapsed = TimeSpan.Zero
+        SessionId = Some "a1b2c3d4"
+        InstrumentationMaps = [||] }
+    let mutable dispatched : SageFsMsg list = []
+    do! SageFsEffectHandler.execute deps
+          (fun msg -> dispatched <- msg :: dispatched)
+          (SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RequestRebuild (7L, req)))
+    // The effect runs on a background Async.Start. Wait on a signal the fake
+    // sets itself with a real deadline, not a poll whose ceiling is one tick.
+    let! landed = TestDeps.awaitTcs (int TestTimeouts.patienceInProcess.TotalMilliseconds) attempted |> Async.AwaitTask
+    landed |> Expect.isTrue "the background rebuild effect ran"
+    restarts.Value |> Expect.equal "one restart was asked for" 1
+    dispatched
+    |> List.exists (function
+      | SageFsMsg.RebuildCompleted (_, generation, Error message)
+        when generation = 7L && message.Contains SageFs.RestartRefusal.alreadyInProgress -> true
+      | _ -> false)
+    |> Expect.isFalse "a coalesce must not be dispatched as a failed rebuild"
+  }
+
   testTask "RequestHistory is a no-op" {
     let mutable dispatched : SageFsMsg list = []
     do! SageFsEffectHandler.execute (TestDeps.noSessions ())

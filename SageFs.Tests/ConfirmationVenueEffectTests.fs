@@ -112,6 +112,33 @@ let confirmationVenueEffectTests =
       restarts.Value |> Expect.equal "one restart" 1
     }
 
+    // WHY — a second rebuild request while one is in flight is refused with
+    // RestartRefusal.alreadyInProgress. The refusal is not the outcome of the
+    // rebuild: another one is already building the same on-disk text. The
+    // confirmation must wait for that rebuild and report Built, not tell the
+    // rows the build failed. Today the handler maps every RestartSession error
+    // to DidNotBuild, so a coalesce is written on the verdicts as a failure.
+    testAsync "a swap refused because a rebuild is already in flight waits for it and confirms" {
+      let restarts = ref 0
+      let heard = listening 6L
+      let baseDeps = depsWith restarts ConfirmationPorts.swapOnly
+      let deps =
+        { baseDeps with
+            RestartSession = fun _ _ -> async {
+              restarts.Value <- restarts.Value + 1
+              return Error (SageFsError.HardResetFailed SageFs.RestartRefusal.alreadyInProgress) } }
+      do! start deps heard 6L
+      let! answer = heard.Answer |> Async.AwaitTask
+      answer |> Expect.equal "the in-flight rebuild is waited for, not reported as a failure" BuildAnswer.Built
+      restarts.Value |> Expect.equal "one restart was asked for" 1
+      heard.Everything ()
+      |> List.exists (fun m ->
+        match m with
+        | SageFsMsg.Event (TuiEvent.BuildConfirmation (_, ConfirmationEvent.BuildFinished (_, BuildAnswer.DidNotBuild _))) -> true
+        | _ -> false)
+      |> Expect.isFalse "no DidNotBuild verdict is sent for a coalesce"
+    }
+
     testAsync "abandoning a generation retires its throwaway worker, whichever way the confirmation ended" {
       let ended = ConcurrentQueue<int64>()
       let ports = { ConfirmationPorts.swapOnly with EndThrowaway = fun _ generation -> ended.Enqueue generation }

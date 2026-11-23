@@ -434,6 +434,20 @@ module SageFsEffectHandler =
               | Venue.SwapInPlace _ ->
                 // Nothing the session holds is lost by a swap, so the build replaces the worker and the tests run in it.
                 match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
+                | Error err when SageFs.RestartRefusal.isAlreadyInProgress err ->
+                  // A refusal is not an outcome. Another rebuild is already building the same
+                  // on-disk text; wait for it and confirm against what it made. Reporting
+                  // DidNotBuild here writes a false failure onto an otherwise good verdict.
+                  Utils.Log.info "[rebuild] confirmation swap for %s coalesced with the rebuild already in flight" sessionId
+                  match! RebuildReadyWait.await (deps.AwaitReady sid) deps.ReadyDeadline token with
+                  | RebuildReadyWait.Outcome.Ready ->
+                    send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.Built))
+                  | RebuildReadyWait.Outcome.Failed e ->
+                    send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild (SageFsError.describe e)))
+                  | RebuildReadyWait.Outcome.DeadlineReached ->
+                    send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild "the rebuild already in flight did not reach Ready before the deadline"))
+                  | RebuildReadyWait.Outcome.Cancelled ->
+                    send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild "the confirmation was cancelled while waiting for the rebuild already in flight"))
                 | Error err ->
                   send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild (SageFsError.describe err)))
                 | Ok _ ->
@@ -898,6 +912,14 @@ module SageFsEffectHandler =
                   let sidStr = SessionId.value sid
                   let restartStopwatch = System.Diagnostics.Stopwatch.StartNew()
                   match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
+                  | Error err when SageFs.RestartRefusal.isAlreadyInProgress err ->
+                    // A refusal is not an outcome: another rebuild is already building the
+                    // same on-disk text and owns the RebuildCompleted for this generation.
+                    // Dispatching an Error here overwrites a running rebuild's good result
+                    // with a false failure. Coalesce and leave the outcome to that rebuild.
+                    restartStopwatch.Stop()
+                    rebuildStopwatch.Stop()
+                    Utils.Log.info "[rebuild] RequestRebuild for %s coalesced with the rebuild already in flight" sidStr
                   | Error err ->
                     match ct.IsCancellationRequested with
                     | true ->
