@@ -112,8 +112,10 @@ let tests =
           | LastRebuild.Latest (RebuildOutcome.InProgress startedAt) -> startedAt
           | other -> failtestf "expected InProgress while the build runs, got %A" other
         let! second = restartWithRebuild harness info.Id
-        RestartRefusal.isAlreadyInProgress (match second with Error e -> e | Ok m -> failtestf "the second reset must be refused, got Ok %s" m)
-        |> Expect.isTrue "refused as already in progress"
+        match second with
+        | Error (SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress) -> ()
+        | Error other -> failtestf "refused for the wrong reason: %A" other
+        | Ok m -> failtestf "the second reset must be refused, got Ok %s" m
         rebuildOf harness info.Id
         |> Expect.equal "a refusal is not an outcome: still the first rebuild, still in progress" (LastRebuild.Latest (RebuildOutcome.InProgress startedAt))
         release.SetResult()

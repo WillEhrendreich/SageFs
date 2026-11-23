@@ -27,15 +27,14 @@ let ok = function
   | Error err -> failwith err
 
 /// Exhaustive, compiler-checked mapping from the `SageFsError` algebra to a
-/// friction `BlockerKind`. This REPLACES `classifyFrictionOutcome`'s
-/// substring matching (which scanned a tool's rendered "Blocked:"/"Error:"
-/// text for keywords like "warm", "Multiple sessions match", "stale" — with
-/// a real precedence bug: `Contains("affordance") || (Contains("not
-/// available") && Contains("tool"))` let "not available" alone win the
-/// `&&` before the `tool` check would have narrowed it). A tool's own typed
-/// result (a `SageFsError` case, or `None` for success) is classified
-/// directly here — no text is parsed, and the compiler refuses this module
-/// to build if a new `SageFsError` case is added without a matching arm.
+/// friction `BlockerKind`. This REPLACES `classifyFrictionOutcome`'s substring
+/// matching (which scanned rendered "Blocked:"/"Error:" text for keywords like
+/// "warm", "Multiple sessions match", "stale" — with a real precedence bug:
+/// `Contains("affordance") || (Contains("not available") && Contains("tool"))`
+/// let "not available" alone win the `&&` before the `tool` check narrowed it).
+/// A tool's own typed result (a `SageFsError` case, or `None` for success) is
+/// classified directly here — no text is parsed, and the compiler refuses this
+/// module to build if a new `SageFsError` case is added without a matching arm.
 let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes.BlockerKind = function
   | SageFs.SageFsError.ToolNotAvailable _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.AffordanceMismatch
   | SageFs.SageFsError.SessionNotFound _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionMissing
@@ -62,6 +61,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.EvalFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.ResetFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.HardResetFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.HardResetRefused _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming // already in flight: the same wait as warmup
   | SageFs.SageFsError.BuildFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.ScriptLoadFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.CheckFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed

@@ -84,6 +84,36 @@ let tests =
         |> Expect.equal "the fallback case" (SageFsError.HardResetFailed "disk full")
     ]
 
+    testList "a refused duplicate rebuild" [
+      // WHY — a refusal to start a second rebuild is not the outcome of the
+      // rebuild already running. It used to be a string inside HardResetFailed,
+      // so a caller that forgot the string-comparison helper reported a false
+      // build failure. As its own case, a match on SageFsError must handle it.
+      testCase "WHY — the refusal is a distinct error case, not a failure with a magic string" <| fun _ ->
+        let err = SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress
+        match err with
+        | SageFsError.HardResetFailed _ -> failtest "a refusal must not be a failed reset"
+        | SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress -> ()
+        | other -> failtestf "expected the refusal, got %A" other
+        (SageFsError.toJson err).case
+        |> Expect.equal "its own wire case" "HardResetRefused"
+
+      testCase "WHY — its advice is to wait for the rebuild in flight, never to hard reset" <| fun _ ->
+        let err = SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress
+        let description = SageFsError.describe err
+        description |> Expect.stringContains "names the in-flight rebuild" "already in progress"
+        description.Contains "Hard reset failed" |> Expect.isFalse "never calls it a failed reset"
+        description.Contains "dotnet build" |> Expect.isFalse "never gives the build advice"
+        let next = SageFsError.suggestedAction err
+        next |> Expect.stringContains "names the wait" "Wait for the rebuild"
+        next.Contains "hard_reset_fsi_session" |> Expect.isFalse "never recommends another reset"
+
+      testCase "WHY — a conflict is a 409, not a server failure" <| fun _ ->
+        let err = SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress
+        SageFsError.category err |> Expect.equal "infrastructure conflict" ErrorCategory.Infra
+        SageFsError.toHttpStatus err |> Expect.equal "conflict" 409
+    ]
+
     testList "a cohort refusal's kind" [
       testCase "WHY — the kind is in the structured payload, so an agent tells ClaimConflict from NotConductor" <| fun _ ->
         let fieldsOf kind = (SageFsError.toJson (SageFsError.CohortRefused(kind, "r", "s"))).fields

@@ -29,17 +29,10 @@ type RestartPlan =
   /// it runs in the worker, with the value in hand.
   | Migrate of boundary: string
 
-/// The owner's refusal of a second hard reset while a rebuild is in flight. One
-/// spelling, shared by the mailbox that says it and by every tool that must not
-/// mistake it for the outcome of a rebuild (it is a refusal, and the rebuild it
-/// refused to duplicate is still running).
-module RestartRefusal =
-  let alreadyInProgress = "Hard reset already in progress for this session"
-
-  let isAlreadyInProgress (error: SageFsError) : bool =
-    match error with
-    | SageFsError.HardResetFailed message -> message = alreadyInProgress
-    | _ -> false
+/// `RestartRefusal` is defined in SageFsError.fs as a case of `SageFsError`:
+/// a refusal of a duplicate rebuild is a distinct, matchable outcome, not a
+/// magic string inside `HardResetFailed` that every caller must remember to
+/// compare. See the type there for why.
 
 type SessionManagementOps = {
   CreateSession: SessionProjectTarget list -> string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>

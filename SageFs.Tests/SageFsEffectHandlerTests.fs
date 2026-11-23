@@ -555,7 +555,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           RestartSession = fun _ _ -> async {
             restarts.Value <- restarts.Value + 1
             attempted.TrySetResult true |> ignore
-            return Error (SageFsError.HardResetFailed SageFs.RestartRefusal.alreadyInProgress) } }
+            return Error (SageFsError.HardResetRefused SageFs.RestartRefusal.AlreadyInProgress) } }
     let req : Features.LiveTesting.TestRunRequest =
       { Tests = [||]
         Trigger = Features.LiveTesting.RunTrigger.FileSave
@@ -574,10 +574,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     restarts.Value |> Expect.equal "one restart was asked for" 1
     dispatched
     |> List.exists (function
-      | SageFsMsg.RebuildCompleted (_, generation, Error message)
-        when generation = 7L && message.Contains SageFs.RestartRefusal.alreadyInProgress -> true
+      | SageFsMsg.RebuildCompleted (_, 7L, Error _) -> true
       | _ -> false)
-    |> Expect.isFalse "a coalesce must not be dispatched as a failed rebuild"
+    |> Expect.isFalse "a coalesce must not dispatch a failed rebuild at all"
   }
 
   testTask "RequestHistory is a no-op" {

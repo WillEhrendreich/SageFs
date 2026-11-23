@@ -375,8 +375,7 @@ let sessionManagerOffMailboxBuildTests =
           // A concurrent hard reset of the same session must be rejected, not
           // queued behind the build and not double-spawned.
           match! tryPostAndReply (TestTimeouts.asMs TestTimeouts.patience) harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
-          | Some (Error (SageFsError.HardResetFailed msg)) ->
-            msg |> Expect.stringContains "rejection should explain the in-flight rebuild" "already in progress"
+          | Some (Error (SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress)) -> ()
           | Some (Error otherErr) ->
             failtestf "second hard reset returned an unexpected error: %s" (SageFsError.describe otherErr)
           | Some (Ok _) -> failtest "second hard reset unexpectedly accepted while a rebuild was in flight"

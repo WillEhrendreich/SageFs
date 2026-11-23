@@ -181,6 +181,21 @@ module CohortFailureKind =
     | CohortFailureKind.PrunedLanding -> "PrunedLanding"
 
 /// Unified error type for the entire SageFs system.
+/// Why the owner refused to start a hard reset. A refusal is not the outcome
+/// of the rebuild already in progress: that rebuild still owns the result.
+/// Defining it as a DU case rather than a magic string inside `HardResetFailed`
+/// is the whole point — a caller cannot mistake a refusal for a failed reset
+/// without the compiler refusing the incomplete match.
+///
+/// This used to be `RestartRefusal.alreadyInProgress`, a string that two call
+/// sites compared with `isAlreadyInProgress`. Both forgot, and reported a
+/// false build failure. A case carries its own meaning.
+[<RequireQualifiedAccess>]
+type RestartRefusal =
+  /// A rebuild for this session is already in flight. Wait for it; do not
+  /// start another one and do not report the refusal as its verdict.
+  | AlreadyInProgress
+
 /// Every Result<..., SageFsError> across all layers uses this single DU.
 /// NO wildcard matches in module functions — compiler catches missing cases.
 [<RequireQualifiedAccess>]
@@ -261,6 +276,10 @@ type SageFsError =
   | EvalFailed of reason: string
   | ResetFailed of reason: string
   | HardResetFailed of reason: string
+  /// The owner refused to start a hard reset because the work was already
+  /// running. Not a failure: the rebuild it refused to duplicate owns the
+  /// outcome. Its advice is to wait, never to run another reset.
+  | HardResetRefused of refusal: RestartRefusal
   /// `dotnet build` failed. Structured diagnostics, not prose with a baked-in
   /// UI hint — a surface words its own call to action from `suggestedAction`
   /// or its own display logic (see AppRun.fs's dashboard-card describe).
@@ -389,6 +408,8 @@ module SageFsError =
       sprintf "Reset failed: %s. Try hard_reset_fsi_session for a full restart." reason
     | SageFsError.HardResetFailed reason ->
       sprintf "Hard reset failed: %s. Check that the project builds with 'dotnet build'." reason
+    | SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress ->
+      "A rebuild is already in progress for this session. The rebuild already running owns the outcome; wait for it."
     | SageFsError.BuildFailed(exitCode, diagnostics) ->
       sprintf "Build failed (exit %d):\n%s" exitCode (BuildDiagnostic.describe diagnostics)
     | SageFsError.ScriptLoadFailed reason ->
@@ -462,6 +483,7 @@ module SageFsError =
     | SageFsError.FsiHostCrashed _ -> LogLevel.Error
     | SageFsError.ResetFailed _ -> LogLevel.Error
     | SageFsError.HardResetFailed _ -> LogLevel.Error
+    | SageFsError.HardResetRefused _ -> LogLevel.Information
     | SageFsError.BuildFailed _ -> LogLevel.Error
     | SageFsError.ScriptLoadFailed _ -> LogLevel.Error
     | SageFsError.HotReloadFailed _ -> LogLevel.Error
@@ -524,6 +546,7 @@ module SageFsError =
     | SageFsError.RestartLimitExceeded _ -> 409
     | SageFsError.DuplicateSession _ -> 409
     | SageFsError.NeedsRebuild _ -> 409
+    | SageFsError.HardResetRefused _ -> 409
     // 503 Service Unavailable — overloaded, retry later (not the caller's fault)
     | SageFsError.SupervisorBusy _ -> 503
     | SageFsError.MemoryPressureRefused _ -> 503
@@ -611,6 +634,7 @@ module SageFsError =
     | SageFsError.PortInUse _
     | SageFsError.RestartLimitExceeded _
     | SageFsError.DuplicateSession _ -> ErrorCategory.Infra
+    | SageFsError.HardResetRefused _ -> ErrorCategory.Infra
     | SageFsError.SupervisorBusy _
     | SageFsError.MemoryPressureRefused _
     | SageFsError.SessionRestarting _ -> ErrorCategory.Overload
@@ -654,6 +678,8 @@ module SageFsError =
     | SageFsError.EvalFailed _ -> "Fix the code and resubmit"
     | SageFsError.ResetFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.HardResetFailed _ -> "Check that the project builds with 'dotnet build'"
+    | SageFsError.HardResetRefused _ ->
+      "Wait for the rebuild already in progress to reach Ready, then retry. Do not start another rebuild."
     // A build fails under run_app and under hard_reset_fsi_session rebuild=true, so the advice names neither.
     | SageFsError.BuildFailed _ -> "Fix the build errors, then repeat the call that built"
     | SageFsError.ScriptLoadFailed _ -> "Check file exists and has valid F# syntax"
@@ -726,6 +752,7 @@ module SageFsError =
     | SageFsError.EvalFailed _ -> "EvalFailed"
     | SageFsError.ResetFailed _ -> "ResetFailed"
     | SageFsError.HardResetFailed _ -> "HardResetFailed"
+    | SageFsError.HardResetRefused _ -> "HardResetRefused"
     | SageFsError.BuildFailed _ -> "BuildFailed"
     | SageFsError.ScriptLoadFailed _ -> "ScriptLoadFailed"
     | SageFsError.CheckFailed _ -> "CheckFailed"
@@ -836,6 +863,8 @@ module SageFsError =
     | SageFsError.EvalFailed reason -> [ "reason", box reason ]
     | SageFsError.ResetFailed reason -> [ "reason", box reason ]
     | SageFsError.HardResetFailed reason -> [ "reason", box reason ]
+    | SageFsError.HardResetRefused refusal ->
+      [ "refusal", box (match refusal with RestartRefusal.AlreadyInProgress -> "AlreadyInProgress") ]
     | SageFsError.BuildFailed(exitCode, diagnostics) ->
       [ "exitCode", box exitCode
         "diagnostics", box (diagnostics |> List.map diagnosticFields) ]

@@ -210,6 +210,7 @@ let private allDuCaseInstances =
         | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
         | t when t = typeof<HostCrash> -> box { Exit = ExitedWith 134; Output = "test" }
         | t when t = typeof<CohortFailureKind> -> box CohortFailureKind.ClaimConflict
+        | t when t = typeof<RestartRefusal> -> box RestartRefusal.AlreadyInProgress
         | t -> failwithf "Unhandled field type %s in case %s" t.Name case.Name)
     FSharpValue.MakeUnion(case, fields) :?> SageFsError)
 
@@ -330,12 +331,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 48 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 49 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        48
+        49
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|

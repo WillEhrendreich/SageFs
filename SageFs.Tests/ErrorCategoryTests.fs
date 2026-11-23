@@ -38,6 +38,7 @@ let private golden : (string * ErrorCategory) list =
     "EvalFailed", ErrorCategory.Internal
     "ResetFailed", ErrorCategory.Internal
     "HardResetFailed", ErrorCategory.Internal
+    "HardResetRefused", ErrorCategory.Infra
     "BuildFailed", ErrorCategory.Internal
     "ScriptLoadFailed", ErrorCategory.Internal
     "CheckFailed", ErrorCategory.Internal
@@ -83,6 +84,7 @@ let private everyError : (string * SageFsError) list =
         | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
         | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
         | t when t = typeof<CohortFailureKind> -> box CohortFailureKind.ClaimConflict
+        | t when t = typeof<RestartRefusal> -> box RestartRefusal.AlreadyInProgress
         | _ -> null)
     case.Name, FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError)
   |> Array.toList

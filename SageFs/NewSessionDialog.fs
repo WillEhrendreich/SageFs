@@ -156,6 +156,7 @@ module DaemonRefusal =
     | SageFsError.EvalFailed _
     | SageFsError.ResetFailed _
     | SageFsError.HardResetFailed _
+    | SageFsError.HardResetRefused _
     | SageFsError.BuildFailed _
     | SageFsError.ScriptLoadFailed _
     | SageFsError.CheckFailed _

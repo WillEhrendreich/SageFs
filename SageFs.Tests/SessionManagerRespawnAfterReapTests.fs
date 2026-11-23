@@ -334,7 +334,8 @@ let respawnAfterReapTests =
             makeReady harness info
             hardReset harness info.Id RestartPlan.RespawnOnly |> Result.isOk |> Expect.isTrue "the first reset is accepted"
             match hardReset harness info.Id RestartPlan.RespawnOnly with
-            | Error err -> RestartRefusal.isAlreadyInProgress err |> Expect.isTrue "the second is refused as already in progress"
+            | Error (SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress) -> ()
+            | Error other -> failtestf "the second is refused for the wrong reason: %A" other
             | Ok message -> failtestf "the second reset was accepted: %s" message
             rig.LetOldWorkersLeave ()
             do! within "the one replacement" (rig.Started 2)

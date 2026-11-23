@@ -61,7 +61,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
             | WorkerProtocol.SessionLifecycleStatus.Ready _ | WorkerProtocol.SessionLifecycleStatus.Evaluating _ | WorkerProtocol.SessionLifecycleStatus.Building _ -> true
             | _ -> false
           match plan, restartResult with
-          | SageFs.RestartPlan.Rebuild _, Error error when RestartRefusal.isAlreadyInProgress error -> ()
+          | SageFs.RestartPlan.Rebuild _, Error (SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress) -> ()
           | SageFs.RestartPlan.Rebuild _, Error error ->
             rebuild.Value <-
               LastRebuild.Latest (
@@ -165,7 +165,7 @@ let tests = testList "MCP hard reset rebuild" [
   }
 
   testTask "WHY — hard_reset rebuild=true — a second reset the owner REFUSES as already in progress leaves the running rebuild's state alone, because status must not report a rebuild as FAILED while it is still running" {
-    let refused = SageFsError.HardResetFailed "Hard reset already in progress for this session"
+    let refused = SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress
     let p = mkProbe "aaa00040" (Error refused) WorkerProtocol.SessionStatus.Ready
     // A first rebuild is in flight: the registry says so.
     p.Rebuild.Value <- LastRebuild.Latest (RebuildOutcome.InProgress (DateTime.UtcNow.AddSeconds -5.0))
@@ -216,7 +216,7 @@ let tests = testList "MCP hard reset rebuild" [
   }
 
   testTask "WHY — hard_reset rebuild=false — a refused restart reaches the agent as an error with a next step, because a silent success would hide that nothing was reset" {
-    let refused = SageFsError.HardResetFailed "Hard reset already in progress for this session"
+    let refused = SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress
     let p = mkProbe "aaa00007" (Error refused) WorkerProtocol.SessionStatus.Ready
     let! reply = hardResetSession p.Ctx "agent1" false (Some p.SessionId) None
     reply |> Expect.equal "the owner's refusal, with its next step" (sprintf "Error: %s" (SageFsError.describeForAgent refused))

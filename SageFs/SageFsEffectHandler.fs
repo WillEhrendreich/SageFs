@@ -434,7 +434,7 @@ module SageFsEffectHandler =
               | Venue.SwapInPlace _ ->
                 // Nothing the session holds is lost by a swap, so the build replaces the worker and the tests run in it.
                 match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
-                | Error err when SageFs.RestartRefusal.isAlreadyInProgress err ->
+                | Error (SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress) ->
                   // A refusal is not an outcome. Another rebuild is already building the same
                   // on-disk text; wait for it and confirm against what it made. Reporting
                   // DidNotBuild here writes a false failure onto an otherwise good verdict.
@@ -912,7 +912,7 @@ module SageFsEffectHandler =
                   let sidStr = SessionId.value sid
                   let restartStopwatch = System.Diagnostics.Stopwatch.StartNew()
                   match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
-                  | Error err when SageFs.RestartRefusal.isAlreadyInProgress err ->
+                  | Error (SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress) ->
                     // A refusal is not an outcome: another rebuild is already building the
                     // same on-disk text and owns the RebuildCompleted for this generation.
                     // Dispatching an Error here overwrites a running rebuild's good result

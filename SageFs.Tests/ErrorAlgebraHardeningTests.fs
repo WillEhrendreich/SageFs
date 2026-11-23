@@ -32,6 +32,7 @@ let private buildAllCases () =
         | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
         | t when t = typeof<HostCrash> -> box { Exit = ExitedWith 134; Output = "test" }
         | t when t = typeof<CohortFailureKind> -> box CohortFailureKind.ClaimConflict
+        | t when t = typeof<RestartRefusal> -> box RestartRefusal.AlreadyInProgress
         | _ -> failwithf "Unhandled field type %s in case %s" f.PropertyType.Name case.Name)
     case, FSharpValue.MakeUnion(case, fields) :?> SageFsError)
 

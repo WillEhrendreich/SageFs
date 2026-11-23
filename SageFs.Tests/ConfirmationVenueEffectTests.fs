@@ -126,7 +126,7 @@ let confirmationVenueEffectTests =
         { baseDeps with
             RestartSession = fun _ _ -> async {
               restarts.Value <- restarts.Value + 1
-              return Error (SageFsError.HardResetFailed SageFs.RestartRefusal.alreadyInProgress) } }
+              return Error (SageFsError.HardResetRefused SageFs.RestartRefusal.AlreadyInProgress) } }
       do! start deps heard 6L
       let! answer = heard.Answer |> Async.AwaitTask
       answer |> Expect.equal "the in-flight rebuild is waited for, not reported as a failure" BuildAnswer.Built

@@ -207,6 +207,14 @@
     "suggestedAction": "Check that the project builds with \u0027dotnet build\u0027"
   },
   {
+    "case": "HardResetRefused",
+    "fields": {
+      "refusal": "AlreadyInProgress"
+    },
+    "message": "A rebuild is already in progress for this session. The rebuild already running owns the outcome; wait for it.",
+    "suggestedAction": "Wait for the rebuild already in progress to reach Ready, then retry. Do not start another rebuild."
+  },
+  {
     "case": "BuildFailed",
     "fields": {
       "exitCode": 42,
