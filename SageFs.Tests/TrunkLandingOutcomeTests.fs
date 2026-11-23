@@ -375,8 +375,24 @@ let private bindingLineAt (w: World) (sha: string) (relPath: string) (binding: s
     | false -> return failwithf "%s at %s holds no line binding '%s'" relPath sha binding
   }
 
+/// Ask the trunk app until it answers. A landing can restart the app, and a loaded machine stretches that restart;
+/// one request is a point-in-time sample that fails on a port the app has not reopened yet. The retry is bounded, so a
+/// genuinely dead app still fails the case.
 let private appGet (w: World) (route: string) : Task<string> =
-  w.App.GetStringAsync(sprintf "%s/%s" (w.App.BaseAddress.ToString().TrimEnd('/')) route)
+  task {
+    let url = sprintf "%s/%s" (w.App.BaseAddress.ToString().TrimEnd('/')) route
+    let body = ref ""
+    let! answered =
+      TestInfrastructure.waitForAsync (int TestTimeouts.httpRequest.TotalMilliseconds) (fun () -> task {
+        try
+          let! text = w.App.GetStringAsync url
+          body.Value <- text
+          return true
+        with :? HttpRequestException -> return false })
+    match answered with
+    | true -> return body.Value
+    | false -> return failwithf "the trunk app never answered %s" route
+  }
 
 /// Wait for the trunk's line about a landing while the app keeps being asked. A reload that no request enters is judged
 /// NeverEntered once its grace window passes, and that verdict is final, so a waiter that only reads status lets a loaded
