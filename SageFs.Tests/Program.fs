@@ -208,7 +208,12 @@ let main argv =
     let cache = SageFs.IsolatedFsiSession.hostCacheRoot ()
     let dotnet = SageFs.IsolatedFsiSession.dotnetPath ()
     let repoRoot = RepoPaths.repoPathFull [||]
-    let installed = SageFs.FsiHostBuild.installedSdkVersions dotnet |> Result.defaultValue []
+    // An old SDK left installed on the machine is not a target. Building a host for it fails to parse current F# syntax
+    // and only wastes a prebuild slot; the tiers ask only for SDKs the tool ships for.
+    let installed =
+      SageFs.FsiHostBuild.installedSdkVersions dotnet
+      |> Result.defaultValue []
+      |> SageFs.FsiHostBuild.supportedSdkVersions
     SageFs.FsiHostBuild.resolveSdkVersion dotnet repoRoot
     |> Result.map (fun pinned -> SageFs.Build.TierSchedule.hostPrebuildSdks pinned installed)
     |> Result.mapError SageFs.FsiHostBuild.describeBuildError

@@ -15,6 +15,23 @@ open System.Text
 open System.Threading
 open SageFs.ProcessEnvironment
 
+/// The oldest SDK whose F# compiler can build the embedded host sources.
+/// SageFs ships for net10 and net11; an older SDK left installed on a machine
+/// is not a target, and its compiler cannot parse syntax the host uses (for
+/// example `string | null`). Installing an old SDK must not turn a healthy
+/// checkout into a failing build, so callers filter installed SDKs by this.
+let minimumHostSdkMajor = 10
+
+/// Installed SDK versions the tool supports. An SDK whose version cannot be
+/// read is kept: the build itself will say why it cannot be used, and a guess
+/// here would hide that reason.
+let supportedSdkVersions (versions: string list) : string list =
+  versions
+  |> List.filter (fun version ->
+    match SageFs.SdkChoice.SdkVersion.parse version with
+    | Some parsed -> parsed.Major >= minimumHostSdkMajor
+    | None -> true)
+
 /// The files that make up the host project, in the order they are written.
 let hostSourceNames =
   [ "FsiHost.fsproj"

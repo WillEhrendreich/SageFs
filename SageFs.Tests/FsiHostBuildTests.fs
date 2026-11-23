@@ -217,16 +217,23 @@ let tests =
         |> Expect.equal "only the version" [ "9.0.300" ]
     ]
 
+    testList "supported SDKs" [
+      testCase "WHY — an old SDK left installed is not a target the host build must satisfy" <| fun _ ->
+        supportedSdkVersions [ "6.0.136"; "10.0.404"; "11.0.100" ]
+        |> Expect.equal "only SDKs the tool ships for" [ "10.0.404"; "11.0.100" ]
+    ]
+
     Integration.hostList "ensureBuilt (real SDK build)" [
       // FCS's API differs between SDKs (SDK 11 changed a tooltip type), so the ONE host source must compile with
-      // EVERY installed SDK. A build that fails on any of them is a real bug, not an environment quirk.
-      testCase "the host builds with every installed SDK" <| fun _ ->
+      // every SDK the tool ships for (net10 and net11). An older SDK left installed on the machine is not a target:
+      // its F# compiler cannot parse current host sources, and the repo's global.json pins the one to build with.
+      testCase "the host builds with every installed SDK it supports" <| fun _ ->
         withTempCache (fun cache ->
           let sdks =
             match installedSdkVersions dotnet with
-            | Result.Ok sdks -> sdks
+            | Result.Ok sdks -> supportedSdkVersions sdks
             | Result.Error reason -> failtest (describeBuildError reason)
-          Expect.isNonEmpty "at least one SDK is installed" sdks
+          Expect.isNonEmpty "at least one supported SDK is installed" sdks
           for sdk in sdks do
             match ensureBuilt dotnet sdk cache with
             | Result.Ok _ -> ()
