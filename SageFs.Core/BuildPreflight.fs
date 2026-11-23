@@ -10,6 +10,11 @@ type BuildPreflight =
   | NeedsRebuild of missing: string list
   | Unknown of reason: string
 
+/// A build-output search. The root and the DLL name are both strings, so a
+/// record names them: passing them the wrong way round is a compile error
+/// rather than a search that quietly finds nothing.
+type OutputSearch = { BinDir: string; DllName: string }
+
 module BuildPreflight =
   let private xmlName (name: string) = XName.Get name
 
@@ -59,9 +64,10 @@ module BuildPreflight =
 
   /// The real filesystem implementation of `findOutputs`: any matching file
   /// anywhere under the output root, whatever config or TFM the build used.
-  let findOutputFiles (dir: string) (pattern: string) : string list =
-    if Directory.Exists dir then
-      Directory.EnumerateFiles(dir, pattern, SearchOption.AllDirectories) |> Seq.toList
+  /// The spec is a record so the root and the DLL name cannot be swapped.
+  let findOutputFiles (search: OutputSearch) : string list =
+    if Directory.Exists search.BinDir then
+      Directory.EnumerateFiles(search.BinDir, search.DllName, SearchOption.AllDirectories) |> Seq.toList
     else []
 
   /// `Ready` is a proof, not a label. A bin clear leaves the restore artifacts
@@ -73,7 +79,7 @@ module BuildPreflight =
     (artifacts: ArtifactsDir)
     (fileExists: string -> bool)
     (readText: string -> string)
-    (findOutputs: string -> string -> string list)
+    (findOutputs: OutputSearch -> string list)
     (target: SessionProjectTarget)
     : BuildPreflight =
     match target with
@@ -97,14 +103,14 @@ module BuildPreflight =
         | [] ->
           let binDir = outputBinDir artifacts projectPath
           let dllName = Path.GetFileNameWithoutExtension projectPath + ".dll"
-          match findOutputs binDir dllName with
+          match findOutputs { BinDir = binDir; DllName = dllName } with
           | _ :: _ -> BuildPreflight.Ready
           | [] -> BuildPreflight.NeedsRebuild [ Path.Combine(binDir, dllName) ]
 
   let check
     (fileExists: string -> bool)
     (readText: string -> string)
-    (findOutputs: string -> string -> string list)
+    (findOutputs: OutputSearch -> string list)
     (target: SessionProjectTarget)
     : BuildPreflight =
     checkUnder ProjectChooses fileExists readText findOutputs target
@@ -114,7 +120,7 @@ module BuildPreflight =
     (artifacts: ArtifactsDir)
     (fileExists: string -> bool)
     (readText: string -> string)
-    (findOutputs: string -> string -> string list)
+    (findOutputs: OutputSearch -> string list)
     (workingDir: string)
     (target: SessionProjectTarget)
     : BuildPreflight =
@@ -128,7 +134,7 @@ module BuildPreflight =
   let checkIn
     (fileExists: string -> bool)
     (readText: string -> string)
-    (findOutputs: string -> string -> string list)
+    (findOutputs: OutputSearch -> string list)
     (workingDir: string)
     (target: SessionProjectTarget)
     : BuildPreflight =

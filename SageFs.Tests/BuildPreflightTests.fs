@@ -18,10 +18,10 @@ let private outputDll = "/repo/bin/Debug/net11.0/App.dll"
 
 /// The fake-filesystem `findOutputs`: every present path under the output root
 /// whose file name is the DLL the preflight is looking for.
-let private outputsIn (present: Set<string>) (dir: string) (pattern: string) : string list =
-  let prefix = dir + string System.IO.Path.DirectorySeparatorChar
+let private outputsIn (present: Set<string>) (search: OutputSearch) : string list =
+  let prefix = search.BinDir + string System.IO.Path.DirectorySeparatorChar
   present
-  |> Set.filter (fun p -> p.StartsWith(prefix, System.StringComparison.Ordinal) && System.IO.Path.GetFileName p = pattern)
+  |> Set.filter (fun p -> p.StartsWith(prefix, System.StringComparison.Ordinal) && System.IO.Path.GetFileName p = search.DllName)
   |> Set.toList
 
 /// A built project: restore inputs AND an output DLL. `Ready` now requires
@@ -39,7 +39,7 @@ let tests =
         BuildPreflight.check
           (fun _ -> reads <- reads + 1; true)
           (fun _ -> reads <- reads + 1; "<Project />")
-          (fun _ _ -> reads <- reads + 1; [])
+          (fun _ -> reads <- reads + 1; [])
           SessionProjectTarget.Bare
       result |> Expect.equal "bare" BuildPreflight.Ready
       reads |> Expect.equal "bare preflight does not inspect the filesystem" 0
@@ -126,7 +126,7 @@ let tests =
     }
 
     test "solution target is Unknown, not falsely Ready" {
-      BuildPreflight.check (fun _ -> true) (fun _ -> "<Project />") (fun _ _ -> []) (SessionProjectTarget.Solution "/repo/App.slnx")
+      BuildPreflight.check (fun _ -> true) (fun _ -> "<Project />") (fun _ -> []) (SessionProjectTarget.Solution "/repo/App.slnx")
       |> Expect.equal "solution preflight boundary" (BuildPreflight.Unknown "solution preflight is not classified yet")
     }
   ]

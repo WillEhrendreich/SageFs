@@ -298,9 +298,9 @@ let perSessionTests =
         SessionOptionsRegistry.release keyOne
   ]
 
-let private outputsIn (present: Set<string>) (dir: string) (pattern: string) =
-  let prefix = dir + string Path.DirectorySeparatorChar
-  present |> Set.filter (fun p -> p.StartsWith(prefix, StringComparison.Ordinal) && Path.GetFileName p = pattern) |> Set.toList
+let private outputsIn (present: Set<string>) (search: OutputSearch) =
+  let prefix = search.BinDir + string Path.DirectorySeparatorChar
+  present |> Set.filter (fun p -> p.StartsWith(prefix, StringComparison.Ordinal) && Path.GetFileName p = search.DllName) |> Set.toList
 
 [<Tests>]
 let preflightTests =
@@ -325,7 +325,7 @@ let preflightTests =
       let project = Path.Combine(Path.GetTempPath(), "optset-pre2", "App.fsproj")
       let artifacts = Path.Combine(Path.GetTempPath(), "optset-pre2-art")
       let exists (path: string) = path = project
-      match BuildPreflight.checkUnder (ArtifactsIn artifacts) exists (fun _ -> "<Project />") (fun _ _ -> []) (SessionProjectTarget.Project project) with
+      match BuildPreflight.checkUnder (ArtifactsIn artifacts) exists (fun _ -> "<Project />") (fun _ -> []) (SessionProjectTarget.Project project) with
       | BuildPreflight.NeedsRebuild missing ->
         missing |> Expect.equal "both restore outputs, under the artifacts path"
           [ Path.Combine(artifacts, "obj", "App", "project.assets.json"); Path.Combine(artifacts, "obj", "App", "App.fsproj.nuget.g.props") ]

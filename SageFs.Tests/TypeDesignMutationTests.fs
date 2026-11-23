@@ -67,15 +67,15 @@ let readingMutants =
 let private dllPath = "/w/obj/App.fsproj.nuget.g.props"
 let private assetsPath = "/w/obj/project.assets.json"
 let private built path = path = "/w/App.fsproj" || path = assetsPath || path = dllPath
-let private noOutputs (_: string) (_: string) : string list = []
+let private noOutputs (_: OutputSearch) : string list = []
 let private preflightWith findOutputs =
   BuildPreflight.checkUnder ProjectChooses built (fun _ -> "<Project />") findOutputs
     (SessionProjectTarget.Project "/w/App.fsproj")
 
-let private inventedOutput : Mutant<(string -> string -> string list) -> BuildPreflight> =
+let private inventedOutput : Mutant<(OutputSearch -> string list) -> BuildPreflight> =
   { Name = "preflight_invents_an_output"
     Description = "restore artifacts alone must not produce Ready"
-    Apply = fun _ _ -> preflightWith (fun _ _ -> [ "/w/bin/Debug/net11.0/App.dll" ]) }
+    Apply = fun _ _ -> preflightWith (fun _ -> [ "/w/bin/Debug/net11.0/App.dll" ]) }
 
 let preflightMutants =
   testList "mutants of BuildPreflight" [
