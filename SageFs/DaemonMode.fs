@@ -552,8 +552,7 @@ let createSessionOpsWithRecovery
         | Some(project, targetFrameworks, reason) ->
           return Result.Error(SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason))
         | None ->
-          // A project's own copy of SageFs.Core that is an older build of this daemon's is removed here, so the rebuild below
-          // writes back a matching one. The spawn would otherwise refuse the session and leave the rebuild to the caller.
+          // Remove a project's older own copy of SageFs.Core so the rebuild writes back a matching one; otherwise the spawn refuses.
           let removedStale = HostCoreAdoption.removeStaleCopiesFor (SessionProjectTarget.projects targets)
           // The session's options are resolved first: the recovery build below reads them, and the preflight looks where
           // the session's builds write, which an artifacts path moves out from under the project.
@@ -564,8 +563,9 @@ let createSessionOpsWithRecovery
             |> List.collect (fun target ->
               match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
               | BuildPreflight.NeedsRebuild missing -> missing
-              | BuildPreflight.Ready
-              | BuildPreflight.Unknown _ -> [])
+              | BuildPreflight.Ready | BuildPreflight.Unknown _ -> [])
+            // Restore inputs survive a bin clear; check outputs too.
+            |> List.append (BuildPreflight.missingOutputsIn System.IO.File.Exists workingDir targets)
             |> List.append removedStale
             |> List.distinct
           match missing with

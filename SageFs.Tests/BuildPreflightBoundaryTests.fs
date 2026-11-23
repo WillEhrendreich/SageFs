@@ -93,6 +93,9 @@ let tests =
           Directory.CreateDirectory(Path.Combine(dir, "obj")) |> ignore
           File.WriteAllText(Path.Combine(dir, "obj", "project.assets.json"), "{}")
           File.WriteAllText(Path.Combine(dir, "obj", "App.fsproj.nuget.g.props"), "<Project />")
+          // Recovery also has to leave output DLLs for the post-recovery check.
+          Directory.CreateDirectory(Path.Combine(dir, "bin", "Debug", "net11.0")) |> ignore
+          File.WriteAllText(Path.Combine(dir, "bin", "Debug", "net11.0", "App.dll"), "")
           return Result.Ok ()
         })
       let ops = createSessionOpsWithRecovery mailbox (fun () -> SessionManager.QuerySnapshot.empty) manifest recover
@@ -113,6 +116,9 @@ let tests =
       Directory.CreateDirectory(Path.Combine(dir, "obj")) |> ignore
       File.WriteAllText(Path.Combine(dir, "obj", "project.assets.json"), "{}")
       File.WriteAllText(Path.Combine(dir, "obj", "App.fsproj.nuget.g.props"), "<Project />")
+      // A project with a real build also has output DLLs; the create path now checks them.
+      Directory.CreateDirectory(Path.Combine(dir, "bin", "Debug", "net11.0")) |> ignore
+      File.WriteAllText(Path.Combine(dir, "bin", "Debug", "net11.0", "App.dll"), "")
       let mutable received : SessionProjectTarget list = []
       let info : SessionInfo = {
         Id = SessionId.newId(); Name = None; Projects = [ "App.fsproj" ]

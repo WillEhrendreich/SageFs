@@ -32,6 +32,28 @@ let tests =
       reads |> Expect.equal "bare preflight does not inspect the filesystem" 0
     }
 
+    // WHY — restore artifacts (obj/project.assets.json) survive a `bin` clear.
+    // A preflight that only checks those says Ready for a project with no
+    // output DLLs, so create_session skips its recovery build and warmup
+    // faults with "Not all DLLs are found". The output check is the one that
+    // decides whether the project can actually be loaded.
+    test "restore inputs present but output DLLs cleared is NeedsRebuild, not Ready" {
+      let target = SessionProjectTarget.Project projectFile
+      let result = BuildPreflight.checkOutputs (Set.ofList (projectFile :: conventional)).Contains target
+      match result with
+      | BuildPreflight.NeedsRebuild missing ->
+        missing |> Expect.exists "names the missing output" (fun p -> p.Contains "App.dll")
+        missing |> Expect.exists "names the test output" (fun p -> p.Contains "App.Tests.dll" || p.Contains "App.dll")
+      | other -> failtestf "expected NeedsRebuild with the missing outputs, got %A" other
+    }
+
+    test "restore inputs and output DLLs present is Ready" {
+      let target = SessionProjectTarget.Project projectFile
+      let files = projectFile :: conventional @ [ "/repo/bin/Debug/net11.0/App.dll"; "/repo/bin/Release/net11.0/App.dll" ]
+      let result = BuildPreflight.checkOutputs (Set.ofList files).Contains target
+      result |> Expect.equal "a built project is ready" BuildPreflight.Ready
+    }
+
     test "missing project is NeedsRebuild with the exact path" {
       let target = SessionProjectTarget.Project projectFile
       let result = check [] target

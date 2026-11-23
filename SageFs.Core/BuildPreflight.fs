@@ -104,6 +104,48 @@ module BuildPreflight =
     : BuildPreflight =
     checkInUnder ProjectChooses fileExists readText workingDir target
 
+  /// Whether the project's own build output exists. Restore artifacts under obj
+  /// survive a `bin` clear, so checking only those reports Ready for a project
+  /// with no DLLs to load; create_session then skips its recovery build and
+  /// warmup faults with "Not all DLLs are found".
+  let checkOutputs (fileExists: string -> bool) (target: SessionProjectTarget) : BuildPreflight =
+    match target with
+    | SessionProjectTarget.Bare -> BuildPreflight.Ready
+    | SessionProjectTarget.Solution _ -> BuildPreflight.Unknown "solution preflight is not classified yet"
+    | SessionProjectTarget.Project projectPath ->
+      let basePreflight = check fileExists (fun _ -> "<Project />") target
+      match basePreflight with
+      | BuildPreflight.NeedsRebuild _ -> basePreflight
+      | BuildPreflight.Unknown _ -> basePreflight
+      | BuildPreflight.Ready ->
+        let dir = Path.GetDirectoryName(Path.GetFullPath projectPath)
+        let name = Path.GetFileNameWithoutExtension projectPath
+        let outputs =
+          [ "Debug"; "Release" ]
+          |> List.collect (fun config -> [ "net11.0"; "net10.0" ] |> List.map (fun tfm -> Path.Combine(dir, "bin", config, tfm, name + ".dll")))
+        match outputs |> List.filter fileExists with
+        | _ :: _ -> BuildPreflight.Ready
+        | [] -> BuildPreflight.NeedsRebuild (outputs |> List.filter (fileExists >> not))
+
+  /// `checkOutputs` with relative project paths resolved against `workingDir`,
+  /// the shape the daemon's create path already uses for its restore check.
+  let checkOutputsIn (fileExists: string -> bool) (workingDir: string) (target: SessionProjectTarget) : BuildPreflight =
+    match target with
+    | SessionProjectTarget.Project path when not (Path.IsPathRooted path) ->
+      checkOutputs fileExists (SessionProjectTarget.Project (Path.Combine(workingDir, path)))
+    | SessionProjectTarget.Bare
+    | SessionProjectTarget.Solution _
+    | SessionProjectTarget.Project _ -> checkOutputs fileExists target
+
+  /// Missing output DLLs for a set of targets, for the create-session path that
+  /// must not skip its recovery build when bin was cleared but obj remains.
+  let missingOutputsIn (fileExists: string -> bool) (workingDir: string) (targets: SessionProjectTarget list) : string list =
+    targets
+    |> List.collect (fun target ->
+      match checkOutputsIn fileExists workingDir target with
+      | BuildPreflight.NeedsRebuild missing -> missing
+      | BuildPreflight.Ready | BuildPreflight.Unknown _ -> [])
+
   let describe = function
     | BuildPreflight.Ready -> "ready"
     | BuildPreflight.NeedsRebuild missing -> sprintf "needs rebuild: %s" (String.concat ", " missing)
