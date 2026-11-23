@@ -298,6 +298,10 @@ let perSessionTests =
         SessionOptionsRegistry.release keyOne
   ]
 
+let private outputsIn (present: Set<string>) (dir: string) (pattern: string) =
+  let prefix = dir + string Path.DirectorySeparatorChar
+  present |> Set.filter (fun p -> p.StartsWith(prefix, StringComparison.Ordinal) && Path.GetFileName p = pattern) |> Set.toList
+
 [<Tests>]
 let preflightTests =
   testList "Session options: the build preflight looks where the session builds" [
@@ -305,12 +309,14 @@ let preflightTests =
     testCase "WHY - with an artifacts path the files that prove a build are looked for under it, and the project's own obj is not asked for" <| fun _ ->
       let project = Path.Combine(Path.GetTempPath(), "optset-pre", "App.fsproj")
       let artifacts = Path.Combine(Path.GetTempPath(), "optset-pre-art")
-      let present = set [ project; Path.Combine(artifacts, "obj", "App", "project.assets.json"); Path.Combine(artifacts, "obj", "App", "App.fsproj.nuget.g.props") ]
+      let output = Path.Combine(artifacts, "bin", "App", "Debug", "net11.0", "App.dll")
+      let present = set [ project; Path.Combine(artifacts, "obj", "App", "project.assets.json"); Path.Combine(artifacts, "obj", "App", "App.fsproj.nuget.g.props"); output ]
       let exists (path: string) = present.Contains path
       let read (_: string) = "<Project />"
-      BuildPreflight.checkUnder (ArtifactsIn artifacts) exists read (SessionProjectTarget.Project project)
+      let outputs = outputsIn present
+      BuildPreflight.checkUnder (ArtifactsIn artifacts) exists read outputs (SessionProjectTarget.Project project)
       |> Expect.equal "built under the artifacts path is ready" BuildPreflight.Ready
-      BuildPreflight.checkUnder ProjectChooses exists read (SessionProjectTarget.Project project)
+      BuildPreflight.checkUnder ProjectChooses exists read outputs (SessionProjectTarget.Project project)
       |> function
         | BuildPreflight.NeedsRebuild missing -> missing |> Expect.isNonEmpty "the project's own obj is what is missing"
         | other -> failtestf "without the setting the project's obj is checked, got %A" other
@@ -319,7 +325,7 @@ let preflightTests =
       let project = Path.Combine(Path.GetTempPath(), "optset-pre2", "App.fsproj")
       let artifacts = Path.Combine(Path.GetTempPath(), "optset-pre2-art")
       let exists (path: string) = path = project
-      match BuildPreflight.checkUnder (ArtifactsIn artifacts) exists (fun _ -> "<Project />") (SessionProjectTarget.Project project) with
+      match BuildPreflight.checkUnder (ArtifactsIn artifacts) exists (fun _ -> "<Project />") (fun _ _ -> []) (SessionProjectTarget.Project project) with
       | BuildPreflight.NeedsRebuild missing ->
         missing |> Expect.equal "both restore outputs, under the artifacts path"
           [ Path.Combine(artifacts, "obj", "App", "project.assets.json"); Path.Combine(artifacts, "obj", "App", "App.fsproj.nuget.g.props") ]

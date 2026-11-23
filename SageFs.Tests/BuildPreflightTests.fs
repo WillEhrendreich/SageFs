@@ -14,9 +14,21 @@ let private arcade =
   [ "/repo/artifacts/obj/App/project.assets.json"
     "/repo/artifacts/obj/App/App.fsproj.nuget.g.props" ]
 
+let private outputDll = "/repo/bin/Debug/net11.0/App.dll"
+
+/// The fake-filesystem `findOutputs`: every present path under the output root
+/// whose file name is the DLL the preflight is looking for.
+let private outputsIn (present: Set<string>) (dir: string) (pattern: string) : string list =
+  let prefix = dir + string System.IO.Path.DirectorySeparatorChar
+  present
+  |> Set.filter (fun p -> p.StartsWith(prefix, System.StringComparison.Ordinal) && System.IO.Path.GetFileName p = pattern)
+  |> Set.toList
+
+/// A built project: restore inputs AND an output DLL. `Ready` now requires
+/// both, so a fixture that represents a build must carry an output.
 let private check files target =
-  let present = Set.ofList files
-  BuildPreflight.check (present.Contains) (fun _ -> "<Project />") target
+  let present = Set.ofList (outputDll :: files)
+  BuildPreflight.check present.Contains (fun _ -> "<Project />") (outputsIn present) target
 
 [<Tests>]
 let tests =
@@ -27,6 +39,7 @@ let tests =
         BuildPreflight.check
           (fun _ -> reads <- reads + 1; true)
           (fun _ -> reads <- reads + 1; "<Project />")
+          (fun _ _ -> reads <- reads + 1; [])
           SessionProjectTarget.Bare
       result |> Expect.equal "bare" BuildPreflight.Ready
       reads |> Expect.equal "bare preflight does not inspect the filesystem" 0
@@ -39,19 +52,12 @@ let tests =
     // decides whether the project can actually be loaded.
     test "restore inputs present but output DLLs cleared is NeedsRebuild, not Ready" {
       let target = SessionProjectTarget.Project projectFile
-      let result = BuildPreflight.checkOutputs (Set.ofList (projectFile :: conventional)).Contains target
+      let present = Set.ofList (projectFile :: conventional)
+      let result = BuildPreflight.check present.Contains (fun _ -> "<Project />") (outputsIn present) (SessionProjectTarget.Project projectFile)
       match result with
       | BuildPreflight.NeedsRebuild missing ->
         missing |> Expect.exists "names the missing output" (fun p -> p.Contains "App.dll")
-        missing |> Expect.exists "names the test output" (fun p -> p.Contains "App.Tests.dll" || p.Contains "App.dll")
-      | other -> failtestf "expected NeedsRebuild with the missing outputs, got %A" other
-    }
-
-    test "restore inputs and output DLLs present is Ready" {
-      let target = SessionProjectTarget.Project projectFile
-      let files = projectFile :: conventional @ [ "/repo/bin/Debug/net11.0/App.dll"; "/repo/bin/Release/net11.0/App.dll" ]
-      let result = BuildPreflight.checkOutputs (Set.ofList files).Contains target
-      result |> Expect.equal "a built project is ready" BuildPreflight.Ready
+      | other -> failtestf "expected NeedsRebuild with the missing output, got %A" other
     }
 
     test "missing project is NeedsRebuild with the exact path" {
@@ -115,12 +121,12 @@ let tests =
     test "custom OutputPath is Unknown, not NeedsRebuild" {
       let present = Set.ofList (projectFile :: conventional)
       let result =
-        BuildPreflight.check present.Contains (fun _ -> "<Project><PropertyGroup><OutputPath>custom</OutputPath></PropertyGroup></Project>") (SessionProjectTarget.Project projectFile)
+        BuildPreflight.check present.Contains (fun _ -> "<Project><PropertyGroup><OutputPath>custom</OutputPath></PropertyGroup></Project>") (outputsIn present) (SessionProjectTarget.Project projectFile)
       result |> Expect.equal "custom layout remains unknown" (BuildPreflight.Unknown "the project declares a custom OutputPath")
     }
 
     test "solution target is Unknown, not falsely Ready" {
-      BuildPreflight.check (fun _ -> true) (fun _ -> "<Project />") (SessionProjectTarget.Solution "/repo/App.slnx")
+      BuildPreflight.check (fun _ -> true) (fun _ -> "<Project />") (fun _ _ -> []) (SessionProjectTarget.Solution "/repo/App.slnx")
       |> Expect.equal "solution preflight boundary" (BuildPreflight.Unknown "solution preflight is not classified yet")
     }
   ]

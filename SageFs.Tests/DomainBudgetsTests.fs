@@ -454,7 +454,7 @@ let counted : Lazy<Map<string, int>> =
 let budgets : (string * int) list =
   [ "SageFs.Core: option fields", 153
     "SageFs.Core: bool fields", 52
-    "SageFs.Core: wildcard over owned union", 248
+    "SageFs.Core: wildcard over owned union", 246
     "SageFs.Core: with wildcard", 200
     "SageFs.Core: named catch-all", 201
     "SageFs: option fields", 83

@@ -88,13 +88,9 @@ let primaryProjectOutputDirWithin
   match projects with
   | [] -> None
   | primary :: _ ->
-    let projectDir = Path.GetDirectoryName(primary: string)
     let expectedName = Path.GetFileNameWithoutExtension(primary: string) + ".dll"
-    // A session built under an artifacts path writes `<artifacts>/bin/<project>/<config>/`, and nothing under the project.
-    let binDir =
-      match artifacts with
-      | ArtifactsIn root -> Path.Combine(root, "bin", Path.GetFileNameWithoutExtension(primary: string))
-      | ProjectChooses -> Path.Combine(projectDir, "bin")
+    // One home for where builds write, shared with the create-session preflight.
+    let binDir = BuildPreflight.outputBinDir artifacts primary
     match directoryExists binDir with
     | false -> None
     | true ->

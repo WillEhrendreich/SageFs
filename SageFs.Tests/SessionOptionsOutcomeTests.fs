@@ -129,7 +129,7 @@ let private createProjectSession (harness: Harness) (place: Place) (project: str
     let! built = SessionBuild.runBuildAsync [ project ] place.Directory |> Async.StartAsTask
     built |> Expect.isOk "the session's build succeeds"
     let artifacts = (SessionOptionsRegistry.optionsFor place.Directory).Artifacts
-    BuildPreflight.checkInUnder artifacts File.Exists File.ReadAllText place.Directory (SessionProjectTarget.Project project)
+    BuildPreflight.checkInUnder artifacts File.Exists File.ReadAllText BuildPreflight.findOutputFiles place.Directory (SessionProjectTarget.Project project)
     |> Expect.equal "the preflight finds the build where the session wrote it" BuildPreflight.Ready
     return! create harness [ SessionProjectTarget.Project project ] place.Directory
   }

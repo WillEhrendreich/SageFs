@@ -214,6 +214,7 @@ let architectureTests =
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
               | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
+              | t when t = typeof<RestartRefusal> -> box RestartRefusal.AlreadyInProgress
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -246,6 +247,7 @@ let architectureTests =
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
               | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
+              | t when t = typeof<RestartRefusal> -> box RestartRefusal.AlreadyInProgress
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -275,6 +277,7 @@ let architectureTests =
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
               | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
+              | t when t = typeof<RestartRefusal> -> box RestartRefusal.AlreadyInProgress
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError

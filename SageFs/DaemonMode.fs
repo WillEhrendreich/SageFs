@@ -479,7 +479,7 @@ let private productionBuildRecovery
           let missing =
             targets
             |> List.collect (fun target ->
-              match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+              match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText BuildPreflight.findOutputFiles workingDir target with
               | BuildPreflight.NeedsRebuild missing -> missing
               | BuildPreflight.Ready
               | BuildPreflight.Unknown _ -> [])
@@ -561,11 +561,9 @@ let createSessionOpsWithRecovery
           let missing =
             targets
             |> List.collect (fun target ->
-              match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+              match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText BuildPreflight.findOutputFiles workingDir target with
               | BuildPreflight.NeedsRebuild missing -> missing
               | BuildPreflight.Ready | BuildPreflight.Unknown _ -> [])
-            // Restore inputs survive a bin clear; check outputs too.
-            |> List.append (BuildPreflight.missingOutputsIn System.IO.File.Exists workingDir targets)
             |> List.append removedStale
             |> List.distinct
           match missing with
@@ -580,7 +578,7 @@ let createSessionOpsWithRecovery
                 let stillMissing =
                   targets
                   |> List.collect (fun target ->
-                    match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+                    match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText BuildPreflight.findOutputFiles workingDir target with
                     | BuildPreflight.NeedsRebuild missing -> missing
                     | BuildPreflight.Ready
                     | BuildPreflight.Unknown _ -> [])
