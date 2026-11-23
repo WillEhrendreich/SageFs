@@ -87,6 +87,10 @@ let installedSdks () : Task<InstalledSdk list> = task {
           { Version = version
             Major = (numericVersion version).Major
             SdkDir = Path.Combine(m.Groups[2].Value, version) })
+    // An old SDK left installed is not a target. The oldest supported one is what an "older host"
+    // fixture pins; picking an unsupported SDK would compile a current FSharp.Core with an F#
+    // compiler that cannot even parse it. One home for that minimum: FsiHostBuild.
+    |> Array.filter (fun sdk -> sdk.Major >= SageFs.FsiHostBuild.minimumHostSdkMajor)
     |> Array.sortBy (fun sdk -> numericVersion sdk.Version, sdk.Version)
     |> Array.toList
 }
