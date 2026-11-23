@@ -17,6 +17,7 @@ module SageFs.Tests.ConfirmKeepsReplStateTests
 open System
 open System.IO
 open System.Text.Json
+open System.Text.RegularExpressions
 open System.Threading
 open System.Threading.Tasks
 open Expecto
@@ -75,25 +76,30 @@ let private awaitEvalContains (client: McpClient) (code: string) (expected: stri
     return found, last
   }
 
-/// The pid of the session's worker.
-let private workerPid (client: McpClient) : Task<int> =
+/// The pid of the FSI host that HOLDS the session's REPL state, read from inside the session. This is the process whose
+/// state the gate is about. The daemon's `workerPid` status can name a worker mid-handover while the session it reports
+/// for is already the settled one; a read from inside cannot be confused with a different process. A real worker swap
+/// creates a new FSI host with a new pid, so the "same session" equality stays a real check.
+let private sessionPid (client: McpClient) : Task<int> =
   task {
-    let! status = callTool client "get_session_status" [ "working_directory", box fixtureDir ]
-    use doc = JsonDocument.Parse status
-    return doc.RootElement.GetProperty("workerPid").GetInt32()
+    let! answer = evalIn client "System.Diagnostics.Process.GetCurrentProcess().Id;;"
+    let found =
+      Regex.Match(answer, @"\b(\d{4,})\b")
+      |> fun m -> m.Success, m
+    match found with
+    | true, m -> return int m.Groups[1].Value
+    | false, _ -> return failwithf "no pid in the REPL answer: %s" answer
   }
 
-/// Read the worker pid until two reads in a row agree. A status sampled while a rebuild is handing over can name a
-/// worker that is already on its way out, which is not the process the session settles on. A real replacement still
-/// settles at a different pid, so the caller's "same worker" equality stays a real check.
-let private awaitStableWorkerPid (client: McpClient) : Task<int> =
+/// Read until two answers in a row agree, so a reply sampled mid-transition is not taken as the settled session.
+let private awaitStable (probe: unit -> Task<int>) : Task<int> =
   task {
-    let! first = workerPid client
+    let! first = probe ()
     let mutable stable = first
     let mutable same = false
     let! _ =
       TestInfrastructure.waitForAsync (int TestTimeouts.buildConfirmation.TotalMilliseconds) (fun () -> task {
-        let! next = workerPid client
+        let! next = probe ()
         same <- next = stable
         stable <- next
         return same })
@@ -167,7 +173,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     // 1. The session holds a binding.
     let! made = evalIn client "let marker = 42;;"
     made |> Expect.stringContains "the REPL made the binding" "42"
-    let! pidBefore = awaitStableWorkerPid client
+    let! pidBefore = (awaitStable (fun () -> sessionPid client))
 
     // 2. A green edit is evaluated, then confirmed by a real build, and the binding survives it.
     File.WriteAllText(samplePath, baseline.Replace(addLine, addLine + " + 0"), Http.utf8NoBom)
@@ -180,7 +186,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     rows
     |> List.filter (fun (_, case, _) -> case <> "VerifiedByBuild")
     |> Expect.isEmpty (sprintf "every row is confirmed by the real build. Rows: %A" rows)
-    let! pidAfter = awaitStableWorkerPid client
+    let! pidAfter = (awaitStable (fun () -> sessionPid client))
     pidAfter |> Expect.equal "the confirming build left the session's worker alone" pidBefore
     let! kept, keptAnswer = awaitEvalContains client "marker + 1;;" "43" TestTimeouts.buildConfirmation
     kept |> Expect.isTrue (sprintf "the binding made before the build is still bound, and still 42. Answer: %s" keptAnswer)
@@ -196,7 +202,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     failedRows
     |> List.exists (fun (_, case, fields) -> case = "BuildDisagrees" && fields.Contains "FS0039")
     |> Expect.isTrue (sprintf "a row says the real build failed, with the compiler's code. Rows: %A" failedRows)
-    let! pidFinal = awaitStableWorkerPid client
+    let! pidFinal = (awaitStable (fun () -> sessionPid client))
     pidFinal |> Expect.equal "a failed build left the session's worker alone" pidBefore
     let! stillKept, stillKeptAnswer = awaitEvalContains client "marker + 2;;" "44" TestTimeouts.buildConfirmation
     stillKept |> Expect.isTrue (sprintf "the binding is still there after a build that failed. Answer: %s" stillKeptAnswer)
