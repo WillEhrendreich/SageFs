@@ -95,6 +95,7 @@ let main argv =
         ReloadPlanningDecisionMutationTests.reloadPlanningDecisionMutationTests
         CohortGitMutationTests.cohortGitMutationTests
         SseWriterCohortMutationTests.sseWriterCohortMutationTests
+        TypeDesignMutationTests.typeDesignMutationTests
         EventsStreamScopeMutationTests.eventsStreamScopeMutationTests
       ]
     // Honest mutation accounting: each mutant is one test case that PASSES only
