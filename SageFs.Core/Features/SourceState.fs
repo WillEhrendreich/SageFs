@@ -195,7 +195,7 @@ module SourceState =
     match reason with
     | UnknownReason.NotAssessed -> "this receipt was read without a source check"
     | UnknownReason.NoProjectLoaded -> "the session loaded no project, so there is no build to be behind"
-    | UnknownReason.LoadTimeNotReported detail -> sprintf "the worker did not report when it loaded its build (%s)" detail
+    | UnknownReason.LoadTimeNotReported detail -> sprintf "the build's source could not be checked (%s)" detail
     | UnknownReason.Unreadable (path, detail) -> sprintf "%s could not be read (%s)" path detail
     | UnknownReason.NotInspectable (project, detail) -> sprintf "what builds into %s could not be listed (%s)" project detail
 

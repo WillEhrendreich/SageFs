@@ -117,6 +117,66 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
     counter.Value |> Expect.equal "must not fetch sessions — they were passed in" 0
   }
 
+  // WHY — the dashboard's warmup fetch has a shorter timeout than MCP's. When
+  // it times out, no warmup context reaches the card. Saying "the worker did
+  // not report its warmup" is a false claim about the worker (it always serves
+  // one) and contradicts get_session_status on a Ready session. The honest
+  // state is that this receipt was read without a source check.
+  testTask "WHY — a failed source fetch says the receipt was not checked, not that the worker stayed silent" {
+    let info : WorkerProtocol.SessionInfo =
+      { Id = WorkerProtocol.SessionId.newId ()
+        Name = None
+        Projects = [ "Test.fsproj" ]
+        WorkingDirectory = "."
+        SolutionRoot = None
+        CreatedAt = System.DateTime.UtcNow
+        LastActivity = System.DateTime.UtcNow
+        Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 999; Port = None }
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        ActiveProject = None
+        ProjectRoles = [ { Path = "/w/Test.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Test; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized } ]
+        App = SageFs.AppRun.AppRunState.NotRunning
+        Rebuild = LastRebuild.NeverRebuilt
+        Reload = SessionReload.NoReloadYet
+        Freshness = SageFs.ReplFreshness.InSync }
+    let state = SourceStateProbe.ofSession info None
+    let note = SourceState.cardNote "." state
+    match note with
+    | CardNote.Note (_, details) ->
+      details |> List.exists (fun d -> d.Contains "could not be read") |> Expect.isTrue "the note says the check failed"
+      details |> List.exists (fun d -> d.Contains "worker did not report") |> Expect.isFalse "the worker is not blamed"
+    | _ -> failtest "expected a note on the card"
+  }
+
+  testTask "WHY — a viewed session whose warmup fetch failed is not read, not blamed on the worker" {
+    let counter = ref 0
+    let queries = mkQueries counter []
+    let sid = WorkerProtocol.SessionId.validate "0a000002" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+    let info : WorkerProtocol.SessionInfo =
+      { Id = sid
+        Name = None
+        Projects = [ "Test.fsproj" ]
+        WorkingDirectory = "."
+        SolutionRoot = None
+        CreatedAt = System.DateTime.UtcNow
+        LastActivity = System.DateTime.UtcNow
+        Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 999; Port = None }
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        ActiveProject = None
+        ProjectRoles = [ { Path = "/w/Test.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Test; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized } ]
+        App = SageFs.AppRun.AppRunState.NotRunning
+        Rebuild = LastRebuild.NeverRebuilt
+        Reload = SessionReload.NoReloadYet
+        Freshness = SageFs.ReplFreshness.InSync }
+    let cards : SageFs.Server.DashboardTypes.ParsedSession list =
+      buildSessionCardsFrom queries Map.empty (Some (sid, None)) [ info ]
+    let card = cards |> List.find (fun c -> c.Id = sid)
+    match card.Source with
+    | CardSource.Read (SourceState.Unknown (UnknownReason.LoadTimeNotReported detail)) ->
+      detail |> Expect.stringContains "the check failed, the worker is not blamed" "could not be read"
+    | other -> failtestf "expected an honest source-read failure, got %A" other
+  }
+
   testTask "WHY — the standalone buildDashboardSnapshot still fetches sessions exactly once for callers with no list in hand" {
     let counter = ref 0
     let sid = WorkerProtocol.SessionId.validate "0a000001" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())

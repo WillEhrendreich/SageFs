@@ -68,7 +68,11 @@ let probe (rebuild: LastRebuild) (projectFiles: string list) (warmup: WarmupCont
   | LastRebuild.Latest (RebuildOutcome.InProgress _), _ ->
     SourceState.decide rebuild (LoadedAt.NotReported "a rebuild is in progress") []
   | _, None ->
-    let reason = "the worker did not report its warmup"
+    // The worker always serves a warmup context on request. An absent one here
+    // means our read of it failed (the dashboard fetch has a shorter timeout
+    // than MCP's), not that the worker stayed silent. Naming the worker as the
+    // one at fault is a false claim on a Ready, InSync session.
+    let reason = "the source check could not be read"
     SourceState.decide rebuild (LoadedAt.NotReported reason) (projectFiles |> List.map (fun project -> ProjectEvidence.NotInspectable (project, reason)))
   | _, Some context ->
     SourceState.decide rebuild (LoadedAt.Reported context.StartedAt.UtcDateTime) (projectFiles |> List.map (evidenceFor context))
@@ -76,6 +80,7 @@ let probe (rebuild: LastRebuild) (projectFiles: string list) (warmup: WarmupCont
 /// The same, for a session the registry knows.
 let ofSession (info: WorkerProtocol.SessionInfo) (warmup: WarmupContext option) : SourceState =
   probe info.Rebuild (info.ProjectRoles |> List.map (fun p -> p.Path)) warmup
+
 
 /// The same, for a session id the registry may not know: a session with no record has no build the daemon can name.
 let ofSessionRecord (info: WorkerProtocol.SessionInfo option) (warmup: WarmupContext option) : SourceState =
