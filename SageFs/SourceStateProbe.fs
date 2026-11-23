@@ -7,6 +7,36 @@ open System
 open System.IO
 open System.Xml.Linq
 
+/// What a read of a worker's warmup context yielded. The old edge signature
+/// took a `WarmupContext option`, and `None` stood for both "our fetch failed"
+/// and "there was no worker to ask". The probe had to pick one meaning and
+/// chose to blame the worker — a false claim on a Ready, InSync session whose
+/// only problem was a short dashboard timeout. An absence now names which
+/// happened, so no reader can turn a failed observation into a fact about the
+/// thing it failed to observe.
+[<RequireQualifiedAccess>]
+type WarmupReading =
+  /// The worker answered with its warmup report.
+  | Reported of context: WarmupContext
+  /// There was no worker to ask — a session still warming or faulted, or one
+  /// the registry does not know. Nothing was observed, and nothing failed.
+  | NotReported
+  /// A read was attempted and failed. The worker is not the party at fault.
+  | ReadFailed of reason: string
+
+module WarmupReading =
+  /// A transport-level option from a fetch site: `Some` is a report, `None` is
+  /// a read that did not produce one. Callers with no worker to ask say
+  /// `NotReported` explicitly instead of reaching for this helper.
+  let ofFetchResult (reason: string) (result: WarmupContext option) : WarmupReading =
+    match result with
+    | Some context -> WarmupReading.Reported context
+    | None -> WarmupReading.ReadFailed reason
+
+  /// `ofFetchResult` with the reason sites that have no more specific diagnosis use.
+  let ofFetch (result: WarmupContext option) : WarmupReading =
+    ofFetchResult "the warmup context could not be read" result
+
 /// A file and its last-write time. `File.GetLastWriteTimeUtc` answers the year 1601 for a file that is not there and for one
 /// behind a directory that cannot be entered, and a stamp of 1601 reads as "older than any build". `GetAttributes` throws for
 /// both, so the stat that fails is the one that says why.
@@ -61,29 +91,28 @@ let private evidenceFor (warmup: WarmupContext) (projectFile: string) : ProjectE
       ProjectEvidence.Inspected (projectFile, stampOf assembly.Path, projectFile :: listing.Sources |> List.map stampOf)
 
 /// What a session's projects, its worker's warmup and its rebuild record say about whether the build it runs is behind the
-/// files on disk. A rebuild in progress answers without reading the disk, and a worker that did not report its warmup leaves
-/// nothing to compare the files to.
-let probe (rebuild: LastRebuild) (projectFiles: string list) (warmup: WarmupContext option) : SourceState =
+/// files on disk. A rebuild in progress answers without reading the disk. Every absent warmup names WHY it is absent: a
+/// failed read and a session with no worker are different facts, and neither is a claim that the worker stayed silent.
+let probe (rebuild: LastRebuild) (projectFiles: string list) (warmup: WarmupReading) : SourceState =
   match rebuild, warmup with
   | LastRebuild.Latest (RebuildOutcome.InProgress _), _ ->
     SourceState.decide rebuild (LoadedAt.NotReported "a rebuild is in progress") []
-  | _, None ->
-    // The worker always serves a warmup context on request. An absent one here
-    // means our read of it failed (the dashboard fetch has a shorter timeout
-    // than MCP's), not that the worker stayed silent. Naming the worker as the
-    // one at fault is a false claim on a Ready, InSync session.
-    let reason = "the source check could not be read"
+  | _, WarmupReading.NotReported ->
+    let reason = "there was no worker to ask for its warmup"
     SourceState.decide rebuild (LoadedAt.NotReported reason) (projectFiles |> List.map (fun project -> ProjectEvidence.NotInspectable (project, reason)))
-  | _, Some context ->
+  | _, WarmupReading.ReadFailed failure ->
+    let reason = sprintf "the warmup check could not be read (%s)" failure
+    SourceState.decide rebuild (LoadedAt.NotReported reason) (projectFiles |> List.map (fun project -> ProjectEvidence.NotInspectable (project, reason)))
+  | _, WarmupReading.Reported context ->
     SourceState.decide rebuild (LoadedAt.Reported context.StartedAt.UtcDateTime) (projectFiles |> List.map (evidenceFor context))
 
 /// The same, for a session the registry knows.
-let ofSession (info: WorkerProtocol.SessionInfo) (warmup: WarmupContext option) : SourceState =
+let ofSession (info: WorkerProtocol.SessionInfo) (warmup: WarmupReading) : SourceState =
   probe info.Rebuild (info.ProjectRoles |> List.map (fun p -> p.Path)) warmup
 
 
 /// The same, for a session id the registry may not know: a session with no record has no build the daemon can name.
-let ofSessionRecord (info: WorkerProtocol.SessionInfo option) (warmup: WarmupContext option) : SourceState =
+let ofSessionRecord (info: WorkerProtocol.SessionInfo option) (warmup: WarmupReading) : SourceState =
   match info with
   | Some session -> ofSession session warmup
   | None -> SourceState.Unknown (UnknownReason.LoadTimeNotReported "the registry has no record of the session")
@@ -136,7 +165,9 @@ let runSourceOf
       let (info, warmup) = read ()
       match info with
       | None -> SourceSourceRefusal.SessionNotKnown
-      | Some _ -> SourceSourceRefusal.Assessed (ofSessionRecord info warmup)
+      | Some _ ->
+        SourceSourceRefusal.Assessed
+          (ofSessionRecord info (WarmupReading.ofFetchResult "the warmup context could not be read" warmup))
 
 /// Every listed session's source state, each read off the disk and the worker's own warmup report, all sessions at once. The
 /// session list a client reads (`list_sessions`, `sessions://list`) takes this map, so each row says what was read for it.
@@ -151,7 +182,7 @@ let readAll
         task {
           let sid = WorkerProtocol.SessionId.value session.Id
           let! warmup = warmupOf sid
-          return sid, ofSession session warmup
+          return sid, ofSession session (WarmupReading.ofFetchResult "the warmup context could not be read" warmup)
         })
       |> System.Threading.Tasks.Task.WhenAll
     return Map.ofArray readings

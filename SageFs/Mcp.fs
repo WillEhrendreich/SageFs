@@ -1455,7 +1455,7 @@ module McpTools =
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
              // No worker to ask, so a rebuild in progress is what this shape can say about the source.
-             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info None)
+             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info SourceStateProbe.WarmupReading.NotReported)
              available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1470,7 +1470,7 @@ module McpTools =
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
-             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info None)
+             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info SourceStateProbe.WarmupReading.NotReported)
              available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1519,7 +1519,7 @@ module McpTools =
               // never shown, so it read exactly like one still running.
               LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
               LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness
-              SourceState = SourceStateProbe.ofSession sessionInfo warmup; CoreAdoption = HostCoreAdoption.noteFor sid }
+              SourceState = SourceStateProbe.ofSession sessionInfo (SourceStateProbe.WarmupReading.ofFetch warmup); CoreAdoption = HostCoreAdoption.noteFor sid }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1895,7 +1895,7 @@ module McpTools =
     : Task<SourceState> = task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       let! warmup = warmupOf ctx sid
-      return SourceStateProbe.ofSessionRecord info warmup
+      return SourceStateProbe.ofSessionRecord info (SourceStateProbe.WarmupReading.ofFetch warmup)
     }
 
   /// What rebuild=false must actually do, given what it would leave serving, and
@@ -2754,7 +2754,7 @@ module McpTools =
     task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       let! warmup = warmupOf ctx sid
-      let loadedState = SourceStateProbe.loadedDefinitionOf artifact (SourceStateProbe.ofSessionRecord info warmup)
+      let loadedState = SourceStateProbe.loadedDefinitionOf artifact (SourceStateProbe.ofSessionRecord info (SourceStateProbe.WarmupReading.ofFetch warmup))
       let judged =
         match loadedState with
         | Features.Verification.LoadedDefinitionState.UnknownLoadState _ -> None

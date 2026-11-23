@@ -84,7 +84,7 @@ let private mkProbe (sessionId: string) (p: SourceStateFixtures.Project) (warmup
 /// The reading, with no tool involved — so a failure below is always the TOOL's
 /// behaviour and never a fixture that failed to go stale.
 let private probeToken (p: SourceStateFixtures.Project) (warmup: WarmupContext option) =
-  SourceState.token (SageFs.SourceStateProbe.ofSessionRecord (Some (sessionInfo "probe" p)) warmup)
+  SourceState.token (SageFs.SourceStateProbe.ofSessionRecord (Some (sessionInfo "probe" p)) (SageFs.SourceStateProbe.WarmupReading.ofFetch warmup))
 
 let private plansAsked (p: Probe) = p.Restarts |> Seq.toList
 

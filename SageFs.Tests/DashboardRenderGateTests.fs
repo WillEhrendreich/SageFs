@@ -118,10 +118,9 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
   }
 
   // WHY — the dashboard's warmup fetch has a shorter timeout than MCP's. When
-  // it times out, no warmup context reaches the card. Saying "the worker did
-  // not report its warmup" is a false claim about the worker (it always serves
-  // one) and contradicts get_session_status on a Ready session. The honest
-  // state is that this receipt was read without a source check.
+  // it times out, the reading is ReadFailed, not a claim that the worker stayed
+  // silent. Saying "the worker did not report its warmup" on a Ready, InSync
+  // session contradicts get_session_status; the reading names the failed read.
   testTask "WHY — a failed source fetch says the receipt was not checked, not that the worker stayed silent" {
     let info : WorkerProtocol.SessionInfo =
       { Id = WorkerProtocol.SessionId.newId ()
@@ -139,7 +138,7 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
         Rebuild = LastRebuild.NeverRebuilt
         Reload = SessionReload.NoReloadYet
         Freshness = SageFs.ReplFreshness.InSync }
-    let state = SourceStateProbe.ofSession info None
+    let state = SourceStateProbe.ofSession info (SourceStateProbe.WarmupReading.ofFetch None)
     let note = SourceState.cardNote "." state
     match note with
     | CardNote.Note (_, details) ->

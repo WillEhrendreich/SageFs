@@ -55,13 +55,13 @@ let private cleanUp (f: Fixture) =
     Directory.Delete(f.Dir, true)
   with _ -> ()
 
-let private warmupFor (f: Fixture) (assemblyName: string) (startedMinutes: int) : WarmupContext option =
-  Some
+let private warmupFor (f: Fixture) (assemblyName: string) (startedMinutes: int) : SourceStateProbe.WarmupReading =
+  SourceStateProbe.WarmupReading.Reported
     { WarmupContext.empty with
         StartedAt = DateTimeOffset(minutesAfter startedMinutes)
         AssembliesLoaded = [ { Name = assemblyName; Path = f.Dll; NamespaceCount = 0; ModuleCount = 0 } ] }
 
-let private probeIn (f: Fixture) (rebuild: LastRebuild) (warmup: WarmupContext option) : SourceState =
+let private probeIn (f: Fixture) (rebuild: LastRebuild) (warmup: SourceStateProbe.WarmupReading) : SourceState =
   SourceStateProbe.probe rebuild [ f.Project ] warmup
 
 let private withFixture (make: unit -> Fixture) (body: Fixture -> unit) : unit =
@@ -138,9 +138,9 @@ let probeTests =
           reason |> Expect.isNotEmpty "says why"
         | other -> failtestf "expected Unknown, got %A" other)
 
-    testCase "WHY — a worker that did not report its warmup leaves the answer Unknown" <| fun _ ->
+    testCase "WHY — a session with no worker to ask leaves the answer Unknown" <| fun _ ->
       withFixture standard (fun f ->
-        match probeIn f LastRebuild.NeverRebuilt None with
+        match probeIn f LastRebuild.NeverRebuilt SourceStateProbe.WarmupReading.NotReported with
         | SourceState.Unknown (UnknownReason.LoadTimeNotReported reason) -> reason |> Expect.isNotEmpty "says why"
         | other -> failtestf "expected Unknown LoadTimeNotReported, got %A" other)
 
@@ -171,7 +171,7 @@ let probeTests =
         | other -> failtestf "expected Unknown NotInspectable, got %A" other)
 
     testCase "WHY — a session with no project loaded has no build to be behind, and says so" <| fun _ ->
-      SourceStateProbe.probe LastRebuild.NeverRebuilt [] None
+      SourceStateProbe.probe LastRebuild.NeverRebuilt [] SourceStateProbe.WarmupReading.NotReported
       |> Expect.equal "no project loaded" (SourceState.Unknown UnknownReason.NoProjectLoaded)
 
     testCase "WHY — an edit after the build is stale on every project that has one, and a clean project beside it does not hide it" <| fun _ ->
@@ -190,13 +190,36 @@ let probeTests =
         File.SetLastWriteTimeUtc(second.Project, minutesAfter -60)
         let warmupTwo =
           warmup |> Option.map (fun w -> { w with AssembliesLoaded = w.AssembliesLoaded @ [ { Name = "Other"; Path = second.Dll; NamespaceCount = 0; ModuleCount = 0 } ] })
-        match SourceStateProbe.probe LastRebuild.NeverRebuilt [ first.Project; second.Project ] warmupTwo with
+        match SourceStateProbe.probe LastRebuild.NeverRebuilt [ first.Project; second.Project ] (SourceStateProbe.WarmupReading.ofFetch warmupTwo) with
         | SourceState.Stale [ file ] -> file.Path |> Expect.equal "the edited file in the second project" second.A
         | other -> failtestf "expected Stale naming one file, got %A" other
       finally
         cleanUp first
         cleanUp second
   ])
+
+// WHY — the old signature took `WarmupContext option`, and `None` meant both
+// "our fetch timed out" and "there was no worker to ask". The probe chose one
+// meaning and blamed the worker. A reading names which happened, so the probe
+// cannot turn a failed observation into a claim about the observed worker.
+[<Tests>]
+let warmupReadingTests =
+  testList "WarmupReading" [
+    testCase "WHY — a failed fetch names the read that failed, never the worker's silence" <| fun _ ->
+      let failed = SourceStateProbe.WarmupReading.ReadFailed "the dashboard fetch timed out"
+      match SourceStateProbe.probe LastRebuild.NeverRebuilt [ "/w/App.fsproj" ] failed with
+      | SourceState.Unknown (UnknownReason.LoadTimeNotReported detail) ->
+        detail |> Expect.stringContains "names the failed read" "could not be read"
+        detail.Contains "worker did not report" |> Expect.isFalse "never blames the worker"
+      | other -> failtestf "expected Unknown, got %A" other
+
+    testCase "WHY — no worker to ask is its own reading, with its own honest reason" <| fun _ ->
+      match SourceStateProbe.probe LastRebuild.NeverRebuilt [ "/w/App.fsproj" ] SourceStateProbe.WarmupReading.NotReported with
+      | SourceState.Unknown (UnknownReason.LoadTimeNotReported detail) ->
+        detail |> Expect.stringContains "names the absent worker" "no worker to ask"
+        detail.Contains "did not report" |> Expect.isFalse "never claims a report was missing"
+      | other -> failtestf "expected Unknown, got %A" other
+  ]
 
 [<Tests>]
 let adapterTests =
@@ -218,7 +241,7 @@ let adapterTests =
         | other -> failtestf "expected UnknownLoadState for %A, got %A" source other)
 
     testCase "WHY — a session the registry has no record of is Unknown, never in sync" <| fun _ ->
-      match SourceStateProbe.ofSessionRecord None None with
+      match SourceStateProbe.ofSessionRecord None SourceStateProbe.WarmupReading.NotReported with
       | SourceState.Unknown _ -> ()
       | other -> failtestf "expected Unknown, got %A" other
 

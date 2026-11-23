@@ -155,7 +155,7 @@ let runSourceEmissionTests = testList "test_run_completed carries the run's sour
     //
     // The verdict comes from the PRODUCTION producer, so this test fails if the wire
     // shape and the producer ever drift apart.
-    let state = SageFs.SourceStateProbe.ofSessionRecord (Some (mkSessionInfo projectFile)) None
+    let state = SageFs.SourceStateProbe.ofSessionRecord (Some (mkSessionInfo projectFile)) (SageFs.SourceStateProbe.WarmupReading.ofFetch None)
     let payload =
       SageFs.SseWriter.formatTestResultsBatchEvent
         (daemonOpts ())
@@ -245,7 +245,7 @@ let runSourceProbeTests = testList "the reading the run's source comes from" [
     let info = mkSessionInfo project
     // The worker loaded the build at a time AFTER the files were written.
     let warmup = mkWarmup dll (DateTimeOffset(at))
-    let state = SageFs.SourceStateProbe.ofSessionRecord (Some info) (Some warmup)
+    let state = SageFs.SourceStateProbe.ofSessionRecord (Some info) (SageFs.SourceStateProbe.WarmupReading.ofFetch (Some warmup))
     let token = SageFs.SourceState.token state
     token
     |> Expect.stringStarts "Lib.fs was written after the build this session loaded" "Stale"
@@ -258,7 +258,7 @@ let runSourceProbeTests = testList "the reading the run's source comes from" [
     let dll = writeStaleBuildOutput project
     let info = mkSessionInfo project
     let warmup = mkWarmup dll (DateTimeOffset(at))
-    let state = SageFs.SourceStateProbe.ofSessionRecord (Some info) (Some warmup)
+    let state = SageFs.SourceStateProbe.ofSessionRecord (Some info) (SageFs.SourceStateProbe.WarmupReading.ofFetch (Some warmup))
     let frame =
       SageFs.SseWriter.formatTestRunCompletedEvent
         (daemonOpts ())
@@ -270,7 +270,7 @@ let runSourceProbeTests = testList "the reading the run's source comes from" [
     |> Expect.equal "the payload carries the state the probe actually read" (SageFs.SourceState.token state)
 
   testCase "a session the registry does not know reads Unknown, which is still an honest verdict — never InSync" <| fun _ ->
-    let state = SageFs.SourceStateProbe.ofSessionRecord None None
+    let state = SageFs.SourceStateProbe.ofSessionRecord None SageFs.SourceStateProbe.WarmupReading.NotReported
     state
     |> Expect.equal
          "no record of the session means the build cannot be named, and Unknown is that answer"

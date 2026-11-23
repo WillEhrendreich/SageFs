@@ -461,8 +461,8 @@ let buildSessionCardsFrom
     | None -> CardSource.NotReadOnThisCard
     | Some info ->
       match viewedContext, info.Rebuild with
-      | Some (viewedId, _), _ when viewedId = card.Id -> CardSource.Read (SourceStateProbe.ofSession info (warmupContextFor card.Id))
-      | _, LastRebuild.Latest (RebuildOutcome.InProgress _) -> CardSource.Read (SourceStateProbe.ofSession info None)
+      | Some (viewedId, _), _ when viewedId = card.Id -> CardSource.Read (SourceStateProbe.ofSession info (SourceStateProbe.WarmupReading.ofFetch (warmupContextFor card.Id)))
+      | _, LastRebuild.Latest (RebuildOutcome.InProgress _) -> CardSource.Read (SourceStateProbe.ofSession info SourceStateProbe.WarmupReading.NotReported)
       | _ -> CardSource.NotReadOnThisCard
   liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) warmupContextFor sessions
   |> List.map (fun card ->

@@ -131,7 +131,7 @@ module McpRunTests =
     task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       let! warmup = warmupOf ctx sid
-      return SourceStateProbe.ofSessionRecord info warmup
+      return SourceStateProbe.ofSessionRecord info (SourceStateProbe.WarmupReading.ofFetch warmup)
     }
 
   /// A receipt with the source it reflects. A run that has not finished has no verdict to qualify, so only a settled run is
