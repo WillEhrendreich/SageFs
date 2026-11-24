@@ -310,8 +310,20 @@ let private until (budget: TimeSpan) (describe: unit -> string) (probe: unit -> 
   | false -> failwithf "gave up after %.0fs: %s" budget.TotalSeconds (describe ())
 }
 
-let get (app: RunningApp) (route: string) : Task<string> =
-  http.GetStringAsync(sprintf "http://127.0.0.1:%d/%s" app.AppPort route)
+/// A GET that tolerates a route the app has not reopened yet. A save can restart the app, and on a loaded machine
+/// that restart outlives one request. Retry inside the bounded budget; a dead app still fails the caller with its
+/// own deadline rather than an arbitrary connection-refused string.
+let get (app: RunningApp) (route: string) : Task<string> = task {
+  let url = sprintf "http://127.0.0.1:%d/%s" app.AppPort route
+  let body = ref ""
+  do! until TestTimeouts.patchOutcome (fun () -> sprintf "the app to serve %s" route) (fun () -> task {
+    try
+      let! text = http.GetStringAsync url
+      body.Value <- text
+      return true
+    with _ -> return false })
+  return body.Value
+}
 
 /// Read `route` until it serves `want`, for up to `TestTimeouts.patience` (the wait ends the moment it does, so a
 /// loaded machine costs a passing run nothing). The verdict and the app
