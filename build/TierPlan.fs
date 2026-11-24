@@ -410,6 +410,9 @@ type Limits =
     RampSeconds: float
     /// How long the head of the line waits on memory with nothing of ours running before it starts anyway.
     PatienceSeconds: float
+    /// An Exclusive tier claims the machine to itself, so a memory shortfall with none of ours running is external
+    /// work. Wait longer before the guard fires, so a load spike costs a wait instead of a false red.
+    ExclusiveMemoryPatienceSeconds: float
     /// Concurrency when the machine cannot be read: the old static rule.
     FallbackConcurrency: int }
 
@@ -433,6 +436,10 @@ module Admission =
   let rampSeconds = 60.0
   /// Two minutes: longer than any transient spike, short enough that a neighbour holding memory costs a wait, not the gate.
   let patienceSeconds = 120.0
+  /// Ten minutes for an Exclusive tier. Its whole premise is "the machine to myself"; admitting it into an external
+  /// memory shortfall kills workers before they report a port (a false red at load 5.6). The guard stays as a bounded
+  /// fallback so a permanent shortage cannot hang the gate.
+  let exclusiveMemoryPatienceSeconds = 600.0
   /// How often a waiting scheduler looks again when no unit has finished: at most a third of the settle time, so a start
   /// is never late by more than the settle's own resolution (a 2 s look turned a 3 s settle into 4 s, measured).
   let reevaluateEverySeconds = 1.0
@@ -445,6 +452,7 @@ module Admission =
       SettleSeconds = settleSeconds
       RampSeconds = rampSeconds
       PatienceSeconds = patienceSeconds
+      ExclusiveMemoryPatienceSeconds = exclusiveMemoryPatienceSeconds
       FallbackConcurrency = max 1 fallbackConcurrency }
 
 /// How many units may run: by what the machine has, or an explicit number (SAGEFS_TIER_PARALLEL), which is not
@@ -581,7 +589,11 @@ let decide (policy: Policy) (reading: Reading) (now: float) (schedule: Schedule)
                   match reading.Pressure with
                   | Measured percent -> percent >= limits.CpuPressureBound
                   | NotMeasured _ -> false
-                match running = 0 && not externalPressureBusy && now - schedule.HeadSince >= limits.PatienceSeconds with
+                let patience =
+                  match head.Demand with
+                  | Exclusive _ -> max limits.PatienceSeconds limits.ExclusiveMemoryPatienceSeconds
+                  | Ordinary -> limits.PatienceSeconds
+                match running = 0 && not externalPressureBusy && now - schedule.HeadSince >= patience with
                 | true -> Admit StarvationGuard
                 | false -> Wait (MemoryShort (needed, available))
 

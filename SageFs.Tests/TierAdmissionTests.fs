@@ -190,6 +190,19 @@ let tests =
       decideNow starved Admission.patienceSeconds schedule
       |> Expect.equal "after the patience it starts, and says why" (Admit StarvationGuard)
 
+    testCase "WHY — an Exclusive tier waits out an external memory shortfall before the guard fires" <| fun _ ->
+      // Host shards need the machine to themselves. With none of our units running, a memory shortfall is entirely
+      // external work; starting a shard into it kills workers before they report a port and turns a load spike into
+      // a false red. Give the neighbour time to leave. The guard still fires eventually, so the gate cannot hang.
+      let starved = { calm with Memory = AvailableBytes 0L }
+      let schedule = { scheduleWith [] NeverAdmitted with Waiting = [ measuringHead ]; HeadSince = 0.0 }
+      let decideExclusive now = decide (ByPressure limits) starved now schedule measuringHead
+      match decideExclusive (Admission.patienceSeconds + 1.0) with
+      | Wait (MemoryShort _) -> ()
+      | other -> failtestf "an Exclusive tier must not start into external memory shortfall, got %A" other
+      decideExclusive (Admission.exclusiveMemoryPatienceSeconds + 1.0)
+      |> Expect.equal "the guard is still the bounded fallback" (Admit StarvationGuard)
+
     testCase "WHY — the starvation guard does not admit into external CPU pressure: an Exclusive tier's 'machine to myself' is false and its sessions get refused" <| fun _ ->
       // With none of our units running, measured pressure is entirely external. The gate that shipped
       // admitted here after the patience, and the browser tier's session-create was refused at 7.7%
