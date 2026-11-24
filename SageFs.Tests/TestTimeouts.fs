@@ -10,6 +10,12 @@ open System.Threading
 /// Timeouts a test chooses on purpose, named for what they are, so no test carries a bare number.
 /// A test that needs the PRODUCTION value takes it from `SageFs.Timeouts`, never from a copy here.
 module TestTimeouts =
+  /// Integration waits are correctness ceilings: a passing run ends the wait the moment the fact appears, so the
+  /// headroom costs nothing. The gate shares this box with other CI; a landing or a verdict can take several times
+  /// as long as it does alone. Scale those ceilings in one place rather than discovering each one through a red run
+  /// whose cases all pass alone. Latency assertions read the real time and are unaffected.
+  let private loadedCeiling (quiet: System.TimeSpan) = System.TimeSpan.FromTicks(quiet.Ticks * 3L)
+
   /// The grace a console-app test gives an entry point before the runner calls it a console app.
   /// Short on purpose: for that app the grace has to EXPIRE, so a long one only slows the test.
   /// Web-app tests must not use it, because a cold host build on a loaded runner outlasts it.
@@ -174,9 +180,9 @@ module TestTimeouts =
   // Budgets for a whole wait that ends when something becomes ready.
 
   /// A daemon, session or discovery on the small sample becoming ready.
-  let readyBudget = secs 60.
+  let readyBudget = loadedCeiling (secs 60.)
   /// Four sample sessions, each loaded and evaluated in turn, all reaching Ready.
-  let loadedSessionsReady = secs 90.
+  let loadedSessionsReady = loadedCeiling (secs 90.)
   /// Ceiling on ONE measured edit reaching its verdict on the live-testing stream. A healthy edit takes
   /// about a second; reaching this means the daemon stopped answering, and it is generous because a cold
   /// runner pays for a type-check cache and a JIT that nobody warmed. A passing run never waits it out.
@@ -184,7 +190,7 @@ module TestTimeouts =
   /// verdict frame late at load 8 and failed a case that passed 3/3 alone. These waits are correctness
   /// ceilings, not latency measurements (the p95 assertions live in LiveTestingLatencyTests and read the
   /// real time regardless of how long the ceiling allows), so headroom costs nothing on a quiet box.
-  let liveTestingVerdictCeiling = secs 120.
+  let liveTestingVerdictCeiling = loadedCeiling (secs 120.)
   /// Ceiling on the HTTP request that holds a test for a debugger, and on the one that releases
   /// it. Holding waits for the host to reach the test, and releasing waits for the test to
   /// finish, so both outlast an ordinary request. The daemon gives up at its own window
@@ -230,7 +236,7 @@ module TestTimeouts =
   let daemonResumeCeiling = secs 150.
   /// A save verdict after 160,000 stack walks: the tiered reflection reads make this slower than
   /// a quiet app needs.
-  let heavyVerdictBudget = secs 150.
+  let heavyVerdictBudget = loadedCeiling (secs 150.)
   /// A real-git-backed landing reaching a terminal state. Generous relative to `pollLanding`.
   let landingBudget = secs 30.
   /// The default window an idle daemon's memory is watched over. `SAGEFS_IDLE_RSS_SOAK_MINUTES`
@@ -255,12 +261,12 @@ module TestTimeouts =
   /// `liveTestingVerdictCeiling`: the gate shares the box with other CI, and a landing verdict read
   /// at 60s under load 8 failed a case that passed 3/3 alone. This is a correctness ceiling, not a
   /// measurement; the latency series assert their own bounds on the real time.
-  let saveVerdict = secs 180.
+  let saveVerdict = loadedCeiling (secs 180.)
   /// A patch ending in confirmed or never-entered. Outlasts `Timeouts.patchConfirmation` (10s), the bound the worker
   /// itself gives the patched code to run. The wide margin is for the gate sharing the box with other CI: a verdict
   /// read at 40s under load failed a parity case that passed three times alone. This is a correctness ceiling, not a
   /// measurement; a patch that never confirms still fails it.
-  let patchOutcome = secs 120.
+  let patchOutcome = loadedCeiling (secs 120.)
 
   // Bounds a test hands to the code under test.
 
