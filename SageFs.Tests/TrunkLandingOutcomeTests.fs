@@ -457,6 +457,18 @@ let private integrationSays (w: World) (expression: string) : Task<string> =
               [ "agentName", box w.Alice.Name; "code", box (expression + ";;"); "session_id", box w.IntegrationSession ]
   }
 
+/// A settled landing and a Ready session do not mean the verifying session has already evaluated the head's body.
+/// Read until it says the expected value; the answer is still the strict check of what the session holds.
+let private awaitIntegrationSays (w: World) (expression: string) (want: string) : Task<string> =
+  task {
+    let last = ref ""
+    do! waitFor TestTimeouts.heavyVerdictBudget (fun () -> sprintf "the verifying session to say %s. Last: %s" want last.Value) (fun () -> task {
+      let! said = integrationSays w expression
+      last.Value <- said
+      return said.Contains want })
+    return last.Value
+  }
+
 let private newWorld () : Task<World> =
   task {
     let repo = Directory.CreateTempSubdirectory("trunk-landing-main-").FullName
@@ -730,7 +742,7 @@ let tests =
         let! _ = awaitTrunkLine w goodId isApplied
         let! tipAfter = integrationTip w
         (tipAfter <> tip) |> Expect.isTrue "the integration branch moved"
-        let! said = integrationSays w "CohortTrunkFixture.Bob.bobMessage ()"
+        let! said = awaitIntegrationSays w "CohortTrunkFixture.Bob.bobMessage ()" "bob:v2"
         said |> Expect.stringContains "the verifying session holds bob's message as the head does" "bob:v2"
         said.Contains "broken" |> Expect.isFalse "and none of the blocked landing"
         File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
