@@ -356,14 +356,6 @@ let private land (w: World) (agent: Agent) (relPath: string) (startPoint: string
 
 let private integrationTip (w: World) : Task<string> = git w.Repo [ "rev-parse"; sprintf "refs/heads/%s" w.IntegrationBranch ]
 
-/// What the verifying session itself answers for an expression: the way to see what it holds, rather than infer it from a verdict.
-/// The landing gate drives this session and nothing else does: a save in its worktree is not routed to its live loop
-/// (`LiveTestFileRouting.SessionPurpose.Verifying`), so no confirming build swaps its worker after a landing, and a read straight
-/// after one meets a Ready session by construction, with nothing to wait for or retry.
-let private integrationSays (w: World) (expression: string) : Task<string> =
-  callTool w.Alice.Client "send_fsharp_code"
-    [ "agentName", box w.Alice.Name; "code", box (expression + ";;"); "session_id", box w.IntegrationSession ]
-
 /// The whole line that binds `binding` in a file of the integration branch, as the tip holds it. Rows lean on one another, so a
 /// row that edits a binding another row may or may not have landed reads what is there rather than assuming it.
 let private bindingLineAt (w: World) (sha: string) (relPath: string) (binding: string) : Task<string> =
@@ -383,7 +375,7 @@ let private appGet (w: World) (route: string) : Task<string> =
     let url = sprintf "%s/%s" (w.App.BaseAddress.ToString().TrimEnd('/')) route
     let body = ref ""
     let! answered =
-      TestInfrastructure.waitForAsync (int TestTimeouts.httpRequest.TotalMilliseconds) (fun () -> task {
+      TestInfrastructure.waitForAsync (int TestTimeouts.heavyVerdictBudget.TotalMilliseconds) (fun () -> task {
         try
           let! text = w.App.GetStringAsync url
           body.Value <- text
@@ -453,6 +445,16 @@ let private awaitSessionReady (client: McpClient) (session: string) (notWorker: 
           | None -> true
         return root.GetProperty("lifecycle").GetString() = "Ready" && anotherWorker })
     return pid.Value
+  }
+
+/// What the verifying session itself answers for an expression: the way to see what it holds, rather than infer it from a verdict.
+/// A landing's settled verdict is not the same fact as the verifying session being Ready again — on a loaded machine it can still
+/// be Starting when the verdict lands. Wait for Ready before asking; the eval below is still the strict check of what it holds.
+let private integrationSays (w: World) (expression: string) : Task<string> =
+  task {
+    let! _ = awaitSessionReady w.Alice.Client w.IntegrationSession None
+    return! callTool w.Alice.Client "send_fsharp_code"
+              [ "agentName", box w.Alice.Name; "code", box (expression + ";;"); "session_id", box w.IntegrationSession ]
   }
 
 let private newWorld () : Task<World> =
