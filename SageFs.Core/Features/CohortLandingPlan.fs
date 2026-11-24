@@ -152,10 +152,10 @@ module CohortLandingPlan =
   let private isCompiledSourceExtension (lower: string) : bool =
     [ ".fs"; ".fsi"; ".cs"; ".vb" ] |> List.contains (extensionOf lower)
 
-  /// Files in a project's folder that no build reads: documents, scripts, notes. Everything else a project folder holds (a
+  /// Files in a project's folder that no build reads: documents, scripts, notes, and logs. Everything else a project folder holds (a
   /// resource, a content file, a data file copied to the output) can change what the build makes.
   let private isInertExtension (lower: string) : bool =
-    [ ".md"; ".txt"; ".fsx"; ".sh"; ".ps1"; ".yml"; ".yaml"; ".gitignore" ] |> List.contains (extensionOf lower)
+    [ ".md"; ".txt"; ".fsx"; ".sh"; ".ps1"; ".yml"; ".yaml"; ".gitignore"; ".log" ] |> List.contains (extensionOf lower)
 
   /// What a file is by its name alone, for a caller that has no project index: the live-test watcher, which sees one
   /// changed file at a time under a session's own directory. The same rules `classify` applies, in the same order.
