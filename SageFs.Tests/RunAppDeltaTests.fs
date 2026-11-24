@@ -540,6 +540,16 @@ let costCases (runtime: HostRuntime) : Test list =
         do! Task.Delay (SageFs.DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
         let letters = [ 'A'; 'B'; 'C'; 'D'; 'E'; 'F'; 'G'; 'H' ] |> List.truncate (latencySaves + 1)
         for was, now in List.pairwise letters do
+          // A previous save can still be restarting the app when this iteration starts. Waiting inside the write's own
+          // budget would spend that budget on a process that was down before the write, so wait for the app first.
+          let mutable ready = ""
+          let readyWatch = System.Diagnostics.Stopwatch.StartNew()
+          while ready.StartsWith "<no answer" && readyWatch.Elapsed < TestTimeouts.saveVerdict do
+            let! pid = tryGet app "pid"
+            ready <- pid
+            if ready.StartsWith "<no answer" then do! Task.Delay TestTimeouts.pollMeasure
+          ready.StartsWith "<no answer"
+          |> Expect.isFalse (sprintf "the app answers before the write to %c. Last: %s" now ready)
           let source = System.IO.File.ReadAllText app.StateSource
           let find = sprintf "\"closure:%c\"" was
           let after = source.Replace(find, sprintf "\"closure:%c\"" now)
