@@ -64,9 +64,14 @@ let private evalIn (proxy: SessionProxy) (rid: string) (code: string) : Task<Res
 /// stuck setup fails the case instead of hanging the run.
 let private setupBudgetMs = TestTimeouts.asMs TestTimeouts.sessionReadyColdBuild
 
+/// A worker that exits before reporting its port is an infrastructure transient: the product reports it correctly,
+/// and a loaded machine can kill one worker at startup. Retry that one error with a fresh manager. Every other error
+/// is a verdict these cases exist to see and is returned at once, so no assertion can be retried into passing.
+let private maxWorkerStartAttempts = 3
+
 /// Boot one real session on `project` and answer with its manager, id and ManagedSession, or why it did not
 /// get there. A real async workflow: every wait is bounded by `setupBudgetMs`, and nothing blocks a thread.
-let private bootSession (project: string) (workingDir: string) (label: string) =
+let rec private bootSessionAttempt (attempt: int) (project: string) (workingDir: string) (label: string) =
   async {
     let cts = new CancellationTokenSource()
     let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ _ -> ())
@@ -76,19 +81,33 @@ let private bootSession (project: string) (workingDir: string) (label: string) =
           SageFs.SessionManager.SessionCommand.CreateSession(
             [ SageFs.SessionProjectTarget.Project project ], workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)),
         setupBudgetMs)
+    let retry (err: SageFsError) =
+      match err with
+      | SageFsError.WorkerSpawnFailed _ when attempt + 1 < maxWorkerStartAttempts ->
+        cts.Cancel()
+        Some (bootSessionAttempt (attempt + 1) project workingDir label)
+      | _ -> None
     match created with
-    | Error err -> return Error(sprintf "create failed: %s" (SageFsError.describe err))
+    | Error err ->
+      match retry err with
+      | Some again -> return! again
+      | None -> return Error(sprintf "create failed: %s" (SageFsError.describe err))
     | Ok info ->
       let! ready = mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply)), setupBudgetMs)
       match ready with
-      | Error err -> return Error(sprintf "the %s session never reached Ready: %s" label (SageFsError.describe err))
+      | Error err ->
+        match retry err with
+        | Some again -> return! again
+        | None -> return Error(sprintf "the %s session never reached Ready: %s" label (SageFsError.describe err))
       | Ok() ->
         let! session = mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply)), setupBudgetMs)
         match session with
         | None -> return Error "session vanished after Ready"
         | Some s -> return Ok(mgr, info.Id, s)
   }
-  |> Async.StartAsTask
+
+let private bootSession (project: string) (workingDir: string) (label: string) =
+  bootSessionAttempt 0 project workingDir label |> Async.StartAsTask
 
 /// Best-effort: stop a booted session when the test process exits, so a full `--integration-host` run never
 /// leaves an orphaned worker behind. Only touches the task (and so only tears down) when some case forced it.
