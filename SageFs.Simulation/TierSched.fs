@@ -106,8 +106,14 @@ module TierSched =
           CpuPercent = float (rng.Next 90)
           HeldBytes = gib (rng.Next 56) } ]
 
-  /// A neighbour that holds all but 6 GiB for good: less than the reserve plus any unit's peak, so nothing fits, ever.
-  let hog : Neighbour = { From = 0.0; Until = forever; CpuPercent = 10.0; HeldBytes = machineBytes - gib 6 }
+  /// A neighbour that holds all but 3 GiB for good: less than the 3 GiB reserve plus any unit's peak (1 to 4 GiB), so
+  /// nothing fits, ever. The held amount follows the reserve so a change to it cannot turn this hog into a unit that
+  /// fits and silently stop exercising the starvation guard.
+  let hog : Neighbour =
+    { From = 0.0
+      Until = forever
+      CpuPercent = 10.0
+      HeldBytes = machineBytes - Admission.memoryReserveBytes }
 
   /// A pure function of `seed`: units, neighbours' spikes and dips, and every seventh seed a neighbour that never leaves
   /// and every eleventh a machine whose pressure cannot be read.

@@ -426,8 +426,11 @@ module Admission =
   /// Measured (2026-10-04): the timing cases that failed under load failed at loads where `some avg10` was far above this,
   /// and the gate at a calm 14 load average ran clean.
   let cpuPressureBound = 25.0
-  /// Other agents hold about 30 GiB of this machine; the desktop and the kernel's own caches need the rest of a margin.
-  let memoryReserveBytes = 8L * bytesPerGiB
+  /// Room left for the desktop and the other tenants. Measured on this 30 GiB box: about 21 GiB is held by other
+  /// work, leaving 8 to 11 GiB. An 8 GiB reserve on top of a host shard's 5 GiB peak asked for 13 GiB that this
+  /// machine never had, so the gate waited ten minutes and started anyway — into the pressure it was meant to avoid.
+  /// Three GiB leaves the shard its measured peak and a real margin without making admission impossible.
+  let memoryReserveBytes = 3L * bytesPerGiB
   /// Three units already ran together in every gate that was green.
   let pressureFloorUnits = 3
   /// `avg10` is a ten second average: a few seconds is enough for a start's first CPU burst to show in it.
