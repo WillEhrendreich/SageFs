@@ -256,9 +256,11 @@ module TestTimeouts =
   /// at 60s under load 8 failed a case that passed 3/3 alone. This is a correctness ceiling, not a
   /// measurement; the latency series assert their own bounds on the real time.
   let saveVerdict = secs 180.
-  /// A patch ending in confirmed or never-entered. Outlasts `Timeouts.patchConfirmation`, the
-  /// bound the worker itself gives the patched code to run.
-  let patchOutcome = secs 40.
+  /// A patch ending in confirmed or never-entered. Outlasts `Timeouts.patchConfirmation` (10s), the bound the worker
+  /// itself gives the patched code to run. The wide margin is for the gate sharing the box with other CI: a verdict
+  /// read at 40s under load failed a parity case that passed three times alone. This is a correctness ceiling, not a
+  /// measurement; a patch that never confirms still fails it.
+  let patchOutcome = secs 120.
 
   // Bounds a test hands to the code under test.
 
