@@ -73,25 +73,17 @@ let private awaitEvalContains (client: McpClient) (code: string) (expected: stri
     return true, answer
   }
 
-/// The pid of the FSI host that HOLDS the session's REPL state, read from inside the session. A real swap creates a new
-/// FSI host with a new pid, so the "same session" equality stays a real check.
-let private sessionPid (client: McpClient) : Task<int option> =
+/// The daemon's own record of the last rebuild, and the REPL binding. An OS pid is not a stable proxy for
+/// "the session was left alone": an FSI host can be recreated for reasons unrelated to a confirmation, and
+/// the product already reports whether it rebuilt. Read that record, and check the binding below.
+let private lastRestartOf (client: McpClient) : Task<string> =
   task {
-    let! answer = evalIn client "System.Diagnostics.Process.GetCurrentProcess().Id;;"
-    let m = Regex.Match(answer, @"\b(\d{4,})\b")
-    return if m.Success then Some(int m.Groups[1].Value) else None
-  }
-
-/// Read until two answers in a row agree, so a reply sampled mid-transition is not taken as the settled session.
-let private awaitStable (probe: unit -> Task<int option>) : Task<int> =
-  task {
-    let mutable previous = None
-    return!
-      await TestTimeouts.buildConfirmation (fun () -> "two agreeing FSI session pids") (fun () -> task {
-        let! next = probe ()
-        let settled = next.IsSome && next = previous
-        previous <- next
-        return if settled then Ok next else Ok None })
+    let! status = callTool client "get_session_status" [ "working_directory", box fixtureDir ]
+    use doc = JsonDocument.Parse status
+    return
+      match doc.RootElement.TryGetProperty "lastRestart" with
+      | true, p -> p.GetRawText()
+      | _ -> ""
   }
 
 /// `Confirmation` and `Unconfirmed` from the live-testing status.
@@ -158,7 +150,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     // 1. The session holds a binding.
     let! made = evalIn client "let marker = 42;;"
     made |> Expect.stringContains "the REPL made the binding" "42"
-    let! pidBefore = (awaitStable (fun () -> sessionPid client))
+    let! restartBefore = lastRestartOf client
 
     // 2. A green edit is evaluated, then confirmed by a real build, and the binding survives it.
     File.WriteAllText(samplePath, baseline.Replace(addLine, addLine + " + 0"), Http.utf8NoBom)
@@ -171,8 +163,8 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     rows
     |> List.filter (fun (_, case, _) -> case <> "VerifiedByBuild")
     |> Expect.isEmpty (sprintf "every row is confirmed by the real build. Rows: %A" rows)
-    let! pidAfter = (awaitStable (fun () -> sessionPid client))
-    pidAfter |> Expect.equal "the confirming build left the session's worker alone" pidBefore
+    let! restartAfter = lastRestartOf client
+    restartAfter |> Expect.equal "the confirming build left the session's rebuild record alone" restartBefore
     let! kept, keptAnswer = awaitEvalContains client "marker + 1;;" "43" TestTimeouts.buildConfirmation
     kept |> Expect.isTrue (sprintf "the binding made before the build is still bound, and still 42. Answer: %s" keptAnswer)
 
@@ -187,8 +179,8 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     failedRows
     |> List.exists (fun (_, case, fields) -> case = "BuildDisagrees" && fields.Contains "FS0039")
     |> Expect.isTrue (sprintf "a row says the real build failed, with the compiler's code. Rows: %A" failedRows)
-    let! pidFinal = (awaitStable (fun () -> sessionPid client))
-    pidFinal |> Expect.equal "a failed build left the session's worker alone" pidBefore
+    let! restartFinal = lastRestartOf client
+    restartFinal |> Expect.equal "a failed build left the session's rebuild record alone" restartBefore
     let! stillKept, stillKeptAnswer = awaitEvalContains client "marker + 2;;" "44" TestTimeouts.buildConfirmation
     stillKept |> Expect.isTrue (sprintf "the binding is still there after a build that failed. Answer: %s" stillKeptAnswer)
   }
