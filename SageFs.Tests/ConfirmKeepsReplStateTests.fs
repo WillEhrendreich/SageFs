@@ -61,16 +61,36 @@ let private callTool (client: McpClient) (name: string) (args: (string * obj) li
 let private evalIn (client: McpClient) (code: string) : Task<string> =
   callTool client "send_fsharp_code" [ "agentName", box "confirm-gate"; "code", box code; "working_directory", box fixtureDir ]
 
+let private awaitQuietSession (client: McpClient) (http: Net.Http.HttpClient) : Task<unit> =
+  await TestTimeouts.buildConfirmation (fun () -> "the session and its live-testing cycle to be settled") (fun () -> task {
+    let! statusText = callTool client "get_session_status" [ "working_directory", box fixtureDir ]
+    use status = JsonDocument.Parse statusText
+    let lifecycle =
+      match status.RootElement.TryGetProperty "lifecycle" with
+      | true, p -> p.GetString()
+      | _ -> ""
+    let! _, body = Http.getJson http "/api/live-testing/status"
+    use live = JsonDocument.Parse body
+    let field (name: string) =
+      match live.RootElement.TryGetProperty name with
+      | true, p when p.ValueKind = JsonValueKind.Number -> p.GetInt32()
+      | _ -> 0
+    let phase =
+      match live.RootElement.TryGetProperty "Confirmation" with
+      | true, p -> p.GetString()
+      | _ -> ""
+    let settled =
+      lifecycle = "Ready" && phase = "idle" && field "Unconfirmed" = 0 && field "Running" = 0
+    return if settled then Ok(Some()) else Ok None })
+
 /// Read the REPL's answer until it says the expected thing. Under load a confirmation can settle after the status
 /// endpoint goes idle, so a binding check that samples once reads a session that is still catching up. Polling the
 /// observable fact removes the race: it passes as soon as the binding is there and still fails if it is lost.
-let private awaitEvalContains (client: McpClient) (code: string) (expected: string) (budget: TimeSpan) : Task<bool * string> =
+let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (code: string) (expected: string) : Task<string> =
   task {
-    let! answer =
-      await budget (fun () -> sprintf "the REPL answer to %s to contain %s" code expected) (fun () -> task {
-        let! text = evalIn client code
-        return if text.Contains expected then Ok(Some text) else Ok None })
-    return true, answer
+    do! awaitQuietSession client http
+    let! answer = evalIn client code
+    return answer
   }
 
 /// The daemon's own record of the last rebuild, and the REPL binding. An OS pid is not a stable proxy for
@@ -107,6 +127,10 @@ let private awaitConfirmation (http: Net.Http.HttpClient) (budget: TimeSpan) (is
     return true, state
   }
 
+/// A confirmation going idle is not the same fact as the session being free. The live-test eval can still be
+/// in flight; an eval sent then lands on a busy FSI host and gets "Operation could not be completed due to
+/// earlier error". Wait for the daemon's own settled state: Ready, no running verification, no unconfirmed
+/// row, idle confirmation. The deadline bounds only the failure path.
 /// Each row's name with the case its provenance is in, and the provenance's own words.
 let private provenances (http: Net.Http.HttpClient) (sessionId: string) : Task<(string * string * string) list> =
   task {
@@ -165,8 +189,8 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     |> Expect.isEmpty (sprintf "every row is confirmed by the real build. Rows: %A" rows)
     let! restartAfter = lastRestartOf client
     restartAfter |> Expect.equal "the confirming build left the session's rebuild record alone" restartBefore
-    let! kept, keptAnswer = awaitEvalContains client "marker + 1;;" "43" TestTimeouts.buildConfirmation
-    kept |> Expect.isTrue (sprintf "the binding made before the build is still bound, and still 42. Answer: %s" keptAnswer)
+    let! keptAnswer = awaitEvalContains client http "marker + 1;;" "43"
+    keptAnswer |> Expect.stringContains "the binding made before the build is still bound, and still 42" "43"
 
     // 3. An edit the session accepts and the compiler rejects: the build fails, the rows say so, nothing is lost.
     let forward = addLine + " - 0\nlet reachesForward = SageFs.Tests.Fixtures.ConfirmKeepsRepl.Program.main"
@@ -181,8 +205,8 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     |> Expect.isTrue (sprintf "a row says the real build failed, with the compiler's code. Rows: %A" failedRows)
     let! restartFinal = lastRestartOf client
     restartFinal |> Expect.equal "a failed build left the session's rebuild record alone" restartBefore
-    let! stillKept, stillKeptAnswer = awaitEvalContains client "marker + 2;;" "44" TestTimeouts.buildConfirmation
-    stillKept |> Expect.isTrue (sprintf "the binding is still there after a build that failed. Answer: %s" stillKeptAnswer)
+    let! stillKeptAnswer = awaitEvalContains client http "marker + 2;;" "44"
+    stillKeptAnswer |> Expect.stringContains "the binding is still there after a build that failed" "44"
   }
 
 let private gate () : Task<unit> =

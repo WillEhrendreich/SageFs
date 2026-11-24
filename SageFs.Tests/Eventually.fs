@@ -64,6 +64,7 @@ module Transient =
     elif has [ "before reporting port" ] || has [ "no port" ] then Some(Transient.SpawnIncomplete text)
     elif has [ "404" ] || has [ "not found" ] then Some(Transient.NoRoute text)
     elif has [ "empty answer" ] then Some(Transient.Other text)
+    elif has [ "did not answer within" ] then Some(Transient.WarmingUp text)
     else None
 
   let ofReason (detail: string) (kind: string) : Transient =
