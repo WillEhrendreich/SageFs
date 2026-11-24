@@ -1,0 +1,121 @@
+A daemon's own trouble reaches the client
+Actor event emission
+AnsiEmitter.emitDiff
+Cli.status exit codes
+Cli.status gives each state its own exit code
+Cli.stop exit codes
+Cohort perf budgets (sagefs-multiagent-vision.md §3.4, §7.4)
+CohortIntegration: the status read says which cohort the integration serves (P11)
+Confirming build keeps the REPL
+CoverageView v2 - Health is honest about test status
+CoverageView v2 - hot path is tight
+DST getter guards
+Daemon health reads its own telemetry
+DaemonStatus
+Dashboard browser tests
+Dashboard layout journeys
+Dashboard live bindings dock browser tests
+Dashboard live bindings knob browser tests
+Dashboard mobile browser tests
+Dashboard pane layout browser tests
+Dashboard panel context browser tests
+Dashboard session switch output browser tests
+Dashboard sinks in a browser
+Dashboard stream resilience browser tests
+DevReload E2E signal path
+DevReload.KillSwitch
+DevReload.LastReload — past the server boundary
+DevReload.Properties
+DevReload.Signaling
+DevReloadCanary
+DevReloadHealth state transitions
+EnvCheck.print
+Eval write-back on the surface an agent reads
+ExpectoExecutor reflected bodies
+FSI multiemit cross-submission
+FileWatcher resilience
+Friction SQLite end-to-end
+Friction SQLite persistence
+Friction SQLite summary queries
+Friction storage scenarios
+FsiProtocol throughput
+HTTP API harness
+HarmonyCanary
+Hot-reload dashboard browser tests
+Hot-reload latency
+Hot-reload patch confirmation journeys
+Hot-reload patched-save growth
+HotReloading eval-time discovery gate
+InputHashCoverage.coveredFiles against the list version
+Instrumentation
+Integration (host)
+Live bindings freshness browser tests
+Live bindings header browser tests
+Live bindings pane browser tests
+Live bindings since green browser tests
+Live-testing dashboard browser tests
+Live-testing journeys
+Live-testing latency
+MCP LLM Interop Improvements (TDD)
+MCP echo and notification fan-out are best effort
+MCP session isolation
+MCP tool execution
+New session dialog browser tests
+Output panel layout browser tests
+PatchAnnouncer
+Perf budgets (local)
+Performance stays within allocation budgets
+ProcessEnvironment credentials
+ReloadBroadcast — what the browser is told
+RemoteFsiSession.kindOfGlyph
+ReplFreshness on every surface an agent reads
+Session Creation
+SessionManager build path resolution
+Sessions card edges and marker (real browser)
+Settings browser journeys
+Settings catalog
+Settings store
+Settings store DST
+Settings — what a restart reads back
+ShadowCopy
+Skip sites
+Snapshot dashboard helpers
+SourceState on every surface an agent reads
+Stable-identity reload in FSI
+SyntaxHighlight
+Thread-safe mutable timeouts
+Tool description snapshots
+Worker Log sinks (process-global, sequenced)
+WorkerHttpTransport./hotreload/last-outcome
+WorkerHttpTransport.concurrency
+WorkerMain.mkLiveTestEvalSupport (EvalLiveTestFile keystone)
+Workspace hygiene browser journeys
+[Benchmark] cycle Core Benchmark
+a click and its guards
+a landing reaches the running trunk app
+assembly search paths (sequenced)
+cleanStdout
+contrib/launchd/io.github.willehrendreich.sagefs.plist
+contrib/systemd/sagefs.service
+detour resilience
+empty
+exploreNamespace
+guard runtime (cells and checks)
+guards on a click under the syscall filter
+hot reload parity with .NET Hot Reload on net10.0
+hot reload parity with .NET Hot Reload on net11.0
+liveTestingStatusBar
+main() refuses unimplemented daemon-startup flags
+metadata delta emitter
+method patcher tests
+real guards on a click whose thread is abandoned
+reflection reads after startup, on a real app
+resolveJunctions connects box-drawing characters
+root
+user code that ends in a call to a function value
+watcher recovery
+withEcho reports a failed tool call as a failure
+workerHttpRequest
+workingDirectory routing priority
+# A single-case rerun cannot reproduce them; classify by rerunning the whole suite.
+# Suites whose cases lean on earlier cases in the same list.

@@ -133,6 +133,19 @@ let reproduceCommand (dll: string) (tierArgs: string) (name: string) : string =
   let flags = dropShard tokens |> String.concat " "
   sprintf "dotnet %s %s --filter '%s'" dll flags (name.Replace("'", "'\\''"))
 
+/// A sequenced suite's cases lean on earlier cases in the same list. Rerunning one case alone cannot
+/// reproduce it, so its verdict is not evidence. Rerun the whole suite instead: `--filter-test-list`
+/// matches list names, and the TRUST line still proves something ran.
+let reproduceSuiteCommand (dll: string) (tierArgs: string) (suite: string) : string =
+  let tokens = tierArgs.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray
+  let rec dropShard (ts: string list) =
+    match ts with
+    | "--shard" :: _ :: rest -> dropShard rest
+    | t :: rest -> t :: dropShard rest
+    | [] -> []
+  let flags = dropShard tokens |> String.concat " "
+  sprintf "dotnet %s %s --filter-test-list '%s'" dll flags (suite.Replace("'", "'\\''"))
+
 /// What the last green run said about this case.
 type History =
   | PassedBefore of sha: string
