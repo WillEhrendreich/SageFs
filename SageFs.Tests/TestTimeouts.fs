@@ -704,12 +704,14 @@ module TestTimeouts =
   /// The tool clamps anything above its own ceiling (60), so a longer wait is a loop of these.
   let sessionStatusLongWaitSeconds = 60
 
-  /// A console app started by run_app printing its first line to the dashboard.
-  let appOutputAppears = System.TimeSpan.FromSeconds 60.
+  /// A console app started by run_app printing its first line to the dashboard. No private clock:
+  /// a share of the single pass deadline published by the runner.
+  let appOutputAppears = LoadBudget.share 0.05
 
-  /// A running app printing the edited text after a save. A rebuild and a restart are allowed
-  /// before the new text shows, so this is longer than the first line.
-  let appOutputAfterSave = System.TimeSpan.FromSeconds 180.
+  /// A running app printing the edited text after a save. A rebuild, a restart and a write-back
+  /// are allowed before the new text shows. Same single deadline, a larger share because the
+  /// route is longer; the measured time is printed by the test and never asserted here.
+  let appOutputAfterSave = LoadBudget.share 0.2
 
 
   /// How long the tool layer's read caches (list_tests, coverage_intel, and the narrative

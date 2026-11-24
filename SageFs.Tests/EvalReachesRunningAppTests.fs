@@ -34,6 +34,7 @@ open Expecto.Flip
 open ModelContextProtocol.Client
 open ModelContextProtocol.Protocol
 open SageFs
+open SageFs.Tests.Eventually
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
@@ -111,16 +112,16 @@ let private tickerLine (text: string) (marker: string) : string option =
 let private waitForDashboard (http: HttpClient) (dashboardUrl: string) (timeout: TimeSpan) (predicate: string -> bool) : Task<bool * string * TimeSpan> =
   task {
     let started = DateTime.UtcNow
-    let mutable last = ""
-    let mutable satisfied = false
-    let mutable at = TimeSpan.Zero
-    while not satisfied && DateTime.UtcNow - started < timeout do
-      let! text = dashboardText http dashboardUrl
-      last <- text
-      satisfied <- predicate text
-      if satisfied then at <- DateTime.UtcNow - started
-      if not satisfied then do! Task.Delay TestTimeouts.slowPoll
-    return satisfied, last, at
+    return!
+      await timeout (fun () -> "the dashboard to show the expected app line") (fun () -> task {
+        try
+          let! text = dashboardText http dashboardUrl
+          return if predicate text then Ok(Some(text, DateTime.UtcNow - started)) else Ok None
+        with ex ->
+          match Transient.ofException ex with
+          | Some t -> return Error t
+          | None -> return raise ex })
+      |> Task.map (fun (text, at) -> true, text, at)
   }
 
 /// The 1-based line of the declaration that starts with `let <name>`, so the write-back is told

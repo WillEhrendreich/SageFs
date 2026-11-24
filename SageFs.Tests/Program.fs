@@ -6,6 +6,10 @@ open VerifyTests
 
 [<EntryPoint>]
 let main argv =
+  // One pass deadline for every wait, before any test module asks for a timeout. CI publishes it;
+  // a local run gets the same single ceiling instead of a per-wait clock.
+  SageFs.Tests.LoadBudget.ensureDeadline ()
+
   // A guard test starts this assembly again to click a getter that would end its process (GuardChildTests). That is
   // not a test run, so it answers and leaves before anything of the runner is set up.
   match SageFs.Tests.GuardChild.tryRun argv with

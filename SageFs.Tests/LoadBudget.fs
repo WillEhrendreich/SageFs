@@ -46,6 +46,17 @@ let currentFactor () : float =
     | true, v when v >= 1.0 -> min maxFactor v
     | _ -> 1.0
 
+/// One deadline for the whole pass. CI publishes it; a developer running the assembly by hand gets
+/// the same single ceiling from the runner, so no individual wait has to invent its own.
+let private defaultPassBudget = TimeSpan.FromMinutes 90.
+
+let ensureDeadline () =
+  match Environment.GetEnvironmentVariable DeadlineEnvironment with
+  | null | "" ->
+    let at = DateTimeOffset.UtcNow + defaultPassBudget
+    Environment.SetEnvironmentVariable(DeadlineEnvironment, string (at.ToUnixTimeSeconds()))
+  | _ -> ()
+
 /// The single deadline for this pass, if one was propagated.
 let deadline () : DateTimeOffset option =
   match Environment.GetEnvironmentVariable DeadlineEnvironment with
@@ -61,13 +72,20 @@ let remaining () : TimeSpan =
   | None -> TimeSpan.MaxValue
   | Some d -> let left = d - DateTimeOffset.UtcNow in if left < TimeSpan.Zero then TimeSpan.Zero else left
 
-/// A child wait's budget: a fraction of what is left, scaled for load but never beyond the parent.
+/// A wait's budget when the runner has published a pass deadline: a fraction of what is left.
+/// There is no private per-wait clock here. If no deadline was published (a developer running a
+/// single case by hand), the wait has no ceiling; the runner's own bound applies in CI.
+let share (fraction: float) : TimeSpan =
+  let f = min 1.0 (max 0.0 fraction)
+  match deadline () with
+  | None -> TimeSpan.MaxValue
+  | Some d ->
+    let left = max TimeSpan.Zero (d - DateTimeOffset.UtcNow)
+    TimeSpan.FromTicks(int64 (float left.Ticks * f))
+
+/// A child wait's budget: the smaller of its share of the pass deadline and the load-scaled
+/// declared value. Kept for waits whose product has its own bound; integration waits use `share`.
 let innerBudget (fraction: float) (declared: TimeSpan) : TimeSpan =
   let scaled = TimeSpan.FromTicks(int64 (float declared.Ticks * currentFactor ()))
-  let fraction = min 1.0 (max 0.0 fraction)
-  match deadline () with
-  | None -> scaled
-  | Some d ->
-    let left = d - DateTimeOffset.UtcNow
-    let share = TimeSpan.FromTicks(int64 (float (max TimeSpan.Zero left).Ticks * fraction))
-    if scaled < share then scaled else share
+  let s = share fraction
+  if scaled < s then scaled else s

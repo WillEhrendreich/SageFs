@@ -9,6 +9,8 @@
 
     <ItemGroup>
         <Compile Include="LiveTestingBudgets.fs" />
+        <!-- LoadBudget before TestTimeouts: the named waits derive their ceiling from the one pass deadline. -->
+        <Compile Include="LoadBudget.fs" />
         <Compile Include="TestTimeouts.fs" />
         <Compile Include="CompletionFixtures.fs" />
         <Compile Include="CasePhases.fs" />
@@ -31,7 +33,6 @@
         <Compile Include="HostSlots.fs" />
         <Compile Include="Started.fs" />
         <Compile Include="Eventually.fs" />
-        <Compile Include="LoadBudget.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="PerfBudget.fs" />
         <Compile Include="PerfBudgetClockTests.fs" />

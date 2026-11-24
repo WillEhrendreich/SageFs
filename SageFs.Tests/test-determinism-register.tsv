@@ -51,7 +51,6 @@ sleep-then-assert	SageFs.Tests/EvalLatencyTraceTests.fs	grandfathered
 sleep-then-assert	SageFs.Tests/EvalLatencyTraceTests.fs	grandfathered
 asserted-duration	SageFs.Tests/EvalLatencyTraceTests.fs	grandfathered
 asserted-duration	SageFs.Tests/EvalLatencyTraceTests.fs	grandfathered
-private-polling-loop	SageFs.Tests/EvalReachesRunningAppTests.fs	grandfathered
 sleep-then-assert	SageFs.Tests/FileWatcherTests.fs	grandfathered
 sleep-then-assert	SageFs.Tests/FsiHostClientTests.fs	grandfathered
 sleep-then-assert	SageFs.Tests/FsiHostClientTests.fs	grandfathered

@@ -26,7 +26,13 @@ let private literalPattern =
   Regex(@"TimeSpan\.From(Seconds|Milliseconds|Minutes|Hours|Days)\s*\(?\s*[0-9]|Task\.Delay\s*\(?\s*[0-9]|Thread\.Sleep\s*\(?\s*[0-9]|Async\.Sleep\s*\(?\s*[0-9]|\.Add(Milliseconds|Seconds|Minutes|Hours|Days)\s*\(\s*[0-9]|WaitForExit\s*\(\s*[0-9]|CancelAfter\s*\(\s*[0-9]|[A-Za-z](Ms|Millis|Seconds|Secs)\s*=\s*[0-9]|[Tt]imeout\s*=\s*[0-9]|\b[0-9]{1,3}(_000)+L?\b", RegexOptions.Compiled)
 
 /// The files allowed to hold durations: the product's, and the ones a test picks on purpose.
-let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/TestTimeouts.fs"; "SageFs.Tests/LiveTestingBudgets.fs" ]
+let private central =
+  Set.ofList
+    [ "SageFs.Core/Timeouts.fs"
+      "SageFs.Tests/TestTimeouts.fs"
+      "SageFs.Tests/LiveTestingBudgets.fs"
+      // The one pass deadline and its load factor live here; no test spells out a wall-clock budget.
+      "SageFs.Tests/LoadBudget.fs" ]
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
