@@ -80,30 +80,30 @@ let private awaitEvalContains (client: McpClient) (code: string) (expected: stri
 /// state the gate is about. The daemon's `workerPid` status can name a worker mid-handover while the session it reports
 /// for is already the settled one; a read from inside cannot be confused with a different process. A real worker swap
 /// creates a new FSI host with a new pid, so the "same session" equality stays a real check.
-let private sessionPid (client: McpClient) : Task<int> =
+let private sessionPid (client: McpClient) : Task<int option> =
   task {
     let! answer = evalIn client "System.Diagnostics.Process.GetCurrentProcess().Id;;"
-    let found =
-      Regex.Match(answer, @"\b(\d{4,})\b")
-      |> fun m -> m.Success, m
-    match found with
-    | true, m -> return int m.Groups[1].Value
-    | false, _ -> return failwithf "no pid in the REPL answer: %s" answer
+    let m = Regex.Match(answer, @"\b(\d{4,})\b")
+    // A warming session answers with an error instead of a value. That is a "not yet", not a failure of this test.
+    return if m.Success then Some(int m.Groups[1].Value) else None
   }
 
 /// Read until two answers in a row agree, so a reply sampled mid-transition is not taken as the settled session.
-let private awaitStable (probe: unit -> Task<int>) : Task<int> =
+/// `None` means the session has not answered yet and is retried within the budget.
+let private awaitStable (probe: unit -> Task<int option>) : Task<int> =
   task {
-    let! first = probe ()
-    let mutable stable = first
+    let mutable stable = None
     let mutable same = false
     let! _ =
       TestInfrastructure.waitForAsync (int TestTimeouts.buildConfirmation.TotalMilliseconds) (fun () -> task {
         let! next = probe ()
-        same <- next = stable
+        same <- next.IsSome && next = stable
         stable <- next
         return same })
-    return stable
+    return
+      match stable with
+      | Some pid -> pid
+      | None -> failwith "the session never answered its FSI pid"
   }
 
 /// `Confirmation` and `Unconfirmed` from the live-testing status: where the confirmation stands, and how many rows still
