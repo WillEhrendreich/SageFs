@@ -19,6 +19,7 @@ open System.Threading.Tasks
 open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
+open SageFs.Tests.Eventually
 
 
 /// The runtimes the shipped host is built for. Every state outcome test runs
@@ -296,52 +297,33 @@ let private evalOk (proxy: SessionProxy) (code: string) = task {
 /// Bounded wait for an external process to get somewhere. There's no push
 /// signal for "the host's FSI session finished warming up" that a test can
 /// subscribe to from outside the process, so this asks, with a deadline.
-let private until (budget: TimeSpan) (describe: unit -> string) (probe: unit -> Task<bool>) = task {
-  let sw = Stopwatch.StartNew()
-  let mutable ok = false
-  while not ok && sw.Elapsed < budget do
-    let! answer = task { try return! probe () with _ -> return false }
-    ok <- answer
-    match ok with
-    | true -> ()
-    | false -> do! Task.Delay TestTimeouts.pollService
-  match ok with
-  | true -> ()
-  | false -> failwithf "gave up after %.0fs: %s" budget.TotalSeconds (describe ())
-}
+let private until (budget: TimeSpan) (describe: unit -> string) (probe: unit -> Task<bool>) : Task<unit> =
+  awaitTrue budget describe probe
 
 /// A GET that tolerates a route the app has not reopened yet. A save can restart the app, and on a loaded machine
 /// that restart outlives one request. Retry inside the bounded budget; a dead app still fails the caller with its
 /// own deadline rather than an arbitrary connection-refused string.
-let get (app: RunningApp) (route: string) : Task<string> = task {
+let get (app: RunningApp) (route: string) : Task<string> =
   let url = sprintf "http://127.0.0.1:%d/%s" app.AppPort route
-  let body = ref ""
-  do! until TestTimeouts.patchOutcome (fun () -> sprintf "the app to serve %s" route) (fun () -> task {
+  await TestTimeouts.patchOutcome (fun () -> sprintf "the app to serve %s" route) (fun () -> task {
     try
       let! text = http.GetStringAsync url
-      body.Value <- text
-      // A process that is restarting can answer with an empty body before its routes are back. That is the
-      // same "not yet" as a refused connection; otherwise an empty answer becomes the row's served value.
-      return not (System.String.IsNullOrWhiteSpace text)
-    with _ -> return false })
-  return body.Value
-}
+      // A process mid-restart answers with an empty body before its routes are back.
+      return if System.String.IsNullOrWhiteSpace text then Error(Transient.NotListening "empty body") else Ok(Some text)
+    with ex ->
+      match Transient.ofException ex with
+      | Some t -> return Error t
+      | None -> return raise ex })
 
 /// Read `route` until it serves `want`, for up to `TestTimeouts.patience` (the wait ends the moment it does, so a
 /// loaded machine costs a passing run nothing). The verdict and the app
 /// travel on different sockets, so one read right after the verdict can race
 /// the detour. If it never flips, the final value comes back and the caller's
 /// assertion says what it was.
-let settle (app: RunningApp) (route: string) (want: string) : Task<string> = task {
-  let sw = Stopwatch.StartNew()
-  let! first = get app route
-  let mutable served = first
-  while served <> want && sw.Elapsed < TestTimeouts.patience do
-    do! Task.Delay TestTimeouts.pollQuick
-    let! next = get app route
-    served <- next
-  return served
-}
+let settle (app: RunningApp) (route: string) (want: string) : Task<string> =
+  await TestTimeouts.patience (fun () -> sprintf "the app route %s to serve %s" route want) (fun () -> task {
+    let! served = get app route
+    return if served = want then Ok(Some served) else Ok None })
 
 let private postJson (url: string) (body: string) = task {
   use content = new StringContent(body, Encoding.UTF8, "application/json")

@@ -22,6 +22,7 @@ open System.Threading
 open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
+open SageFs.Tests.Eventually
 open ModelContextProtocol.Client
 open ModelContextProtocol.Protocol
 
@@ -65,49 +66,35 @@ let private evalIn (client: McpClient) (code: string) : Task<string> =
 /// observable fact removes the race: it passes as soon as the binding is there and still fails if it is lost.
 let private awaitEvalContains (client: McpClient) (code: string) (expected: string) (budget: TimeSpan) : Task<bool * string> =
   task {
-    let clock = Diagnostics.Stopwatch.StartNew()
-    let mutable last = ""
-    let mutable found = false
-    while not found && clock.Elapsed < budget do
-      let! answer = evalIn client code
-      last <- answer
-      found <- answer.Contains expected
-      if not found then do! Task.Delay LiveTestingBudgets.pollInterval
-    return found, last
+    let! answer =
+      await budget (fun () -> sprintf "the REPL answer to %s to contain %s" code expected) (fun () -> task {
+        let! text = evalIn client code
+        return if text.Contains expected then Ok(Some text) else Ok None })
+    return true, answer
   }
 
-/// The pid of the FSI host that HOLDS the session's REPL state, read from inside the session. This is the process whose
-/// state the gate is about. The daemon's `workerPid` status can name a worker mid-handover while the session it reports
-/// for is already the settled one; a read from inside cannot be confused with a different process. A real worker swap
-/// creates a new FSI host with a new pid, so the "same session" equality stays a real check.
+/// The pid of the FSI host that HOLDS the session's REPL state, read from inside the session. A real swap creates a new
+/// FSI host with a new pid, so the "same session" equality stays a real check.
 let private sessionPid (client: McpClient) : Task<int option> =
   task {
     let! answer = evalIn client "System.Diagnostics.Process.GetCurrentProcess().Id;;"
     let m = Regex.Match(answer, @"\b(\d{4,})\b")
-    // A warming session answers with an error instead of a value. That is a "not yet", not a failure of this test.
     return if m.Success then Some(int m.Groups[1].Value) else None
   }
 
 /// Read until two answers in a row agree, so a reply sampled mid-transition is not taken as the settled session.
-/// `None` means the session has not answered yet and is retried within the budget.
 let private awaitStable (probe: unit -> Task<int option>) : Task<int> =
   task {
-    let mutable stable = None
-    let mutable same = false
-    let! _ =
-      TestInfrastructure.waitForAsync (int TestTimeouts.buildConfirmation.TotalMilliseconds) (fun () -> task {
+    let mutable previous = None
+    return!
+      await TestTimeouts.buildConfirmation (fun () -> "two agreeing FSI session pids") (fun () -> task {
         let! next = probe ()
-        same <- next.IsSome && next = stable
-        stable <- next
-        return same })
-    return
-      match stable with
-      | Some pid -> pid
-      | None -> failwith "the session never answered its FSI pid"
+        let settled = next.IsSome && next = previous
+        previous <- next
+        return if settled then Ok next else Ok None })
   }
 
-/// `Confirmation` and `Unconfirmed` from the live-testing status: where the confirmation stands, and how many rows still
-/// say they ran against evaluated code.
+/// `Confirmation` and `Unconfirmed` from the live-testing status.
 let private confirmationOf (http: Net.Http.HttpClient) : Task<string * int> =
   task {
     let! status, body = Http.getJson http "/api/live-testing/status"
@@ -116,18 +103,16 @@ let private confirmationOf (http: Net.Http.HttpClient) : Task<string * int> =
     return doc.RootElement.GetProperty("Confirmation").GetString(), doc.RootElement.GetProperty("Unconfirmed").GetInt32()
   }
 
-/// Wait until `isDone` says so of the confirmation's state, asking again after each pause between polls.
+/// Wait until `isDone` says so of the confirmation's state.
 let private awaitConfirmation (http: Net.Http.HttpClient) (budget: TimeSpan) (isDone: string * int -> bool) : Task<bool * (string * int)> =
   task {
-    let clock = Diagnostics.Stopwatch.StartNew()
-    let mutable last = ("", -1)
-    let mutable finished = false
-    while not finished && clock.Elapsed < budget do
-      let! state = confirmationOf http
-      last <- state
-      finished <- isDone state
-      if not finished then do! Task.Delay LiveTestingBudgets.pollInterval
-    return finished, last
+    let last = ref ("", -1)
+    let! state =
+      await budget (fun () -> sprintf "the confirmation to satisfy its predicate. Last: %A" last.Value) (fun () -> task {
+        let! state = confirmationOf http
+        last.Value <- state
+        return if isDone state then Ok(Some state) else Ok None })
+    return true, state
   }
 
 /// Each row's name with the case its provenance is in, and the provenance's own words.
