@@ -320,7 +320,9 @@ let get (app: RunningApp) (route: string) : Task<string> = task {
     try
       let! text = http.GetStringAsync url
       body.Value <- text
-      return true
+      // A process that is restarting can answer with an empty body before its routes are back. That is the
+      // same "not yet" as a refused connection; otherwise an empty answer becomes the row's served value.
+      return not (System.String.IsNullOrWhiteSpace text)
     with _ -> return false })
   return body.Value
 }
