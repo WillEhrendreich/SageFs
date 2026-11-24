@@ -483,9 +483,14 @@ let tierTimings = Collections.Concurrent.ConcurrentDictionary<string, TierSchedu
 /// admission refusal frees none of that memory and only fails the test that asked; the gate's tier
 /// admission (8 GiB reserve + recorded peak) decides machine room across all tiers. Shedding (reap
 /// dead, stop idle) stays on — it genuinely frees memory. A user's daemon keeps the protected default.
+// One absolute deadline for the whole pass, shared by every tier. A nested wait derives its budget from
+// what is LEFT, so a slow tier cannot hand a child a fresh clock that outlives the stage (Molina's Deadline).
+let passDeadline = DateTimeOffset.UtcNow.AddMinutes 90.
+
 let tierRuntimeEnvironment : (string * string) list =
   [ "DOTNET_TieredPGO", "0"
-    SageFs.MemoryAdmissionEnv.environmentVariable, "off" ]
+    SageFs.MemoryAdmissionEnv.environmentVariable, "off"
+    "SAGEFS_TEST_DEADLINE_UNIX", string (passDeadline.ToUnixTimeSeconds()) ]
 
 // ---- fail fast -------------------------------------------------------------------
 //
@@ -1239,11 +1244,31 @@ let classifyFailures () : Async<unit> =
       match captureOf rootDir [ "git"; "rev-parse"; "HEAD" ] with
       | Result.Ok sha -> sha.Trim()
       | Result.Error _ -> "unknown"
+    // A sequenced suite's cases lean on earlier cases. Rerunning one alone cannot reproduce it, so classify
+    // those by rerunning the whole suite. The registry lives with the tests, next to the suites it names.
+    let sequencedSuites =
+      let p = Path.Combine(rootDir, "SageFs.Tests", "sequenced-suites.txt")
+      if not (File.Exists p) then []
+      else
+        File.ReadAllLines p
+        |> Array.map (fun l -> l.Trim())
+        |> Array.filter (fun l -> l <> "" && not (l.StartsWith "#"))
+        |> Array.toList
     for (number, (tier, failure, reproduce)) in List.indexed chosen do
-      printfn "%sclassifying %s (tier %s): rerunning it alone %d times" FailureReport.linePrefix failure.Name tier.Name FlakeClassification.defaultReruns
+      let suite =
+        sequencedSuites
+        |> List.tryFind (fun s -> failure.Name.Contains(s, StringComparison.Ordinal))
+      let command =
+        match suite with
+        | Some s ->
+          printfn "%sclassifying %s (tier %s): sequenced suite %s, rerunning the whole suite" FailureReport.linePrefix failure.Name tier.Name s
+          FailureReport.reproduceSuiteCommand (TierPlan.dllOf tier.Framework) tier.Args s
+        | None ->
+          printfn "%sclassifying %s (tier %s): rerunning it alone %d times" FailureReport.linePrefix failure.Name tier.Name FlakeClassification.defaultReruns
+          reproduce
       let outcomes = ResizeArray<FlakeClassification.RerunOutcome>()
       for rerun in 1 .. FlakeClassification.defaultReruns do
-        let! outcome = rerunCaseOnce tier reproduce number rerun
+        let! outcome = rerunCaseOnce tier command number rerun
         outcomes.Add outcome
       let result = FlakeClassification.classify (List.ofSeq outcomes)
       caseVerdicts[(tier.Name, failure.Name)] <- result
