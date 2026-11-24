@@ -171,7 +171,9 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     let! restedBefore, restedState = awaitConfirmation http TestTimeouts.buildConfirmation (fun (phase, _) -> phase = "idle")
     restedBefore |> Expect.isTrue (sprintf "the session is at rest before the gate starts. Last: %A" restedState)
 
-    // 1. The session holds a binding.
+    // 1. The session holds a binding. An idle confirmation is not a Ready session: under load the first eval
+    // can land while the worker is still warming and be answered with FSI's generic "earlier error".
+    do! awaitQuietSession client http
     let! made = evalIn client "let marker = 42;;"
     made |> Expect.stringContains "the REPL made the binding" "42"
     let! restartBefore = lastRestartOf client
