@@ -337,8 +337,10 @@ let exerciseRow (app: RunningApp) (row: Row) : Task<Observed> = task {
     | false, _ -> return observed (sprintf "the save should be applied in place, and the worker said %s" (said verdict))
     | true, false -> return observed (sprintf "the save said it was applied, and the process serves %A, not %A" served row.After)
     | true, true ->
-      // The read above ran the patched body, so the worker can now say it was seen running.
-      let! confirmedVerdict = confirmed app
+      // The read above may have landed before the patch applied. Keep entering the route while waiting for the
+      // verdict, so a slow machine cannot leave the patch pending forever. The first read's answer is what the
+      // assertions above check; these extra reads are only to exercise the body.
+      let! confirmedVerdict = confirmedUntilEntered (fun () -> task { let! _ = get app row.Name in () }) app
       match str (json confirmedVerdict) "outcome" with
       | "Patched" -> return observed ""
       | other -> return observed (sprintf "the new body ran and the save ended %s, not Patched: %s" other confirmedVerdict)

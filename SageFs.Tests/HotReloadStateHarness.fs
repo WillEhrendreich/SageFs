@@ -470,17 +470,23 @@ let saveEdits (app: RunningApp) (source: string) (edits: (string * string) list)
 /// the worker says `patched`, and when the bound passes without that it says
 /// `neverentered`. The worker keeps the last verdict, so this reads it until
 /// one of the two has arrived.
-let confirmed (app: RunningApp) : Task<string> = task {
+let confirmedUntilEntered (exercise: unit -> Task<unit>) (app: RunningApp) : Task<string> = task {
   let last = ref ""
   do! until
         TestTimeouts.patchOutcome
         (fun () -> sprintf "the patch was neither confirmed nor reported never-entered. Last verdict: %s" last.Value)
         (fun () -> task {
+          // A patch stays pending until its new body actually runs. Polling the verdict alone can wait out the
+          // bound while the route was exercised only once, before the patch applied. Enter it on each poll.
+          do! exercise ()
           let! json = http.GetStringAsync(app.WorkerUrl + "/hotreload/last-outcome")
           last.Value <- json
           return json.Contains "\"type\":\"patched\"" || json.Contains "\"type\":\"neverentered\"" })
   return last.Value
 }
+
+let confirmed (app: RunningApp) : Task<string> =
+  confirmedUntilEntered (fun () -> task { () }) app
 
 /// GET a worker route, the same one the daemon proxies for the dashboard.
 let getWorker (app: RunningApp) (route: string) : Task<string> =
