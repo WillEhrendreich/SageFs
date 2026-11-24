@@ -1255,9 +1255,13 @@ let classifyFailures () : Async<unit> =
         |> Array.filter (fun l -> l <> "" && not (l.StartsWith "#"))
         |> Array.toList
     for (number, (tier, failure, reproduce)) in List.indexed chosen do
+      // The longest matching name wins. A generic prefix such as "Integration (host)" matches every host case;
+      // taking the first match reran the whole tier three times and left classification running for an hour.
       let suite =
         sequencedSuites
-        |> List.tryFind (fun s -> failure.Name.Contains(s, StringComparison.Ordinal))
+        |> List.filter (fun s -> failure.Name.Contains(s, StringComparison.Ordinal))
+        |> List.sortByDescending String.length
+        |> List.tryHead
       let command =
         match suite with
         | Some s ->
