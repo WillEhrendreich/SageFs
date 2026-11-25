@@ -22,11 +22,16 @@ namespace SageFs.Tests
 /// A `let`, not `[<Literal>]`: a TimeSpan is not a valid literal.
 module LiveTestingBudgets =
 
-  /// How long a queued live-testing run gets to reach a settled state.
-  let baselineRun : System.TimeSpan = System.TimeSpan.FromSeconds 60.0
+  /// How long a queued live-testing run gets to reach a settled state. A share of the one pass
+  /// deadline: the run ends the wait itself, so a fixed clock only decides which loaded pass fails.
+  let baselineRun : System.TimeSpan =
+    LoadBudget.ensureDeadline ()
+    LoadBudget.share 0.03
 
-  /// How long a daemon gets to publish a ready session.
-  let sessionReady : System.TimeSpan = System.TimeSpan.FromSeconds 60.0
+  /// How long a daemon gets to publish a ready session. Same single deadline.
+  let sessionReady : System.TimeSpan =
+    LoadBudget.ensureDeadline ()
+    LoadBudget.share 0.03
 
   /// How often a wait re-reads the status it is waiting on. Derived rather
   /// than repeated, so a polling loop and its budget cannot disagree.

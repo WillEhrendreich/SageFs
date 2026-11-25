@@ -47,18 +47,18 @@ module TestTimeouts =
   /// Ceiling on a wait that crosses a real process or a real server (a spawned host exiting, a
   /// request through a started web host, a daemon failing a bad bind). A cold start on a loaded
   /// runner takes seconds, so this is generous.
-  let patience = secs 20.
+  let patience = eventBudget 0.02
   /// How long to wait between attempts at taking the cross-process build lock in AppRunnerTests.
   /// A retry interval, not a budget: the build lock is held by whichever shard is building, and
   /// 250ms is short enough that the wait costs a shard little and long enough not to spin.
   let buildLockRetry = ms 250.
   /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
   /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
-  let bigAssemblyDelta = secs 120.
+  let bigAssemblyDelta = eventBudget 0.05
   /// Ceiling on a child process that runs one scenario of this assembly to its end (SandboxChild). It is never a measure of how
   /// long the scenario takes: a cold start of the 30 MB assembly takes seconds, a machine at a load average of 70 takes a
   /// minute, and a child that reaches the ceiling has hung. The wait is the process ending, which costs a passing run nothing.
-  let childScenarioCeiling = secs 240.
+  let childScenarioCeiling = eventBudget 0.06
   /// How long a test's pretend sandbox call may hold the thread pool's limits before the guard lets them go on its own. The test
   /// waits for the guard to say it did (an event), so the value only has to be small; it is never a deadline on anything.
   let abandonedHoldCeiling = ms 50.
@@ -77,7 +77,7 @@ module TestTimeouts =
   /// starved thread pool on a loaded machine (a load average past 40 happens here) stretches a
   /// "few milliseconds" turn well past the 5 s this used to be. Never use it as the length of a
   /// wait that is meant to elapse; that is what the settles below are for.
-  let patienceBrief = secs 20.
+  let patienceBrief = eventBudget 0.02
   /// How long a case that repeats an action until an event follows (a save made again until the watcher
   /// reports it) waits for the event after each attempt before it acts again. Longer than the
   /// watcher's own debounce, so an attempt's event has time to arrive before the next attempt can reset it.
@@ -150,11 +150,11 @@ module TestTimeouts =
   /// How long the kernel test waits for the kernel's own ZMQ sockets to
   /// accept a connection. The kernel binds them when it starts, so this is
   /// how long that takes on a cold process.
-  let jupyterKernelBind = secs 60.
+  let jupyterKernelBind = eventBudget 0.03
   /// How long the kernel test waits for the answer to an execution. The
   /// daemon has no session for the working directory yet, so the kernel
   /// creates one, and a cold session takes seconds to warm up.
-  let jupyterKernelExec = secs 120.
+  let jupyterKernelExec = eventBudget 0.05
   /// How long the kernel test waits for the IOPub subscription to be
   /// registered before it sends the request — a PUB socket drops a
   /// broadcast a late subscriber never sees.
@@ -187,7 +187,7 @@ module TestTimeouts =
     LoadBudget.ensureDeadline ()
     LoadBudget.share 0.05
   /// How long a test listens to an SSE stream for the event it triggered.
-  let sseListen = secs 15.
+  let sseListen = eventBudget 0.02
 
   // Budgets for a whole wait that ends when something becomes ready.
 
@@ -207,7 +207,7 @@ module TestTimeouts =
   /// it. Holding waits for the host to reach the test, and releasing waits for the test to
   /// finish, so both outlast an ordinary request. The daemon gives up at its own window
   /// (`SageFs.Timeouts.debugHold`), so the request waits a little past it.
-  let debugHoldRequest = SageFs.Timeouts.debugHold + secs 30.
+  let debugHoldRequest = SageFs.Timeouts.debugHold + eventBudget 0.02
   /// Ceiling on a DEBUGGER attaching to the process the daemon holds a test in. The attach has to
   /// land inside the daemon's own hold window, because that window is when the test can still be
   /// caught, and the window scales with the machine. A passing run never waits it out.
@@ -245,19 +245,19 @@ module TestTimeouts =
   /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
   /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
   /// session) are a generous multiple of it.
-  let daemonResumeCeiling = secs 150.
+  let daemonResumeCeiling = eventBudget 0.05
   /// A save verdict after 160,000 stack walks: the tiered reflection reads make this slower than
   /// a quiet app needs.
   let heavyVerdictBudget = eventBudget 0.10
   /// A real-git-backed landing reaching a terminal state. Generous relative to `pollLanding`.
-  let landingBudget = secs 30.
+  let landingBudget = eventBudget 0.02
   /// The default window an idle daemon's memory is watched over. `SAGEFS_IDLE_RSS_SOAK_MINUTES`
   /// widens it on purpose.
   let idleRssWindow = secs 60.
   /// How often the idle daemon's memory is sampled, so a failure shows the shape of the growth.
   let idleRssSampleInterval = secs 15.
   /// A hot-reload host printing the port its worker listens on.
-  let workerPortReport = secs 120.
+  let workerPortReport = eventBudget 0.05
   /// A hot-reload host's session becoming Ready, including its first build. A fixed 180 s let one row's cold
   /// host time out under load 7.2 while every other row held; the wait ends the moment Ready appears, so
   /// draw it from the one pass deadline.
@@ -268,9 +268,9 @@ module TestTimeouts =
   /// how busy the machine is. A share of the same deadline, smaller than six full builds.
   let buildLockQueue = eventBudget 0.15
   /// The running app answering its first request.
-  let appFirstAnswer = secs 30.
+  let appFirstAnswer = eventBudget 0.02
   /// The worker reporting that a file is watched after watch-all.
-  let watchRegistered = secs 10.
+  let watchRegistered = eventBudget 0.02
   /// A hot-reload save reaching its first verdict. A generous multiple for the same reason as
   /// `liveTestingVerdictCeiling`: the gate shares the box with other CI, and a landing verdict read
   /// at 60s under load 8 failed a case that passed 3/3 alone. This is a correctness ceiling, not a
@@ -376,39 +376,39 @@ module TestTimeouts =
   /// The ceiling on a wait for something a loaded machine still does within a few
   /// seconds: a host starting or stopping, a child process dying, a call parking.
   /// Twenty seconds for the same reason as `patience`: it is a ceiling, and a passing run never reaches it.
-  let shortPatience = System.TimeSpan.FromSeconds 20.
+  let shortPatience = eventBudget 0.02
 
   /// The ceiling on an in-process event that normally lands in milliseconds (an outcome
   /// report, a timer firing, a callback, a file watcher callback, a status notification from a
   /// background task). Twenty seconds absorbs a starved thread pool at a load average of 40; a
   /// passing run never reaches it.
-  let briefPatience = System.TimeSpan.FromSeconds 20.
+  let briefPatience = eventBudget 0.02
 
   /// The ceiling on a real child process reaching a state that needs it to start up.
-  let processStartPatience = System.TimeSpan.FromSeconds 60.
+  let processStartPatience = eventBudget 0.03
 
   /// The client timeout for one ordinary HTTP request to a local host that is already up.
-  let requestPatience = System.TimeSpan.FromSeconds 30.
+  let requestPatience = eventBudget 0.02
   /// The ceiling on a switched dashboard panel's history re-rendering on a loaded machine. Named
   /// for what the wait actually is (SSE catch-up plus render) rather than borrowed from
   /// requestPatience, a single HTTP round trip. Note the re-attribution: the failure this was
   /// introduced alongside was later PROVEN to be stale build artifacts, not a slow render — nine
   /// consecutive green switch runs once the chain and the sample bins came from one build — so this
   /// ceiling stands as the right budget, not as a workaround that was needed.
-  let panelSwitchRender = System.TimeSpan.FromSeconds 90.
+  let panelSwitchRender = eventBudget 0.05
 
   /// The client timeout for a long-lived SSE read: the stream stays open for as long as
   /// the test reads it, so this bounds the first byte, not the whole stream.
-  let streamReadPatience = System.TimeSpan.FromSeconds 60.
+  let streamReadPatience = eventBudget 0.03
 
   /// How long a file write is retried when a just-killed process may still hold the file.
   let fileLockRetryPatience = System.TimeSpan.FromSeconds 15.
 
   /// The ceiling on `npm ci` for the VS Code extension: a cold install downloads the tree.
-  let npmInstallPatience = System.TimeSpan.FromMinutes 5.
+  let npmInstallPatience = eventBudget 0.08
 
   /// The ceiling on an `npm run compile*` of the VS Code extension (Fable plus tsc, cold).
-  let npmCompilePatience = System.TimeSpan.FromMinutes 10.
+  let npmCompilePatience = eventBudget 0.10
 
   // Poll intervals: the pause between two looks at a condition that has no event to wait on.
 
@@ -656,7 +656,7 @@ module TestTimeouts =
 
   /// The wait a `run_tests` call asks for when the fake engine answers at once, so the call
   /// returns when the engine does and never after the whole wait.
-  let runTestsWait = System.TimeSpan.FromSeconds 10.
+  let runTestsWait = eventBudget 0.02
 
   /// The wait a `run_tests` call asks for when the fake worker is silent for all of it. The
   /// call has to run out its wait to hand back a pending request id, so this is a delay the
@@ -665,7 +665,7 @@ module TestTimeouts =
 
   /// One MCP tool call that does no build and no restart. The daemon answers in milliseconds
   /// once a session is Ready, so reaching this means the call is stuck.
-  let toolCall = System.TimeSpan.FromSeconds 30.
+  let toolCall = eventBudget 0.02
 
   /// How long a `get_session_status` or `run_tests` call asks the daemon to hold it open for a
   /// warming session or a running test run. It is the daemon's own cap on that wait, so asking for
@@ -675,7 +675,7 @@ module TestTimeouts =
   /// Slack added to a product bound when a test waits on a call that product bound limits.
   /// It covers the thread-pool and scheduling noise between the product giving up and the
   /// test seeing the answer.
-  let boundSlack = System.TimeSpan.FromSeconds 30.
+  let boundSlack = eventBudget 0.02
 
   /// One MCP tool call that may restart the session first (run_app moves an Interactive
   /// session into HotReload, hard_reset_fsi_session respawns the worker). Both are bounded by
@@ -684,7 +684,7 @@ module TestTimeouts =
 
   /// One request from a test HTTP client to a daemon under load, where the daemon may be busy
   /// warming a session. Past this the request is stuck, not slow.
-  let daemonRequest = System.TimeSpan.FromSeconds 60.
+  let daemonRequest = eventBudget 0.03
 
   /// One probe of the dashboard inside a poll loop. Short because the loop retries; a probe
   /// that hangs for longer only delays the next one.
@@ -692,7 +692,7 @@ module TestTimeouts =
 
   /// The first line a spawned daemon writes to stdout. It needs real warmup time (ASP.NET Core
   /// startup), so this is generous; the read ends as soon as the line arrives.
-  let daemonFirstOutput = System.TimeSpan.FromSeconds 90.
+  let daemonFirstOutput = eventBudget 0.05
 
   /// A session on a small project reaching Ready after create, with build output already on disk.
   let sessionReady = System.TimeSpan.FromSeconds 60.
@@ -700,7 +700,7 @@ module TestTimeouts =
   /// A session coming back Ready after a worker respawn, or holding its project once Ready.
   /// Both are bounded by `SageFs.Timeouts.warmupReadyPollMax` on the product side, so a faulted
   /// session reports before this runs out.
-  let sessionBackAfterRestart = System.TimeSpan.FromSeconds 90.
+  let sessionBackAfterRestart = eventBudget 0.05
 
   /// A session reaching Ready when the create also builds the project cold (restore and compile).
   /// 240 s was enough for one shard alone and not for five at once: in the 2026-10-18 local gate the Dogfood REPL
@@ -709,10 +709,10 @@ module TestTimeouts =
   /// up in about 2 s each time and the three cases passed alone in about 2 minutes, so the wait was a slow build,
   /// not a hang. The product bound on a session start is `SageFs.Timeouts.warmupReadyPollMax`; this only has to
   /// outlast a cold build on a busy box.
-  let sessionReadyColdBuild = System.TimeSpan.FromSeconds 600.
+  let sessionReadyColdBuild = eventBudget 0.08
 
   /// A multi-target sample reaching Ready or Faulted after create, built cold for each target.
-  let multiTargetSettle = System.TimeSpan.FromSeconds 180.
+  let multiTargetSettle = eventBudget 0.05
 
   /// How many seconds one `get_session_status` call holds the request open for a warming session.
   /// The tool clamps anything above its own ceiling (60), so a longer wait is a loop of these.
@@ -731,7 +731,7 @@ module TestTimeouts =
   /// How long the tool layer's read caches (list_tests, coverage_intel, and the narrative
   /// cache behind explain_test_failure and diagnose) may lag a state change the status endpoint
   /// already confirmed. Waits poll and end early.
-  let toolCacheCatchUp = System.TimeSpan.FromSeconds 15.
+  let toolCacheCatchUp = eventBudget 0.02
 
   // ---- half B ----
   // Files L to Z. The same rules as above: named for what the wait or the input is FOR, and a
@@ -817,25 +817,25 @@ module TestTimeouts =
   // A real VS Code window, driven over its debug port.
 
   /// The editor's debug port answering after launch.
-  let editorPortReady = secs 30.
+  let editorPortReady = eventBudget 0.02
   /// The editor's debug port released after the old instance was killed, before the next launch
   /// reuses it.
   let editorPortReleased = secs 10.
   /// The quick-input palette appearing or closing after the keystroke that toggles it.
-  let paletteToggle = secs 5.
+  let paletteToggle = eventBudget 0.02
   /// The palette closing when a close was already asked for and only the render is left.
   let paletteClosedAlready = secs 2.
   /// A panel's text (the output channel) showing up once the panel has rendered.
-  let panelRenders = secs 10.
+  let panelRenders = eventBudget 0.02
   /// Quick Open listing a project file. Indexing is asynchronous and a cold window is slow.
-  let quickOpenIndexes = secs 15.
+  let quickOpenIndexes = eventBudget 0.02
   /// The time the quick-input's fuzzy matcher needs to settle on the typed text. It cannot be
   /// polled: any page evaluation there steals focus from the quick-input, so the Enter that
   /// follows lands on the editor and the command silently never runs.
   let matcherSettle = ms 800.
   /// A daemon started for a VS Code journey on a real project reaching a Ready session on a cold
   /// CI runner (restore, build, warmup).
-  let vscodeSessionReady = secs 300.
+  let vscodeSessionReady = eventBudget 0.08
 
   // A floor a test holds the product to.
 
@@ -863,10 +863,10 @@ module TestTimeouts =
   /// just killed, finishing and being gone. A cold runner takes seconds and a machine at a load
   /// average of 40 takes more, so this is the long event bound: the wait ends when the process
   /// does, and a passing run never reaches it.
-  let childExit = secs 20.
+  let childExit = eventBudget 0.01
   /// A helper or a killed process tree that takes real work to finish or tear down: a daemon with
   /// its workers, a hot reload app host, a git checkout.
-  let childExitSlow = secs 30.
+  let childExitSlow = eventBudget 0.02
   /// A hard-killed daemon's workers and FSI hosts being gone. Nothing tells them: each notices on its own, the
   /// worker by its owner monitor's next poll (`monitorNotice`), then tears down (`childExitSlow`), and the FSI
   /// host follows when the worker's pipe closes. The wait ends when the last one is gone, so a passing run never
@@ -904,7 +904,7 @@ module TestTimeouts =
 
   /// The ceiling on a daemon's memory settling back to within tolerance of its baseline after the
   /// sessions that grew it are stopped.
-  let rssSettleBudget = secs 30.
+  let rssSettleBudget = eventBudget 0.02
   /// How long a test effect holds itself in flight, so every effect of a burst is running at once
   /// and only the concurrency cap can limit them.
   let effectInFlightHold = ms 50.

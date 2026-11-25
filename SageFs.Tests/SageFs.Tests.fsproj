@@ -8,9 +8,9 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <Compile Include="LiveTestingBudgets.fs" />
-        <!-- LoadBudget before TestTimeouts: the named waits derive their ceiling from the one pass deadline. -->
+        <!-- LoadBudget first: every named wait derives its ceiling from the one pass deadline. -->
         <Compile Include="LoadBudget.fs" />
+        <Compile Include="LiveTestingBudgets.fs" />
         <Compile Include="TestTimeouts.fs" />
         <Compile Include="CompletionFixtures.fs" />
         <Compile Include="CasePhases.fs" />
