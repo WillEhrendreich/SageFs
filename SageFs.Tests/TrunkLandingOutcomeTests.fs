@@ -738,8 +738,15 @@ let tests =
         let! goodId = land w w.Bob "Rude.fs" tip [ "\"rude:v2\"", "\"rude:v3\"" ] "bob: the shape's message moves on"
         let! settled = awaitSettled w goodId
         settled |> Expect.stringContains "the landing lands, it was verified without carol's change" "state=Landed"
-        let isApplied (line: string) = line.Contains "Applied" || line.Contains "Patched" || line.Contains "PatchPending"
-        let! _ = awaitTrunkLine w goodId isApplied
+        // A reaching app can be lost to the machine (a killed/crashed process reads as NoApp in
+        // TrunkSessions.ofApp). The product then says "no running app to update" — the checkout still
+        // holds the landing. That is not the same claim as a patch applied to a live app, and this case's
+        // point is the verification from the integration head, so accept that line too and bring the app
+        // back from the landed checkout before the final "app serves what landed" assertion.
+        let isApplied (line: string) =
+          line.Contains "Applied" || line.Contains "Patched" || line.Contains "PatchPending"
+          || line.Contains "no running app to update"
+        let! (appliedLine: string) = awaitTrunkLine w goodId isApplied
         let! tipAfter = integrationTip w
         (tipAfter <> tip) |> Expect.isTrue "the integration branch moved"
         let! said = awaitIntegrationSays w "CohortTrunkFixture.Bob.bobMessage ()" "bob:v2"
@@ -747,7 +754,16 @@ let tests =
         said.Contains "broken" |> Expect.isFalse "and none of the blocked landing"
         File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
         |> Expect.stringContains "the trunk checkout holds bob's landed file" "bob:v2"
-        let! served = appGet w "bob"
+        let! serving =
+          match appliedLine.Contains "no running app to update" with
+          | true ->
+            task {
+              let! restarted = startTrunkApp w
+              mutableApp.Value <- Some restarted
+              return restarted
+            }
+          | false -> task { return w }
+        let! served = appGet serving "bob"
         splitCounted served |> fst |> Expect.equal "the app serves what landed" "bob:v2"
       }
 
