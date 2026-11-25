@@ -1205,8 +1205,14 @@ let caseHistoryFile : string option =
   | Store.At directory -> Some(Path.Combine(directory, CaseHistory.fileName))
   | Store.Disabled -> None
 
-/// How long one rerun of one case may take before it is called dead. The longest journeys take minutes.
-let caseRerunTimeout = TimeSpan.FromMinutes 15.0
+/// How long one rerun may take before it is called dead. A whole sequenced suite replayed under load
+/// 10+ outlasted a fixed 15 minutes and was killed before it reported, so the case came back
+/// "unclassified" and stayed red. Take a share of what is left of the pass deadline instead, with the
+/// old 15 minutes only as a floor. The ceiling still bounds a genuinely hung rerun.
+let caseRerunTimeout () =
+  let left = passDeadline - DateTimeOffset.UtcNow
+  let share = TimeSpan.FromTicks(int64 (float left.Ticks * 0.4))
+  if share < TimeSpan.FromMinutes 15.0 then TimeSpan.FromMinutes 15.0 else share
 
 /// Run `reproduce` (the command that runs this one case and nothing else) once, in this checkout, with its own data and
 /// temp directories and no trust ledger of its own, and read what it came to.
@@ -1227,7 +1233,7 @@ let rerunCaseOnce (tier: TierPlan.Tier) (reproduce: string) (caseNumber: int) (r
         "MSBUILDDISABLENODEREUSE", "1"
         "SAGEFS_TEST_PORT_RANGE", sprintf "%d-%d" portLo portHi ]
       @ tierRuntimeEnvironment
-    let! code = execToLog caseRerunTimeout rootDir env log [ "sh"; "-c"; reproduce ]
+    let! code = execToLog (caseRerunTimeout ()) rootDir env log [ "sh"; "-c"; reproduce ]
     let outcome = FlakeClassification.outcomeOf code (File.ReadAllLines log |> List.ofArray)
     for d in [ dataDir; tmpDir ] do
       try Directory.Delete(d, true) with _ -> ()
