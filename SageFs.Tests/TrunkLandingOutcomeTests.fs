@@ -367,45 +367,6 @@ let private bindingLineAt (w: World) (sha: string) (relPath: string) (binding: s
     | false -> return failwithf "%s at %s holds no line binding '%s'" relPath sha binding
   }
 
-/// Ask the trunk app until it answers. A landing can restart the app, and a loaded machine stretches that restart;
-/// one request is a point-in-time sample that fails on a port the app has not reopened yet. The retry is bounded, so a
-/// genuinely dead app still fails the case.
-let private appGet (w: World) (route: string) : Task<string> =
-  task {
-    let url = sprintf "%s/%s" (w.App.BaseAddress.ToString().TrimEnd('/')) route
-    let body = ref ""
-    let! answered =
-      TestInfrastructure.waitForAsync (int TestTimeouts.heavyVerdictBudget.TotalMilliseconds) (fun () -> task {
-        try
-          let! text = w.App.GetStringAsync url
-          body.Value <- text
-          return true
-        with :? HttpRequestException -> return false })
-    match answered with
-    | true -> return body.Value
-    | false -> return failwithf "the trunk app never answered %s" route
-  }
-
-/// Wait for the trunk's line about a landing while the app keeps being asked. A reload that no request enters is judged
-/// NeverEntered once its grace window passes, and that verdict is final, so a waiter that only reads status lets a loaded
-/// machine run the window out before the new body ever runs. Asking the app on every poll enters the body the moment the
-/// reload applies.
-let private awaitTrunkLineServing (w: World) (landingId: string) (routes: string list) (accept: string -> bool) : Task<string> =
-  task {
-    let last = ref ""
-    do!
-      waitFor TestTimeouts.saveVerdict (fun () -> sprintf "the trunk to report landing %s while the app served %A. Last status:\n%s" landingId routes last.Value) (fun () -> task {
-        for route in routes do
-          let! _ = appGet w route
-          ()
-        let! status = statusOf w
-        last.Value <- status
-        match trunkLine status landingId with
-        | Some line -> return accept line
-        | None -> return false })
-    return (trunkLine last.Value landingId).Value
-  }
-
 /// "alice:v3#5" -> ("alice:v3", 5): what a handler said and how many requests the process had served by then.
 let private splitCounted (served: string) : string * int =
   match served.LastIndexOf '#' with
@@ -576,6 +537,55 @@ let private appWorld () : Task<World> =
       let! started = startTrunkApp w
       mutableApp.Value <- Some started
       return started
+  }
+
+/// Ask the trunk app until it answers. A landing can restart the app, and a loaded machine stretches that restart;
+/// one request is a point-in-time sample that fails on a port the app has not reopened yet. The first wait is a short
+/// share of the pass deadline, so the poll only needs to catch the reopen. If the port stays silent, the app process was
+/// lost (a verification respawn kills the worker that held it) — start it again from the trunk checkout and try once more.
+/// A genuinely dead app still fails the case; the point is not to hand a stale port eighteen minutes.
+let private appGet (w: World) (route: string) : Task<string> =
+  let ask (world: World) = task {
+    let url = sprintf "%s/%s" (world.App.BaseAddress.ToString().TrimEnd('/')) route
+    let body = ref ""
+    let! answered =
+      TestInfrastructure.waitForAsync (int TestTimeouts.appProbeWindow.TotalMilliseconds) (fun () -> task {
+        try
+          let! text = world.App.GetStringAsync url
+          body.Value <- text
+          return true
+        with :? HttpRequestException -> return false })
+    return if answered then Some body.Value else None
+  }
+  task {
+    match! ask w with
+    | Some body -> return body
+    | None ->
+      let! restarted = startTrunkApp w
+      mutableApp.Value <- Some restarted
+      match! ask restarted with
+      | Some body -> return body
+      | None -> return failwithf "the trunk app never answered %s" route
+  }
+
+/// Wait for the trunk's line about a landing while the app keeps being asked. A reload that no request enters is judged
+/// NeverEntered once its grace window passes, and that verdict is final, so a waiter that only reads status lets a loaded
+/// machine run the window out before the new body ever runs. Asking the app on every poll enters the body the moment the
+/// reload applies.
+let private awaitTrunkLineServing (w: World) (landingId: string) (routes: string list) (accept: string -> bool) : Task<string> =
+  task {
+    let last = ref ""
+    do!
+      waitFor TestTimeouts.saveVerdict (fun () -> sprintf "the trunk to report landing %s while the app served %A. Last status:\n%s" landingId routes last.Value) (fun () -> task {
+        for route in routes do
+          let! _ = appGet w route
+          ()
+        let! status = statusOf w
+        last.Value <- status
+        match trunkLine status landingId with
+        | Some line -> return accept line
+        | None -> return false })
+    return (trunkLine last.Value landingId).Value
   }
 
 [<Tests>]
