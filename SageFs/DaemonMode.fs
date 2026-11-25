@@ -2895,7 +2895,7 @@ let run
               Log.warn "[cohort-landing] the respawned integration session reported no build to bind the head over — failing closed"
               return Error "the integration session could not be brought to the head — resubmit"
             | true ->
-              let! outcome = evalIntegrationFiles sessionId (staleFiles |> List.map fst)
+              let! outcome = evalIntegrationFiles sessionId (snapshot |> List.map fst) // RespawnOnly keeps the old build; the blob record names the old worker, so rebind every source, not just staleFiles (a landed file still holds bob:v1)
               match outcome with
               | Error reason -> return Error reason
               | Ok () ->
