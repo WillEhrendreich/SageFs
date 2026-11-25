@@ -111,12 +111,31 @@ let private move (deps: TrunkShellDeps) (landing: LandedLanding) : Async<TrunkMo
   }
 
 let private deliver (deps: TrunkShellDeps) (session: string) (files: SavedFile list) : Async<SessionOutcome> =
+  // A transport error while asking the worker is transient: a busy daemon can drop one request, and recording
+  // that as the landing's permanent answer leaves the checkout landed but the running app never told. Retry the
+  // same ask (same reply id, so a worker that deduplicates can) before giving up. A worker that REFUSES answers
+  // Result.Error and is never retried — only the transport is.
+  let replyId = deps.NewReplyId ()
+  let rec ask (attempt: int) = async {
+    try
+      let! answer = deps.Ask session (WorkerProtocol.WorkerMessage.ApplySaves (files, replyId))
+      return Some answer
+    with
+    | :? System.Net.Http.HttpRequestException
+    | :? System.IO.IOException
+    | :? System.AggregateException ->
+      if attempt < 3 then
+        do! Async.Sleep (int Timeouts.restartBaseBackoff.TotalMilliseconds * (attempt + 1))
+        return! ask (attempt + 1)
+      else
+        return None
+  }
   async {
-    let! answer = deps.Ask session (WorkerProtocol.WorkerMessage.ApplySaves (files, deps.NewReplyId ()))
-    match answer with
-    | Result.Ok (WorkerProtocol.WorkerResponse.SavesApplied (_, outcome)) -> return outcome
-    | Result.Ok other -> return SessionOutcome.Unreachable (sprintf "the worker answered %A to the saves" other)
-    | Result.Error err -> return SessionOutcome.Unreachable (SageFsError.describe err)
+    match! ask 0 with
+    | None -> return SessionOutcome.Unreachable "the worker did not answer the saves after retries"
+    | Some (Result.Ok (WorkerProtocol.WorkerResponse.SavesApplied (_, outcome))) -> return outcome
+    | Some (Result.Ok other) -> return SessionOutcome.Unreachable (sprintf "the worker answered %A to the saves" other)
+    | Some (Result.Error err) -> return SessionOutcome.Unreachable (SageFsError.describe err)
   }
 
 /// The performer the trunk owner runs.
