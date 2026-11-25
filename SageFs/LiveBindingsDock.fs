@@ -1109,8 +1109,8 @@ let renderDockWithRemedy
   let shell (children: XmlNode list) = Elem.div [ Attr.id DockIds.Dock; Attr.class' "live-dock" ] children
 
   // Splitter between the two panes. It writes the live-bindings pane's share of the dock, so each pane
-  // gets its own size instead of one height for the pair. Vertical drag when stacked, horizontal when
-  // app output sits beside the transcript.
+  // gets its own size instead of one height for the pair. The panes stay stacked in both layouts — moving
+  // app output beside the transcript moves the whole dock — so the drag is vertical always.
   let paneSplitter =
     Elem.div [
       Attr.id PaneResize
@@ -1120,7 +1120,7 @@ let renderDockWithRemedy
       Ds.onEvent ("pointerdown", "event.preventDefault(); $paneResizing = true; event.target.setPointerCapture(event.pointerId)")
       Sink.onEvent (
         DomEvent.PointerMove,
-        sprintf "if(!$paneResizing)return; var d=document.getElementById('live-dock'); if(!d)return; var r=d.getBoundingClientRect(); var side=document.querySelector('.main-area')?.getAttribute('data-pane-layout')==='side'; var p=side?(event.clientX-r.left)/r.width:(event.clientY-r.top)/r.height; $%s=Math.max(64,Math.min(Math.round((side?r.width:r.height)*0.8),Math.round((side?r.width:r.height)*p)))+'px'" PaneSplit
+        sprintf "if(!$paneResizing)return; var d=document.getElementById('live-dock'); if(!d)return; var r=d.getBoundingClientRect(); $%s=Math.max(64,Math.min(Math.round(r.height*0.8),Math.round(event.clientY-r.top)))+'px'" PaneSplit
       )
       Sink.onEvent (
         DomEvent.PointerUp,

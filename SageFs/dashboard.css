@@ -342,11 +342,7 @@ h2 {
   border-left: 1px solid var(--border-normal);
 }
 
-.main-area[data-pane-layout="side"] .pane-resize {
-  width: 4px;
-  height: auto;
-  cursor: col-resize;
-}
+/* The two panes stay stacked inside the right column, so the splitter keeps its horizontal grab. */
 
 /* ── Panels ───────────────────────────────────────────────────── */
 
