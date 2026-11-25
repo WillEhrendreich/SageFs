@@ -72,6 +72,22 @@ let tests =
       decideNow busy afterRamp (scheduleWith below (AdmittedAt 0.0))
       |> Expect.equal "still admitted" (Admit Fits)
 
+    testCase "WHY — external CPU pressure holds an Exclusive tier with none of ours running, because its premise is a quiet machine" <| fun _ ->
+      let busy = { calm with Pressure = Measured Admission.cpuPressureBound }
+      let schedule = { scheduleWith [] (AdmittedAt 0.0) with Waiting = [ measuringHead ] }
+      match decide (ByPressure limits) busy 0.0 schedule measuringHead with
+      | Wait (CpuBusy (percent, bound)) ->
+        percent |> Expect.equal "names the reading" Admission.cpuPressureBound
+        bound |> Expect.equal "names the bound" Admission.cpuPressureBound
+      | other -> failtestf "expected CpuBusy, got %A" other
+
+    testCase "WHY — an Exclusive tier held by external pressure still starts after its patience, and the guard says so" <| fun _ ->
+      let busy = { calm with Pressure = Measured 95.0 }
+      let schedule = { scheduleWith [] (AdmittedAt 0.0) with Waiting = [ measuringHead ] }
+      let late = max Admission.patienceSeconds Admission.exclusiveMemoryPatienceSeconds + 1.0
+      decide (ByPressure limits) busy late schedule measuringHead
+      |> Expect.equal "the guard admits on patience" (Admit StarvationGuard)
+
     testCase "WHY — memory must cover the reserve plus the unit's own peak" <| fun _ ->
       let needed = Admission.memoryReserveBytes + head.PeakBytes
       let short = { calm with Memory = AvailableBytes (needed - 1L) }

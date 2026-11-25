@@ -540,10 +540,9 @@ let private appWorld () : Task<World> =
   }
 
 /// Ask the trunk app until it answers. A landing can restart the app, and a loaded machine stretches that restart;
-/// one request is a point-in-time sample that fails on a port the app has not reopened yet. The first wait is a short
-/// share of the pass deadline, so the poll only needs to catch the reopen. If the port stays silent, the app process was
-/// lost (a verification respawn kills the worker that held it) — start it again from the trunk checkout and try once more.
-/// A genuinely dead app still fails the case; the point is not to hand a stale port eighteen minutes.
+/// one request is a point-in-time sample that fails on a port the app has not reopened yet. This is a PROBE only:
+/// it waits out a slow restart, then reports failure. Restarting the app inside a poll kills the worker and
+/// makes the next poll fail too — a lost app is restored deliberately in the one case whose trunk line says so.
 let private appGet (w: World) (route: string) : Task<string> =
   // A probe only. It must never restart the session: appGet runs on every poll of
   // awaitTrunkLineServing, so a restart here kills the worker and the app, the next probe fails, and

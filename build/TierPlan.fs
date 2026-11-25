@@ -569,13 +569,30 @@ let decide (policy: Policy) (reading: Reading) (now: float) (schedule: Schedule)
           match running > 0 && sinceLast < limits.SettleSeconds with
           | true -> Wait (Settling (limits.SettleSeconds - sinceLast))
           | false ->
+            // An Exclusive tier always runs alone, so `PressureFloorUnits` (three of OURS) never held for it:
+            // external load alone let it start into the contention that kills its workers and its wall-clock
+            // claims. Its premise is "the machine to myself", so external CPU pressure holds it too.
+            let needsQuietMachine =
+              match head.Demand with
+              | Exclusive _ -> true
+              | Ordinary -> false
             let busy =
               match reading.Pressure with
-              | Measured percent when running >= limits.PressureFloorUnits && percent >= limits.CpuPressureBound -> Some percent
+              | Measured percent
+                when (running >= limits.PressureFloorUnits || needsQuietMachine)
+                     && percent >= limits.CpuPressureBound -> Some percent
               | Measured _
               | NotMeasured _ -> None
             match busy, reading.Memory with
-            | Some percent, _ -> Wait (CpuBusy (percent, limits.CpuPressureBound))
+            | Some percent, _ ->
+              // Bounded patience: a permanently busy runner must still make progress, and the guard's line
+              // says it admitted into pressure instead of pretending the machine was calm.
+              let patience =
+                match head.Demand with
+                | Exclusive _ -> max limits.PatienceSeconds limits.ExclusiveMemoryPatienceSeconds
+                | Ordinary -> limits.PatienceSeconds
+              if running = 0 && now - schedule.HeadSince >= patience then Admit StarvationGuard
+              else Wait (CpuBusy (percent, limits.CpuPressureBound))
             | None, Unreadable _ -> Admit Fits
             | None, AvailableBytes available ->
               let needed = limits.MemoryReserveBytes + head.PeakBytes + unramped limits now schedule.Running
