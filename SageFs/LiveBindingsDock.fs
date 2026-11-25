@@ -1000,7 +1000,11 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     [ PaneSentence
       OpenBecause.text because
       stamp
-      if replOnlyCount > 0 then LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.NotInAnyFile replOnlyCount) else "" ]
+      if replOnlyCount > 0 then
+        sprintf "%s — %s"
+          (LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.NotInAnyFile replOnlyCount))
+          (describe (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)).Detail
+      else "" ]
     |> String.concat "\n"
   Elem.div (Attr.id paneId :: followPin display "panel live-pane") [
    // Everything above the tree, in one box that is never more than a share of the dock (`DockCompaction.ChromeSharePercent`) and scrolls

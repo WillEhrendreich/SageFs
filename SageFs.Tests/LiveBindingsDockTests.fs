@@ -163,11 +163,11 @@ let dockTreeTests =
           Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited; Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
       let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
-      html |> Expect.stringContains "the count, in the bar, in words that say what it counts" (PaneNote.text (PaneNote.NotInAnyFile 2))
-      html |> Expect.stringContains "the chip's own test id" "data-testid=\"live-repl-only\""
+      html |> Expect.stringContains "the count, in the title's tooltip, in words that say what it counts" (PaneNote.text (PaneNote.NotInAnyFile 2))
       html |> Expect.stringContains "the reason on hover" "nothing to save it to"
-      count "Bound in the REPL" html |> Expect.equal "the sentence appears once, in the chip, and not on each row" 1
-      (dock (WalkedBindings(view [ person; scores ]))).Contains "live-repl-only" |> Expect.isFalse "no chip when the files were not asked about"
+      count "Bound in the REPL" html |> Expect.equal "the sentence appears once, in the tooltip, and not on each row" 1
+      html.Contains "live-repl-only" |> Expect.isFalse "no chip in the bar"
+      (dock (WalkedBindings(view [ person; scores ]))).Contains (PaneNote.text (PaneNote.NotInAnyFile 2)) |> Expect.isFalse "no count when the files were not asked about"
 
     testCase "WHY — the chip says what it counts: bindings no file defines, and never the word REPL a new user has not met" <| fun _ ->
       for count in [ 1; 2; 30 ] do
@@ -591,20 +591,22 @@ let dockWordingTests =
 
     testCase "WHY — the pane's one line under its title says where an edit goes, and a list with an editable row adds no standing caption of its own to the header" <| fun _ ->
       let editable = dockWith withKnob ValueWalk.standard On [ person ]
-      editable |> Expect.stringContains "the line under the title is there, under its own test id" "data-testid=\"live-pane-sub\""
-      editable |> Expect.stringContains "it says the file changes now" "Edit one: the file changes now"
+      // The explanation is on the title's tooltip now: one attribute instead of a standing row over the values.
+      editable |> Expect.stringContains "the title's tooltip says where an edit goes" "Edit one: the file changes now"
       editable |> Expect.stringContains "and that the row says how the session catches up" "the row says how the session catches up"
+      editable.Contains "data-testid=\"live-pane-sub\"" |> Expect.isFalse "no caption row under the title"
       editable.Contains "live-writes-caption" |> Expect.isFalse "no change is pending, so the header has no caption"
       editable.Contains "live-writes-banner" |> Expect.isFalse "and no banner"
       editable.Contains (PaneNote.text PaneNote.ChangesGoToTheFile) |> Expect.isFalse "the standing sentence is not drawn"
-      (dockWith TweakView.none ValueWalk.standard On [ person ]) |> Expect.stringContains "the line under the title is there with no editable row too" "data-testid=\"live-pane-sub\""
+      (dockWith TweakView.none ValueWalk.standard On [ person ]) |> Expect.stringContains "the tooltip is there with no editable row too" "Edit one: the file changes now"
       TweakView.hasKnob withKnob |> Expect.isTrue "the pure fact: this list has an editable row"
       TweakView.hasKnob TweakView.none |> Expect.isFalse "no rows, no knob"
 
-    testCase "WHY — the line under the title has a one-line form for a phone, because at 400px the full sentence took three lines of the first screen before the first binding" <| fun _ ->
+    testCase "WHY — the explanation is one tooltip attribute, not a row of its own that a phone has to shorten" <| fun _ ->
       let html = dockWith withKnob ValueWalk.standard On [ person ]
-      html |> Expect.stringContains "the short form says where an edit goes" "class=\"pane-sub-short\">Edit a value: the file changes now."
-      html |> Expect.stringContains "the long form is still there for a wide pane" "class=\"pane-sub-long\">The values in this session."
+      html |> Expect.stringContains "the full sentence is on the title" "Edit one: the file changes now, and the row says how the session catches up."
+      html.Contains "pane-sub-short" |> Expect.isFalse "no phone-only short form to maintain"
+      html.Contains "pane-sub-long" |> Expect.isFalse "no wide-only long form to maintain"
 
     testCase "WHY — when nothing watches the files the rows are in and nothing is pending, the header says nothing about it, and a row nobody has written says nothing: the sentence under every row was noise" <| fun _ ->
       // Seen in a real browser once hot reload was left off (the usual state in a REPL session): after one nudge every row in the file
@@ -615,7 +617,7 @@ let dockWordingTests =
       let html = dockWith unwatched ValueWalk.standard On [ person ]
       html.Contains said |> Expect.isFalse "no standing caption names the consequence"
       html.Contains "live-writes-caption" |> Expect.isFalse "the header draws no caption while nothing is pending"
-      html |> Expect.stringContains "the line under the title is still there" "data-testid=\"live-pane-sub\""
+      html |> Expect.stringContains "the general rule is still on the title's tooltip" "Edit one: the file changes now"
       html.Contains "tweak-watching" |> Expect.isFalse "and no unwritten row repeats the sentence"
       TweakView.anyUnwatched unwatched |> Expect.isTrue "the pure fact: nothing watches these files"
       TweakView.anyUnwatched withKnob |> Expect.isFalse "a watched one has none"
