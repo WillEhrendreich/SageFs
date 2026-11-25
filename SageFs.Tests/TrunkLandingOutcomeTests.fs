@@ -545,27 +545,23 @@ let private appWorld () : Task<World> =
 /// lost (a verification respawn kills the worker that held it) — start it again from the trunk checkout and try once more.
 /// A genuinely dead app still fails the case; the point is not to hand a stale port eighteen minutes.
 let private appGet (w: World) (route: string) : Task<string> =
-  let ask (world: World) = task {
-    let url = sprintf "%s/%s" (world.App.BaseAddress.ToString().TrimEnd('/')) route
+  // A probe only. It must never restart the session: appGet runs on every poll of
+  // awaitTrunkLineServing, so a restart here kills the worker and the app, the next probe fails, and
+  // the test rebuilds the session over and over until the case times out. Bring the app back once, at
+  // a deliberate point in the case, when the trunk line actually says there is no app.
+  task {
+    let url = sprintf "%s/%s" (w.App.BaseAddress.ToString().TrimEnd('/')) route
     let body = ref ""
     let! answered =
-      TestInfrastructure.waitForAsync (int TestTimeouts.appProbeWindow.TotalMilliseconds) (fun () -> task {
+      TestInfrastructure.waitForAsync (int TestTimeouts.heavyVerdictBudget.TotalMilliseconds) (fun () -> task {
         try
-          let! text = world.App.GetStringAsync url
+          let! text = w.App.GetStringAsync url
           body.Value <- text
           return true
         with :? HttpRequestException -> return false })
-    return if answered then Some body.Value else None
-  }
-  task {
-    match! ask w with
-    | Some body -> return body
-    | None ->
-      let! restarted = startTrunkApp w
-      mutableApp.Value <- Some restarted
-      match! ask restarted with
-      | Some body -> return body
-      | None -> return failwithf "the trunk app never answered %s" route
+    match answered with
+    | true -> return body.Value
+    | false -> return failwithf "the trunk app never answered %s" route
   }
 
 /// Wait for the trunk's line about a landing while the app keeps being asked. A reload that no request enters is judged

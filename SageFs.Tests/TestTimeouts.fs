@@ -186,9 +186,6 @@ module TestTimeouts =
   let httpDaemon =
     LoadBudget.ensureDeadline ()
     LoadBudget.share 0.05
-  /// A short window for one probe to a local app before treating its port as lost. Long enough for a
-  /// local answer, short enough that a dead port is not mistaken for a slow restart.
-  let appProbeWindow = eventBudget 0.005
   /// How long a test listens to an SSE stream for the event it triggered.
   let sseListen = secs 15.
 
