@@ -871,18 +871,18 @@ let changesStripViewTests =
         items |> List.forall (fun item -> item.Kind = ChangesStrip.BatchKind.token ChangesStrip.BatchKind.Save) |> Expect.isTrue "all saves"
       | Error fault -> failtestf "the batch did not read back: %s (%s)" (JsonError.describe fault) json
 
-    testCase "WHY — the pane has a tab bar of All, Pinned and Changes, the open one marked in the markup, each with how many it lists" <| fun _ ->
+    testCase "WHY — the pane has ONE picker for the tabs, each option with how many it lists" <| fun _ ->
       let rows = tweaks [ tweakOf "gravity" "9.5" ]
       let html =
         Dock.renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None rows DockPanes.SessionInView "abcd1234"
           (Dock.WalkedBindings(paneView [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.5" []; binding "speed" LiveValueTree.NodeKind.Leaf "3" [] ])) None
         |> decoded
+      html |> Expect.stringContains "one picker, not five buttons" "data-testid=\"live-tabs\""
       for tab in SageFs.WatchTab.all do
-        html |> Expect.stringContains "a button for the tab" (sprintf "data-testid=\"live-tab-%s\"" (SageFs.WatchTab.token tab))
-      attrsOfTestId "live-tab-all" html |> Expect.stringContains "All starts open, said in the markup" "aria-pressed=\"true\""
-      attrsOfTestId "live-tab-changes" html |> Expect.stringContains "a tab sets the signal" "$liveTab = 'changes'"
-      wordsOfTestId "live-tab-count-all" html |> Expect.equal "two bindings" (Some "2")
-      wordsOfTestId "live-tab-count-changes" html |> Expect.equal "one holds a change" (Some "1")
+        html |> Expect.stringContains "an option for the tab" (sprintf "value=\"%s\"" (SageFs.WatchTab.token tab))
+      html |> Expect.stringContains "two bindings, in the All option" "All (2)"
+      html |> Expect.stringContains "one change, in the Changes option" "Changes (1)"
+      html |> Expect.stringContains "the picker posts the chosen tab" "$liveTab=t"
 
     testCase "WHY — a binding is hidden by the open tab from the same function the model has: the Changes tab hides the one with no change and keeps the one with a change" <| fun _ ->
       let rows = tweaks [ tweakOf "gravity" "9.5" ]
