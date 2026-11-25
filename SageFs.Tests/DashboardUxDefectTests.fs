@@ -143,27 +143,23 @@ let cardStateChipTests =
 
 [<Tests>]
 let appOutputToolbarTests =
-  testList "the app-output toolbar states its line count once" [
+  testList "the app-output toolbar keeps facts in the title's tooltip, not in the bar" [
 
-    testCase "WHY - an open pane's count lives in the badge alone: the stamp does not restate it" <| fun _ ->
+    testCase "WHY - the count describes the pane, so it belongs on the title's tooltip and not in the bar" <| fun _ ->
       let html = draw paneWithBothLines (HasAppOutput 2) SessionInView
-      html |> Expect.stringContains "the badge says what opened the pane" "2 lines of app output"
-      occurrences "lines of app output" html |> Expect.equal "the count is stated once" 1
-      html.Contains "live-pane-stamp" |> Expect.isFalse "no stamp when it would only restate the count"
+      html |> Expect.stringContains "the tooltip says what opened the pane" "2 lines of app output"
+      html.Contains "live-pane-count" |> Expect.isFalse "no count badge competing with the controls"
+      html.Contains "live-pane-stamp" |> Expect.isFalse "no stamp restating the count"
 
-    testCase "WHY - a paused pane's stamp still says what it holds: it adds a fact, so it stays" <| fun _ ->
+    testCase "WHY - a paused pane's tooltip still says what it holds: it adds a fact beyond the count" <| fun _ ->
       let paused = SageFs.Server.AppOutputPane.AppOutputPane.setPaused true paneWithBothLines
       let html = draw paused (HasAppOutput 2) SessionInView
-      html |> Expect.stringContains "the badge still carries the count" "2 lines of app output"
-      html |> Expect.stringContains "the stamp says what is being held" "2 lines while paused"
-      occurrences "lines of app output" html |> Expect.equal "the count is stated once" 1
+      html |> Expect.stringContains "the tooltip says what is being held" "2 lines while paused"
 
-    testCase "WHY - a filtered pane's stamp still says it is filtered: it adds a fact, so it stays" <| fun _ ->
+    testCase "WHY - a filtered pane's tooltip still says it is filtered: it adds a fact, so it stays" <| fun _ ->
       let filtering = SageFs.Server.AppOutputPane.AppOutputPane.setSearch "hello" paneWithBothLines
       let html = draw filtering (HasAppOutput 2) SessionInView
-      html |> Expect.stringContains "the badge still carries the count" "2 lines of app output"
-      html |> Expect.stringContains "the stamp says the view is filtered" "2 lines, filtered"
-      occurrences "lines of app output" html |> Expect.equal "the count is stated once" 1
+      html |> Expect.stringContains "the tooltip says the view is filtered" "2 lines, filtered"
   ]
 
 [<Tests>]
@@ -172,14 +168,11 @@ let wordedControlSizingTests =
 
     testCase "WHY - every control whose visible text is a word carries the label-sizing class, so no label spills onto its neighbour" <| fun _ ->
       let html = draw paneWithBothLines (HasAppOutput 2) SessionInView
-      for marker in
-        [ "id=\"app-output-follow\""
-          "id=\"app-output-pause\""
-          "data-testid=\"app-output-stream-both\""
-          "data-testid=\"app-output-stream-errors\""
-          "data-testid=\"app-output-stream-output\"" ] do
+      for marker in [ "id=\"app-output-follow\""; "id=\"app-output-pause\""; "id=\"pane-layout-toggle\"" ] do
         let tag = elementTagWith html marker
         tag.Contains "session-btn-labeled" |> Expect.isTrue (sprintf "%s is sized to its label, not left at the 28px square" marker)
+      // One picker answers the stream question that three worded buttons used to take three boxes for.
+      html |> Expect.stringContains "the stream choice is one picker" "data-testid=\"app-output-stream-select\""
 
     testCase "WHY - the stylesheet's labeled-button rule sizes to content with the square's height as its floor" <| fun _ ->
       let rule = cssRule ".session-btn-labeled"

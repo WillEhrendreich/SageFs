@@ -917,46 +917,29 @@ type TabCounts =
     Moved: int
     Watched: int }
 
-/// The tab bar: All, Pinned and Changes, each with how many it lists. The open tab is a signal, so a push never closes it, and the pressed
-/// state is read from the signal and said in the markup (`aria-pressed`) as well as in the fill. The Pinned count is the page's own, from
-/// the pins it holds; the other two are the server's.
-let tabBar (counts: TabCounts) : XmlNode =
-  let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
-  Elem.div
-    [ Attr.class' "live-tabs"
+/// Which bindings are listed, as ONE picker instead of five buttons. The counts stay in the option labels,
+/// so the same facts are reachable without five boxes competing with the values for space. The open tab is a
+/// signal, so a push never changes it, and the post tells the server which view to draw.
+let tabSelect (counts: TabCounts) : XmlNode =
+  Elem.select
+    [ Attr.class' "live-tab-select"
+      Attr.create "aria-label" "Which bindings to list"
+      Attr.title "Which bindings to list"
       testid "live-tabs"
-      Attr.create "role" "group"
-      Attr.create "aria-label" "Which of the bindings are listed" ]
+      Ds.bind DockSignals.LiveTab
+      Sink.onEvent (
+        DomEvent.Change,
+        sprintf "var t=event.target.value; $%s=t; %s" DockSignals.LiveTab (Sink.post DockSignals.LiveTabEndpoint)
+      ) ]
     [ for tab in WatchTab.all ->
         let count =
           match tab with
-          | WatchTab.All -> [ textEnc (string counts.Bindings) ]
-          | WatchTab.Changes -> [ textEnc (string counts.Changed) ]
-          | WatchTab.SinceGreen -> [ textEnc (string counts.Moved) ]
-          | WatchTab.Watch -> [ textEnc (string counts.Watched) ]
-          | WatchTab.Pinned -> [ textEnc "0" ]
-        Elem.button
-          [ Attr.id (sprintf "live-tab-%s" (WatchTab.token tab))
-            Attr.class' "session-btn session-btn-labeled live-tab"
-            Attr.type' "button"
-            testid (sprintf "live-tab-%s" (WatchTab.token tab))
-            Sink.attr "aria-pressed" (UserText.ofString (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.SinceGreen | WatchTab.Watch -> "false"))
-            Ds.attr' ("aria-pressed", sprintf "%s ? 'true' : 'false'" (open' tab))
-            Ds.class' ("session-btn-on", open' tab)
-            Ds.preserveAttr "class aria-pressed"
-            // The page hides what the tab does not list at once, and the post tells the server which tab the page has open, so it draws
-            // the view that tab has.
-            Sink.onClick (sprintf "$%s = '%s'; %s" DockSignals.LiveTab (WatchTab.token tab) (Sink.post DockSignals.LiveTabEndpoint)) ]
-          [ Elem.span [ Attr.class' "session-btn-word" ] [ textEnc (WatchTab.label tab) ]
-            Elem.span
-              ([ Attr.class' "live-tab-count"; testid (sprintf "live-tab-count-%s" (WatchTab.token tab)) ]
-               @ (match tab with
-                  | WatchTab.Pinned -> [ Ds.text (sprintf "$%s.split(',').filter(Boolean).length" DockSignals.LivePins) ]
-                  | WatchTab.All
-                  | WatchTab.Changes
-                  | WatchTab.SinceGreen
-                  | WatchTab.Watch -> []))
-              count ] ]
+          | WatchTab.All -> string counts.Bindings
+          | WatchTab.Changes -> string counts.Changed
+          | WatchTab.SinceGreen -> string counts.Moved
+          | WatchTab.Watch -> string counts.Watched
+          | WatchTab.Pinned -> "0"
+        Elem.option [ Attr.value (attrEnc (WatchTab.token tab)) ] [ textEnc (sprintf "%s (%s)" (WatchTab.label tab) count) ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
 /// What the pane is for, in a sentence: under the title while the dock is tall, and the title's tooltip and a note in the Display panel
@@ -1006,41 +989,31 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     | PrintedBindings _ -> DockIds.Pane
     | WalkedBindings _
     | NothingBound -> DomIds.BindingsPanel
+  // The count, reading time and "not in a file" note all describe the pane, not controls. They live in the
+  // title's tooltip now: the dock shows values, and a hover still tells you what the values mean.
+  let replOnlyCount =
+    match source with
+    | WalkedBindings view -> TweakView.replOnlyCount tweaks (view.Snapshot.Bindings |> List.map (fun b -> b.Name))
+    | PrintedBindings _
+    | NothingBound -> 0
+  let titleTip =
+    [ PaneSentence
+      OpenBecause.text because
+      stamp
+      if replOnlyCount > 0 then LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.NotInAnyFile replOnlyCount) else "" ]
+    |> String.concat "\n"
   Elem.div (Attr.id paneId :: followPin display "panel live-pane") [
    // Everything above the tree, in one box that is never more than a share of the dock (`DockCompaction.ChromeSharePercent`) and scrolls
    // on its own if it must, so the tree always has the rest of the dock.
    Elem.div [ Attr.id "live-pane-chrome"; Attr.class' "live-pane-chrome"; testid "live-pane-chrome" ] [
     Elem.div [ Attr.class' "live-pane-bar" ] [
-      // The sentence under the title is also the title's tooltip, so a dock too short for the line still has it.
-      Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc PaneSentence) ] [ Text.raw "Live bindings" ]
-      Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
+      Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc titleTip) ] [ Text.raw "Live bindings" ]
       match controls |> Option.map (fun viewControls -> viewControls.Freshness) with
       | Some(LiveBindingsViewPanel.LoopSaid.Said chip) -> freshnessChip chip
       | Some LiveBindingsViewPanel.LoopSaid.NothingSaid
       | None -> ()
-      Elem.span [ Attr.class' "live-pane-stamp"; Sink.attr "title" (UserText.ofString (stamp + ". The values are read again after every eval.")) ] [
-        textEnc stamp
-        // How old the reading is, ticking in the browser: an absolute UTC time alone could not tell a frozen display from a current one.
-        match source with
-        | WalkedBindings view ->
-          Elem.span [] [ textEnc " · "; ElapsedClock.span (ElapsedClock.agoExpr (view.Snapshot.CapturedAt.ToUnixTimeMilliseconds())) ]
-        | PrintedBindings _
-        | NothingBound -> () ]
       // When the session runs older code than its files say: what is wrong, and the button that fixes it (empty otherwise).
       remedy
-      // A binding no file holds is said once here, with its reason on hover, and not on every row.
-      match source with
-      | WalkedBindings view ->
-        match TweakView.replOnlyCount tweaks (view.Snapshot.Bindings |> List.map (fun b -> b.Name)) with
-        | 0 -> ()
-        | count ->
-          Elem.span
-            [ Attr.class' "live-repl-chip"
-              testid "live-repl-only"
-              Attr.title (attrEnc (describe (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)).Detail) ]
-            [ textEnc (LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.NotInAnyFile count)) ]
-      | PrintedBindings _
-      | NothingBound -> ()
       Elem.input
         [ Attr.id DockIds.Filter
           Attr.class' "live-filter"
@@ -1056,12 +1029,6 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
       | None -> ()
       panePinButton DockIds.PanePin
     ]
-    // What the pane is for, in one line under its title (reviewers could say what it was only by inference). Wide windows only:
-    // on a phone every line before the first binding is a line of the list pushed down.
-    Elem.div [ Attr.class' "live-pane-sub"; testid "live-pane-sub" ] [
-      // A phone gets the short form: the long one took three lines of the first screen before the first binding.
-      Elem.span [ Attr.class' "pane-sub-long" ] [ Text.raw PaneSentence ]
-      Elem.span [ Attr.class' "pane-sub-short" ] [ Text.raw "Edit a value: the file changes now." ] ]
     // On a phone the page is one column and Output and Sessions sit below the bindings. These say so, and take you there.
     Elem.nav [ Attr.class' "live-jump"; testid "live-jump"; Attr.create "aria-label" "Jump to another part of the page" ] [
       Elem.a [ Attr.href "#output-section" ] [ Text.raw "Output ↓" ]
@@ -1080,7 +1047,7 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
           | LiveBindingsViewPanel.GreenSaid.Moved moved -> (Tweak.SinceGreen.movedBindings moved).Count
           | LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> 0
         | None -> 0
-      tabBar
+      tabSelect
         { Bindings = view.Snapshot.Bindings.Length
           Changed = (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count
           Moved = movedCount
@@ -1142,8 +1109,8 @@ let renderDockWithRemedy
   let shell (children: XmlNode list) = Elem.div [ Attr.id DockIds.Dock; Attr.class' "live-dock" ] children
 
   // Splitter between the two panes. It writes the live-bindings pane's share of the dock, so each pane
-  // gets its own size instead of one height for the pair. The drag reads the dock's own box: vertical
-  // movement when the panes are stacked, horizontal movement when app output sits beside the transcript.
+  // gets its own size instead of one height for the pair. Vertical drag when stacked, horizontal when
+  // app output sits beside the transcript.
   let paneSplitter =
     Elem.div [
       Attr.id PaneResize
@@ -1153,16 +1120,13 @@ let renderDockWithRemedy
       Ds.onEvent ("pointerdown", "event.preventDefault(); $paneResizing = true; event.target.setPointerCapture(event.pointerId)")
       Sink.onEvent (
         DomEvent.PointerMove,
-        sprintf "if(!$%s)return; var d=document.getElementById('live-dock'); if(!d)return; var r=d.getBoundingClientRect(); var side=document.querySelector('.main-area')?.getAttribute('data-pane-layout')==='side'; var p=side?(event.clientX-r.left)/r.width:(event.clientY-r.top)/r.height; $%s=Math.max(64,Math.min(Math.round((side?r.width:r.height)*0.8),Math.round((side?r.width:r.height)*p)))+'px'" PaneResizing PaneSplit
+        sprintf "if(!$paneResizing)return; var d=document.getElementById('live-dock'); if(!d)return; var r=d.getBoundingClientRect(); var side=document.querySelector('.main-area')?.getAttribute('data-pane-layout')==='side'; var p=side?(event.clientX-r.left)/r.width:(event.clientY-r.top)/r.height; $%s=Math.max(64,Math.min(Math.round((side?r.width:r.height)*0.8),Math.round((side?r.width:r.height)*p)))+'px'" PaneSplit
       )
       Sink.onEvent (
         DomEvent.PointerUp,
-        sprintf "if(!$%s)return; $%s=false; try{localStorage.setItem('sagefs.paneSplit',$%s)}catch(e){}" PaneResizing PaneResizing PaneSplit
+        sprintf "if(!$paneResizing)return; $paneResizing=false; try{localStorage.setItem('sagefs.paneSplit',$%s)}catch(e){}" PaneSplit
       )
-      Sink.onEvent (
-        DomEvent.DoubleClick,
-        sprintf "$%s='11rem'; try{localStorage.removeItem('sagefs.paneSplit')}catch(e){}" PaneSplit
-      )
+      Sink.onEvent (DomEvent.DoubleClick, sprintf "$%s='11rem'; try{localStorage.removeItem('sagefs.paneSplit')}catch(e){}" PaneSplit)
     ] []
 
   let liveBindings =

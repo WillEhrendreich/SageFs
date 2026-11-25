@@ -133,7 +133,7 @@ let private controls (pane: AppOutputPane) : XmlNode list =
 let renderBody (pane: AppOutputPane) (because: OpenBecause) : XmlNode =
   Elem.div [ Attr.id AppOutputIds.Pane; Attr.class' "panel live-pane"; testid "app-output-pane" ] [
     Elem.div [ Attr.class' "live-pane-bar" ] [
-      Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc (OpenBecause.text because)) ] [ textEnc "App output" ]
+      Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc (sprintf "%s — %s" (OpenBecause.text because) (AppOutputPane.header pane))) ] [ textEnc "App output" ]
       // Where this pane lives is a choice, not a fixed position: beside the transcript or under it in the dock.
       // The label says where a click MOVES it, and the signal is persisted so the choice survives a reload.
       Elem.button [
