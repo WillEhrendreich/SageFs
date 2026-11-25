@@ -57,9 +57,11 @@ let private callTool (client: McpClient) (name: string) (args: (string * obj) li
     return textOf result
   }
 
-/// What the session's REPL says to this code.
-let private evalIn (client: McpClient) (code: string) : Task<string> =
-  callTool client "send_fsharp_code" [ "agentName", box "confirm-gate"; "code", box code; "working_directory", box fixtureDir ]
+/// What the session's REPL says to this code. Pin the session id: selecting by working_directory
+/// alone can resolve to a different session after a confirming build creates one in the same
+/// directory, and then the binding readback asks a REPL that never held it.
+let private evalIn (client: McpClient) (sessionId: string) (code: string) : Task<string> =
+  callTool client "send_fsharp_code" [ "agentName", box "confirm-gate"; "code", box code; "working_directory", box fixtureDir; "session_id", box sessionId ]
 
 let private awaitQuietSession (client: McpClient) (http: Net.Http.HttpClient) : Task<unit> =
   await TestTimeouts.buildConfirmation (fun () -> "the session and its live-testing cycle to be settled") (fun () -> task {
@@ -86,10 +88,10 @@ let private awaitQuietSession (client: McpClient) (http: Net.Http.HttpClient) : 
 /// Read the REPL's answer until it says the expected thing. Under load a confirmation can settle after the status
 /// endpoint goes idle, so a binding check that samples once reads a session that is still catching up. Polling the
 /// observable fact removes the race: it passes as soon as the binding is there and still fails if it is lost.
-let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (code: string) (expected: string) : Task<string> =
+let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (sessionId: string) (code: string) (expected: string) : Task<string> =
   task {
     do! awaitQuietSession client http
-    let! answer = evalIn client code
+    let! answer = evalIn client sessionId code
     return answer
   }
 
@@ -174,7 +176,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     // 1. The session holds a binding. An idle confirmation is not a Ready session: under load the first eval
     // can land while the worker is still warming and be answered with FSI's generic "earlier error".
     do! awaitQuietSession client http
-    let! made = evalIn client "let marker = 42;;"
+    let! made = evalIn client sessionId "let marker = 42;;"
     made |> Expect.stringContains "the REPL made the binding" "42"
     let! restartBefore = lastRestartOf client
 
@@ -191,7 +193,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     |> Expect.isEmpty (sprintf "every row is confirmed by the real build. Rows: %A" rows)
     let! restartAfter = lastRestartOf client
     restartAfter |> Expect.equal "the confirming build left the session's rebuild record alone" restartBefore
-    let! keptAnswer = awaitEvalContains client http "marker + 1;;" "43"
+    let! keptAnswer = awaitEvalContains client http sessionId "marker + 1;;" "43"
     keptAnswer |> Expect.stringContains "the binding made before the build is still bound, and still 42" "43"
 
     // 3. An edit the session accepts and the compiler rejects: the build fails, the rows say so, nothing is lost.
@@ -207,7 +209,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     |> Expect.isTrue (sprintf "a row says the real build failed, with the compiler's code. Rows: %A" failedRows)
     let! restartFinal = lastRestartOf client
     restartFinal |> Expect.equal "a failed build left the session's rebuild record alone" restartBefore
-    let! stillKeptAnswer = awaitEvalContains client http "marker + 2;;" "44"
+    let! stillKeptAnswer = awaitEvalContains client http sessionId "marker + 2;;" "44"
     stillKeptAnswer |> Expect.stringContains "the binding is still there after a build that failed" "44"
   }
 
