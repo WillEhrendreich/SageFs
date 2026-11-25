@@ -302,6 +302,52 @@ h2 {
   cursor: row-resize;
 }
 
+/* Splitter between the dock's two panes. A handle between two collapsed bars is a stray line, so it
+   shows only when both panes are open. */
+.pane-resize {
+  width: auto;
+  height: 4px;
+  cursor: row-resize;
+  display: none;
+}
+
+.live-dock:has(> #app-output-pane):has(> #live-pane) .pane-resize,
+.live-dock:has(> #app-output-pane):has(> #bindings-panel) .pane-resize {
+  display: block;
+}
+
+/* App output can sit beside the transcript instead of under it: the dock becomes a full-height column
+   on the right of the main area, and the splitter turns horizontal. */
+.main-area[data-pane-layout="side"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--side-pane-width, 38%);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.main-area[data-pane-layout="side"] > #editor-area {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.main-area[data-pane-layout="side"] > .dock-resize {
+  display: none;
+}
+
+.main-area[data-pane-layout="side"] > .live-dock {
+  grid-column: 2;
+  grid-row: 1;
+  height: 100%;
+  max-height: none;
+  border-top: none;
+  border-left: 1px solid var(--border-normal);
+}
+
+.main-area[data-pane-layout="side"] .pane-resize {
+  width: 4px;
+  height: auto;
+  cursor: col-resize;
+}
+
 /* ── Panels ───────────────────────────────────────────────────── */
 
 .panel {
@@ -1424,6 +1470,16 @@ h2 {
    remembers it. */
 .live-dock:has(.live-tree) {
   height: var(--dock-max-height);
+}
+
+/* Each pane has its own size: the splitter writes --pane-split and the other pane takes the rest. */
+.live-dock > #live-pane,
+.live-dock > #bindings-panel {
+  flex: 0 0 var(--pane-split, 11rem);
+}
+
+.live-dock > #app-output-pane {
+  flex: 1 1 0;
 }
 
 /* `app-output-bar` is the second pane's collapsed bar: the same strip, its own class, because two panes
