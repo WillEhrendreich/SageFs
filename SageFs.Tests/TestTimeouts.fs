@@ -168,12 +168,21 @@ module TestTimeouts =
 
   // Request timeouts on one HTTP call.
 
-  /// One probe request to a local server, in a loop that retries it.
+  /// One probe request to a local server, in a loop that retries it. Short on purpose: this is a
+  /// probe in a retry protocol, not a wait that ends a passing test.
   let httpProbe = secs 5.
-  /// One request that may have to start work first (create a session, serve a page).
-  let httpRequest = secs 10.
-  /// One request to a daemon that may be mid-build.
-  let httpDaemon = secs 30.
+  /// One request that may have to start work first (create a session, serve a page). A share of the
+  /// one pass deadline, not a fixed clock: under load a cold session create legitimately takes longer
+  /// than a quiet 10 s, and a fixed HttpClient.Timeout then throws TaskCanceledException mid-pass.
+  /// reachBuilt is the real event; this only bounds a hung daemon.
+  let httpRequest =
+    LoadBudget.ensureDeadline ()
+    LoadBudget.share 0.05
+  /// One request to a daemon that may be mid-build. Same single deadline as httpRequest; the browser
+  /// runner used to pin this at 30 s after the same TaskCanceledException under gate load.
+  let httpDaemon =
+    LoadBudget.ensureDeadline ()
+    LoadBudget.share 0.05
   /// How long a test listens to an SSE stream for the event it triggered.
   let sseListen = secs 15.
 

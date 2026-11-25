@@ -485,7 +485,10 @@ let tierTimings = Collections.Concurrent.ConcurrentDictionary<string, TierSchedu
 /// dead, stop idle) stays on — it genuinely frees memory. A user's daemon keeps the protected default.
 // One absolute deadline for the whole pass, shared by every tier. A nested wait derives its budget from
 // what is LEFT, so a slow tier cannot hand a child a fresh clock that outlives the stage (Molina's Deadline).
-let passDeadline = DateTimeOffset.UtcNow.AddMinutes 90.
+// A safety ceiling, not a per-wait clock: the workflow kills the job at 120 minutes, so the gate's own
+// ceiling sits past that. A late tier or a classification rerun still draws a generous share instead of
+// inheriting the minutes a 90-minute ceiling had already burned.
+let passDeadline = DateTimeOffset.UtcNow.AddMinutes 180.
 
 let tierRuntimeEnvironment : (string * string) list =
   [ "DOTNET_TieredPGO", "0"
