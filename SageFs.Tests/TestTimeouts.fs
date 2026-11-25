@@ -71,7 +71,7 @@ module TestTimeouts =
   /// runs beside other work on a shared machine (a load average of 40 to 70 was seen), where a starved pool made
   /// 10 s lose a wait that was only slow: ThreadSandbox, the app-runner and orchestration waits, the batch flusher.
   /// Every use is an event wait, so the long bound costs nothing when the event comes.
-  let patienceInProcess = secs 30.
+  let patienceInProcess = eventBudget 0.05
   /// Ceiling on in-process work with no real I/O (an Elm loop reaching a model, a host stopping).
   /// It is the same 20 s as `patience`: a ceiling on an event costs a passing run nothing, and a
   /// starved thread pool on a loaded machine (a load average past 40 happens here) stretches a
@@ -258,13 +258,15 @@ module TestTimeouts =
   let idleRssSampleInterval = secs 15.
   /// A hot-reload host printing the port its worker listens on.
   let workerPortReport = secs 120.
-  /// A hot-reload host's session becoming Ready, including its first build.
-  let workerSessionReady = secs 180.
+  /// A hot-reload host's session becoming Ready, including its first build. A fixed 180 s let one row's cold
+  /// host time out under load 7.2 while every other row held; the wait ends the moment Ready appears, so
+  /// draw it from the one pass deadline.
+  let workerSessionReady = eventBudget 0.08
   /// How long a shard waits its turn for the build lock in AppRunnerTests. The holder is always alive and its own build is
   /// bounded by `workerSessionReady`, and a dead holder frees the lock at once, so the wait is the holders ahead of it: the
   /// gate's five shards plus one, each at most that long. The lock is waited for, not raced, so nothing here is a guess at
-  /// how busy the machine is.
-  let buildLockQueue = System.TimeSpan.FromTicks(workerSessionReady.Ticks * 6L)
+  /// how busy the machine is. A share of the same deadline, smaller than six full builds.
+  let buildLockQueue = eventBudget 0.15
   /// The running app answering its first request.
   let appFirstAnswer = secs 30.
   /// The worker reporting that a file is watched after watch-all.
