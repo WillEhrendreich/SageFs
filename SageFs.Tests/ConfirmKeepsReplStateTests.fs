@@ -89,11 +89,18 @@ let private awaitQuietSession (client: McpClient) (http: Net.Http.HttpClient) : 
 /// endpoint goes idle, so a binding check that samples once reads a session that is still catching up. Polling the
 /// observable fact removes the race: it passes as soon as the binding is there and still fails if it is lost.
 let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (sessionId: string) (code: string) (expected: string) : Task<string> =
-  task {
-    do! awaitQuietSession client http
-    let! answer = evalIn client sessionId code
-    return answer
-  }
+  // A settled session is not an idle FSI: an eval sent into a still-processing worker is answered with
+  // "Operation could not be completed due to earlier error", whose text can still contain the submitted
+  // code (and its literal), so a single sample can look like a made binding. Poll the observable answer
+  // until it actually carries the value and is not a failure.
+  await TestTimeouts.buildConfirmation
+    (fun () -> sprintf "the REPL answer to %s to contain %s" code expected)
+    (fun () -> task {
+      do! awaitQuietSession client http
+      let! answer = evalIn client sessionId code
+      return
+        if answer.Contains expected && not (answer.Contains "Evaluation failed") then Ok(Some answer)
+        else Ok None })
 
 /// The daemon's own record of the last rebuild, and the REPL binding. An OS pid is not a stable proxy for
 /// "the session was left alone": an FSI host can be recreated for reasons unrelated to a confirmation, and
@@ -175,8 +182,7 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
 
     // 1. The session holds a binding. An idle confirmation is not a Ready session: under load the first eval
     // can land while the worker is still warming and be answered with FSI's generic "earlier error".
-    do! awaitQuietSession client http
-    let! made = evalIn client sessionId "let marker = 42;;"
+    let! made = awaitEvalContains client http sessionId "let marker = 42;;" "42"
     made |> Expect.stringContains "the REPL made the binding" "42"
     let! restartBefore = lastRestartOf client
 
