@@ -19,10 +19,12 @@ module SageFs.Server.AppOutputView
 open Falco.Markup
 open Falco.Datastar
 open SageFs
+open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 open SageFs.Server.DockPanes
 open SageFs.Server.AppOutputPane
 open SageFs.Server.DashboardSinks
+open SageFs.Server.DockPaneLayout
 
 /// The app-output pane's own element ids. Separate from `DockIds` (which names the live-bindings pane)
 /// because the morph matches client-owned attributes by id, and two panes in one dock must never share one.
@@ -110,9 +112,20 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       testid "app-output-search"
       Ds.onEvent ("input", "@post('/dashboard/app-output/search?value=' + encodeURIComponent(event.target.value))")
     ]
-    streamChoice "both" "all" BothStreams
-    streamChoice "errors" "errors" ErrorsOnly
-    streamChoice "output" "output" OutputOnly
+    // Three buttons for one choice cost three boxes in a bar that has to stay on one line. A picker answers
+    // the same question with one control and keeps the same post; the value is read at event time.
+    Elem.select [
+      Attr.class' "app-output-stream-select"
+      Attr.create "aria-label" "Which stream to show"
+      Attr.title "Which stream to show"
+      testid "app-output-stream-select"
+      Ds.onEvent ("change", "var s=event.target.value; @post('/dashboard/app-output/stream?value=' + encodeURIComponent(s))")
+    ] [
+      for (value, label, wanted) in [ "both", "all", BothStreams; "errors", "errors", ErrorsOnly; "output", "output", OutputOnly ] do
+        Elem.option
+          ([ Attr.value (attrEnc value) ] @ (if filter = wanted then [ Attr.create "selected" "selected" ] else []))
+          [ textEnc label ]
+    ]
   ]
 
 /// The pane when it has something to show: what opened it, what the pane says about itself, and the lines
@@ -120,14 +133,27 @@ let private controls (pane: AppOutputPane) : XmlNode list =
 let renderBody (pane: AppOutputPane) (because: OpenBecause) : XmlNode =
   Elem.div [ Attr.id AppOutputIds.Pane; Attr.class' "panel live-pane"; testid "app-output-pane" ] [
     Elem.div [ Attr.class' "live-pane-bar" ] [
-      Elem.span [ Attr.class' "live-pane-title" ] [ textEnc "App output" ]
-      // One fact, one home: the line count lives in the badge. The stamp earns its place only when it says something the
-      // badge cannot: the pane is holding output back, or the view is filtered. A stamp that only restated the count
-      // ("450 lines of app output" next to "450 lines") is gone.
-      Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
-      match AppOutputPane.paused pane, AppOutputPane.searching pane, AppOutputPane.buffered pane with
-      | false, false, buffered when buffered > 0 -> ()
-      | _ -> Elem.span [ Attr.class' "live-pane-stamp" ] [ textEnc (AppOutputPane.header pane) ]
+      Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc (OpenBecause.text because)) ] [ textEnc "App output" ]
+      // Where this pane lives is a choice, not a fixed position: beside the transcript or under it in the dock.
+      // The label says where a click MOVES it, and the signal is persisted so the choice survives a reload.
+      Elem.button [
+        Attr.id PaneLayoutToggle
+        Attr.class' "session-btn session-btn-labeled"
+        Attr.type' "button"
+        Attr.create "aria-label" "Move the app output pane beside the transcript, or back into the dock"
+        testid "app-output-layout-toggle"
+        Sink.onClick (
+          sprintf
+            "$%s = $%s === 'side' ? 'stacked' : 'side'; try{localStorage.setItem('sagefs.paneLayout',$%s)}catch(e){}"
+            PaneLayoutSignal PaneLayoutSignal PaneLayoutSignal
+        )
+      ] [
+        Elem.span [
+          Ds.text (sprintf "$%s === 'side' ? 'In dock' : 'Beside output'" PaneLayoutSignal)
+        ] [ Text.raw "Beside output" ]
+      ]
+      // The count and the stamp are facts about the buffer, not controls. They live in the title's tooltip;
+      // the bar carries only what a person can act on, and the filter stays beside the buttons on one line.
       yield! controls pane
     ]
     // A search that matched nothing says so. Without this it is indistinguishable from an app that

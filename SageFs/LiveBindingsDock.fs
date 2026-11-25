@@ -30,6 +30,7 @@ open SageFs.Server.DashboardFragments
 open SageFs.Server.DockPanes
 open SageFs.Server.LiveBindingsTweakView
 open SageFs.Server.DashboardSinks
+open SageFs.Server.DockPaneLayout
 
 /// Client-side state of the dock. All three are plain signals declared once in the page shell.
 module DockSignals =
@@ -1140,6 +1141,30 @@ let renderDockWithRemedy
 
   let shell (children: XmlNode list) = Elem.div [ Attr.id DockIds.Dock; Attr.class' "live-dock" ] children
 
+  // Splitter between the two panes. It writes the live-bindings pane's share of the dock, so each pane
+  // gets its own size instead of one height for the pair. The drag reads the dock's own box: vertical
+  // movement when the panes are stacked, horizontal movement when app output sits beside the transcript.
+  let paneSplitter =
+    Elem.div [
+      Attr.id PaneResize
+      Attr.class' "resize-handle pane-resize"
+      Attr.create "role" "separator"
+      Attr.create "aria-label" "Resize the live bindings and app output panes"
+      Ds.onEvent ("pointerdown", "event.preventDefault(); $paneResizing = true; event.target.setPointerCapture(event.pointerId)")
+      Sink.onEvent (
+        DomEvent.PointerMove,
+        sprintf "if(!$%s)return; var d=document.getElementById('live-dock'); if(!d)return; var r=d.getBoundingClientRect(); var side=document.querySelector('.main-area')?.getAttribute('data-pane-layout')==='side'; var p=side?(event.clientX-r.left)/r.width:(event.clientY-r.top)/r.height; $%s=Math.max(64,Math.min(Math.round((side?r.width:r.height)*0.8),Math.round((side?r.width:r.height)*p)))+'px'" PaneResizing PaneSplit
+      )
+      Sink.onEvent (
+        DomEvent.PointerUp,
+        sprintf "if(!$%s)return; $%s=false; try{localStorage.setItem('sagefs.paneSplit',$%s)}catch(e){}" PaneResizing PaneResizing PaneSplit
+      )
+      Sink.onEvent (
+        DomEvent.DoubleClick,
+        sprintf "$%s='11rem'; try{localStorage.removeItem('sagefs.paneSplit')}catch(e){}" PaneSplit
+      )
+    ] []
+
   let liveBindings =
     match PaneState.decide facts DockPane.LiveBindings with
     | PaneOpen because -> [ renderPaneWithRemedy remedy look controls tweaks sessionId source because ShownAlways ]
@@ -1158,7 +1183,7 @@ let renderDockWithRemedy
     let pane = Option.defaultValue SageFs.Server.AppOutputPane.AppOutputPane.create appOutput
     [ SageFs.Server.AppOutputView.render (PaneState.decide facts DockPane.AppOutput) pane ]
 
-  shell (liveBindings @ appOutputPane)
+  shell (liveBindings @ [ paneSplitter ] @ appOutputPane)
 
 /// The dock with no remedy note in the pane bar.
 let renderDockWith

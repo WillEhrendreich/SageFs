@@ -2645,7 +2645,7 @@ let renderMainContentIn (view: PaneMenuView.PaneLayoutView) (snap: DashboardSnap
     snap.DiagnosticsPanel
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
-      Elem.div [ Attr.class' "main-area" ] [
+      Elem.div [ Attr.class' "main-area"; Ds.attr' ("data-pane-layout", sprintf "$%s" SageFs.Server.DockPaneLayout.PaneLayoutSignal); Ds.preserveAttr "data-pane-layout"; Ds.attr' ("style", sprintf "'--pane-split:' + $%s" SageFs.Server.DockPaneLayout.PaneSplit); Ds.preserveAttr "style" ] [
         // Session picker — shown when no sessions exist, hidden otherwise
         snap.SessionPicker
         // A session that faulted says why and what to do here, where the person is reading, not only on its sidebar card.

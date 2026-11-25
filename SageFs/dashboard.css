@@ -1445,6 +1445,45 @@ h2 {
   border-bottom: 1px solid var(--border-normal);
 }
 
+/* Both dock bars are one line of controls: the pane's job is to show values and output, not to describe
+   itself. Nothing here wraps, so a filter box never drops to a second row beside short buttons. */
+.live-dock .live-pane-bar {
+  flex-wrap: nowrap;
+  gap: 0 0.35rem;
+  padding: 2px 6px;
+  min-height: 24px;
+}
+
+.live-pane-bar::after {
+  display: none;
+}
+
+.live-dock .live-pane-bar button.session-btn {
+  padding: 1px 5px;
+  min-height: 20px;
+  gap: 3px;
+  font-size: 0.857rem;
+}
+
+.live-dock .live-pane-bar .live-filter {
+  flex: 0 1 10rem;
+  min-width: 4rem;
+  max-width: 12rem;
+  height: 22px;
+  padding: 0 5px;
+}
+
+.live-dock .live-pane-bar .live-tab-select,
+.live-dock .live-pane-bar .app-output-stream-select {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 3px;
+  font-size: 0.857rem;
+  background: var(--bg-default);
+  color: var(--fg-default);
+  border: 1px solid var(--border-normal);
+}
+
 .live-dock-reason {
   flex: 1 1 14rem;
   min-width: 0;

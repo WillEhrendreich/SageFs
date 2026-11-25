@@ -130,6 +130,7 @@
         <Compile Include="SeatNonces.fs" />
         <!-- Before every renderer: the one place a computed value enters an attribute or a Datastar expression, encoded for that place. -->
         <Compile Include="DashboardSinks.fs" />
+        <Compile Include="DockPaneLayout.fs" />
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />
