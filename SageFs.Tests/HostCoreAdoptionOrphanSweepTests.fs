@@ -18,20 +18,18 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// no private directory is ever materialized, `AdoptedCore` is `None`, and
 /// a naive "assert the private root is gone after stop" test would pass
 /// VACUOUSLY (there was never a directory to begin with). The fixture here
-/// is the ConsoleTicker sample: the gate rebuilds it with the daemon's own
-/// SageFs.Core, so it forces a REAL adoption, and it is two source files
-/// instead of the eight projects SageFs.Tests would load into the FSI worker.
-/// That mattered at load 18.6: the heavy fixture's worker died before it
-/// reported a port, which is a machine failure rather than a sweep failure.
+/// is SageFs's own SageFs.Tests project — exactly like DogfoodReplTests.fs
+/// — because it is the one project in this repo guaranteed to ship a
+/// same-version build of SageFs.Core and therefore force a REAL adoption.
 /// The `AdoptedCore |> Expect.isSome` assertion below is not incidental:
 /// it is what stops this test from being the vacuous one it warns about.
 let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private testsProject =
-  Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker", "SageFs.Samples.ConsoleTicker.fsproj")
+  Path.Combine(repoRoot, "SageFs.Tests", "SageFs.Tests.fsproj")
 
 let private testsDir =
-  Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
+  Path.Combine(repoRoot, "SageFs.Tests")
 
 [<Tests>]
 let tests =
@@ -52,8 +50,22 @@ let tests =
         match created with
         | Error err -> failtestf "create failed: %s" (SageFsError.describe err)
         | Ok info ->
-          let! ready = mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
-          ready |> Expect.isOk "the SageFs.Tests session reaches Ready"
+          // A worker can die before it reports its port on a loaded machine. That is a spawn failure,
+          // not a verdict about the private launch root: respawn and look again before failing the case.
+          let rec awaitReady (attempt: int) = async {
+            let! ready = mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
+            match ready with
+            | Ok _ -> return ()
+            | Error err when attempt < 2 ->
+              let! restarted =
+                mgr.PostAndAsyncReply(fun reply ->
+                  SageFs.SessionManager.SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply))
+              match restarted with
+              | Error reason -> failtestf "respawn failed: %s" (SageFsError.describe reason)
+              | Ok _ -> return! awaitReady (attempt + 1)
+            | Error err -> failtestf "the SageFs.Tests session never reached Ready: %s" (SageFsError.describe err)
+          }
+          do! awaitReady 0
 
           let! sessionOpt = mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply))
           match sessionOpt with
