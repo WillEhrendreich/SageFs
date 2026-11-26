@@ -363,6 +363,30 @@ let sessionManagerRestartTombstoneTests =
         harness.FaultedEvents.Count
         |> Expect.equal "stale spawn failure should not fire a fault callback" faultsBefore
 
+    testCase "WHY — a running app stops when its worker crashes, because the app lived inside that process" <| fun () ->
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun _ -> Ok(Process.GetCurrentProcess()))
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        let pid = getWorkerPid (getManagedSession harness info.Id)
+        // Start an app and advance it to Running before the worker dies.
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.ClaimRun(info.Id, "Test.fsproj", reply)) with
+        | Ok (SageFs.AppRun.RunClaim.Begun (generation, _, _)) ->
+          harness.Mailbox.PostAndReply(fun reply -> SessionCommand.AdvanceRun(info.Id, generation, SageFs.AppRun.AppRunState.Running { RunId = "r1"; Project = "Test.fsproj"; EntryPoint = "P.main"; Endpoint = SageFs.AppRun.AppEndpoint.NoServer; StartedAt = System.DateTime.UtcNow }, reply))
+          |> ignore
+        | other -> failtestf "expected a run to begin, got %A" other
+        match (getManagedSession harness info.Id).Info.App with
+        | SageFs.AppRun.AppRunState.Running _ -> ()
+        | other -> failtestf "expected the app to be running before the crash, got %A" other
+
+        harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, pid, 1))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply)) |> ignore
+
+        (getManagedSession harness info.Id).Info.App
+        |> Expect.equal "a crash respawn must mark the hosted app as gone, as a planned swap does" SageFs.AppRun.AppRunState.NotRunning
+
     testCase "WHY — the worker crashing after a failed rebuild is handled as a crash, because the failed build never touched it" <| fun _ ->
       let runtime =
         mkRuntime

@@ -306,7 +306,7 @@ let fileSize : (string * int) list =
     // with the Levels field and the three commands. The work that asks the worker and the reads around it are already in
     // LevelingFlow.fs and ReplLeveling.fs. A deliberate, reviewed feature, not silent accretion. Ratchet back DOWN when this
     // file is split; never bump to paper over drift.
-    "SageFs.Core/SessionManager.fs", 1610
+    "SageFs.Core/SessionManager.fs", 1605
     // Added 2026-10-23 with the split of SessionManager.fs: SessionManagerCallbacks is the seam
     // between the loop and its callers, every event the manager tells the outside world, and it
     // does not reach into the loop, so it compiles before it. Set at the file's true size (measured
@@ -338,7 +338,7 @@ let fileSize : (string * int) list =
     // (until then a file not listed here was unbounded, which made "a file not in a budget table has a budget of zero"
     // false for this table). A budget above a file's real count fails, so `--ratchets --tighten` lowers these as the
     // files shrink; a file that grows fails. Never raise one.
-    "SageFs/DaemonMode.fs", 5519
+    "SageFs/DaemonMode.fs", 5518
     // 5056 -> 5120: the plan response (plan=true on /exec) and the extraction of
     // the eval body so /exec can dispatch to either without a second read. The
     // planning half of the core edit tool; applying a chunk still goes through

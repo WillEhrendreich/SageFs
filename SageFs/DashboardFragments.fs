@@ -564,6 +564,7 @@ let renderSessionHealthLine (health: SessionHealth) =
       match health with
       | SessionHealth.Failed _ -> "Failed"
       | SessionHealth.Degraded _ -> "Degraded"
+      | SessionHealth.Recovering _ -> "Recovering"
       | SessionHealth.Starting -> "Starting"
       | SessionHealth.Healthy -> "Healthy"
     Elem.div
@@ -1891,6 +1892,7 @@ let renderSessionsForSessionWithLabels (viewingSessionId: string) (sessions: Par
                 // the common case must stay quiet.
                 match s.Health with
                 | SessionHealth.Healthy | SessionHealth.Starting -> ()
+                | SessionHealth.Recovering _
                 | SessionHealth.Degraded _ | SessionHealth.Failed _ ->
                   let glyph, color =
                     match s.Health with
@@ -1923,14 +1925,12 @@ let renderSessionsForSessionWithLabels (viewingSessionId: string) (sessions: Par
               // get_fsi_status/`/api/sessions` never say different things
               // about the same session. Its own line, unconditionally
               // visible — never behind a hover title or a <details>.
-              match SessionHealth.describeForAgent s.Health with
-              | Some line ->
+              // The viewed session's WHY is in the header health line; other cards keep theirs.
+              match SessionHealth.describeForAgent s.Health, isViewing with
+              | Some line, false ->
                 let color = match s.Health with SessionHealth.Failed _ -> "var(--fg-red)" | _ -> "var(--fg-yellow)"
-                Elem.div
-                  [ Attr.class' "session-health-reason"
-                    Attr.style (sprintf "font-size: 0.857rem; font-weight: bold; overflow-wrap: anywhere; margin-top: 2px; color: %s;" color) ]
-                  [ textEnc line ]
-              | None -> ()
+                Elem.div [ Attr.class' "session-health-reason"; Attr.style (sprintf "font-size: 0.857rem; font-weight: bold; overflow-wrap: anywhere; margin-top: 2px; color: %s;" color) ] [ textEnc line ]
+              | Some _, true | None, _ -> ()
               // The REPL runs the build from before a patch the app took, so a call to what changed runs the OLD code. Its own
               // line in the card's single column, always visible, never behind a hover: a REPL that lies silently is the failure.
               match s.Freshness with

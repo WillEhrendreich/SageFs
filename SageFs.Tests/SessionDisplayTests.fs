@@ -46,6 +46,15 @@ let displayStatusTests = testList "SessionDisplay.displayStatus" [
     SessionDisplay.displayStatus now info
     |> Expect.equal "should be Starting" SessionDisplayStatus.Starting
 
+  testCase "WHY — a crashed host's reason carries the hard-reset recovery, not only the crash" <| fun _ ->
+    let crash = { Exit = HostExit.ExitedWith 134; Output = "unhandled exception" }
+    let info = mkInfo (testSessionId "aa000001") SessionStatus.Faulted now
+    let info = { info with Status = SessionLifecycleStatus.HostCrashed ({ Pid = 1234; Port = None }, crash) }
+    match SessionDisplay.displayStatus now info with
+    | SessionDisplayStatus.Faulted reason ->
+      reason |> Expect.stringContains "reaches the main-area notice" "hard_reset_fsi_session"
+    | other -> failtestf "expected Faulted, got %A" other
+
   testCase "Faulted maps to Faulted" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Faulted now
     SessionDisplay.displayStatus now info

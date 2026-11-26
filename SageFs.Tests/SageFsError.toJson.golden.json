@@ -164,7 +164,7 @@
       "timeoutSec": 1
     },
     "message": "Session \u0027test\u0027 timed out during test after 1.0s. Try again or use hard_reset_fsi_session.",
-    "suggestedAction": "Retry or run hard_reset_fsi_session"
+    "suggestedAction": "Check get_session_status.lastRestart first: if a restart is already in progress, wait for it instead of starting another. Otherwise run hard_reset_fsi_session with rebuild=true; if the worker kept going silent, raise SAGEFS_WARMUP_INACTIVITY_SECONDS or set SAGEFS_MACHINE_TIER to a slower machine"
   },
   {
     "case": "WorkerHttpError",

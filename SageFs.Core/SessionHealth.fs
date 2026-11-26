@@ -28,6 +28,10 @@ type SessionHealth =
   /// Worker is Ready/Evaluating, but something a user would expect to work
   /// will not. `reason` names what is wrong and what to do about it.
   | Degraded of reason: string
+  /// The worker died and a replacement is coming up. The definitions and
+  /// unsaved buffers the old worker held went with it; `reason` says so.
+  /// Distinct from `Starting` so an agent can tell a cold start from a loss.
+  | Recovering of reason: string
   /// Worker is not usable at all (faulted or stopped). `reason` names why.
   | Failed of reason: string
 
@@ -42,6 +46,7 @@ module SessionHealth =
     | SessionHealth.Starting -> "Starting"
     | SessionHealth.Healthy -> "Healthy"
     | SessionHealth.Degraded _ -> "Degraded"
+    | SessionHealth.Recovering _ -> "Recovering"
     | SessionHealth.Failed _ -> "Failed"
 
   /// The reason string, when the verdict carries one.
@@ -49,6 +54,7 @@ module SessionHealth =
     | SessionHealth.Starting
     | SessionHealth.Healthy -> None
     | SessionHealth.Degraded r
+    | SessionHealth.Recovering r
     | SessionHealth.Failed r -> Some r
 
   /// One advisory line for text status output (get_fsi_status), matching the
@@ -59,6 +65,7 @@ module SessionHealth =
     | SessionHealth.Starting
     | SessionHealth.Healthy -> None
     | SessionHealth.Degraded r -> Some (sprintf "⚠️  Health: Degraded — %s" r)
+    | SessionHealth.Recovering r -> Some (sprintf "⚠️  Health: Recovering — %s" r)
     | SessionHealth.Failed r -> Some (sprintf "❌ Health: Failed — %s" r)
 
   /// JSON-friendly projection for HTTP APIs (`/api/sessions`).
@@ -133,9 +140,12 @@ module SessionHealth =
     | SessionLifecycleStatus.Stopped ->
       SessionHealth.Failed "Session is stopped."
     | SessionLifecycleStatus.Starting _
-    | SessionLifecycleStatus.Building _
-    | SessionLifecycleStatus.Restarting _ ->
+    | SessionLifecycleStatus.Building _ ->
       SessionHealth.Starting
+    | SessionLifecycleStatus.Restarting _ ->
+      // A restart is a loss, not a cold start. The old worker's definitions and
+      // unsaved buffers are gone; say so in the verdict every surface reads.
+      SessionHealth.Recovering "The worker restarted; definitions and unsaved buffers it held are gone. Re-run them, then continue."
     | SessionLifecycleStatus.Ready _
     | SessionLifecycleStatus.Evaluating _ ->
       match fallbackReasons projectRoles @ optimizedReasons projectRoles with
@@ -172,12 +182,14 @@ module SessionHealth =
       match verdict with
       | SessionHealth.Failed _ -> verdict
       | SessionHealth.Degraded other -> SessionHealth.Degraded(sprintf "%s %s" message other)
+      | SessionHealth.Recovering _
       | SessionHealth.Starting
       | SessionHealth.Healthy -> SessionHealth.Degraded message
     let failed (message: string) =
       match verdict with
       | SessionHealth.Failed _ -> verdict
       | SessionHealth.Degraded other -> SessionHealth.Failed(sprintf "%s %s" message other)
+      | SessionHealth.Recovering _
       | SessionHealth.Starting
       | SessionHealth.Healthy -> SessionHealth.Failed message
     match rebuild with

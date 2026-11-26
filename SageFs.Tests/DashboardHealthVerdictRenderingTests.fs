@@ -121,6 +121,13 @@ let sessionCardHealthRenderingTests =
       let detailsCloseIdx = html.IndexOf("</details>", (max detailsIdx 0))
       (detailsIdx < 0 || detailsCloseIdx < reasonIdx) |> Expect.isTrue "the reason is not nested inside a <details> disclosure")
 
+    testCase "WHY — the viewed card does not repeat the reason that the header health line now carries" (fun () ->
+      let reason = "The worker restarted; definitions and unsaved buffers it held are gone."
+      let s = Fixtures.card (SessionHealth.Recovering reason) (Fixtures.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
+      let html = renderSessionsForSession "0a2b3c4d" [ s ] false |> renderNode
+      html.Contains("session-health-badge") |> Expect.isTrue "the card still names WHAT"
+      html.Contains("session-health-reason") |> Expect.isFalse "the header names WHY, so the card must not repeat the reason line")
+
     testCase "a Failed card's reason renders too, distinctly colored from Degraded" (fun () ->
       let s = Fixtures.card (SessionHealth.Failed "Session is stopped.") (Fixtures.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
       let html = renderSessionsForSession "0a2b3c4d" [ s ] false |> renderNode

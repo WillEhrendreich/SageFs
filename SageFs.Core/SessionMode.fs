@@ -13,21 +13,10 @@ type RestartPlan =
   /// Respawn the worker WITHOUT rebuilding — a soft reset that must not pay
   /// for a build, and must not be confused with a rebuild.
   | RespawnOnly
-  /// Carry a live value into the new shape, then respawn. No build.
-  ///
-  /// A BOUNDARY ID, not a value and not a type, and that is forced rather than
-  /// chosen. The app runs inside the WORKER, so its live cell and the `ref` a
-  /// migration must write are in the worker's process; `RestartSession` is
-  /// handled in the DAEMON. Carrying the carried value or the target type
-  /// across that boundary would hand the daemon objects it cannot even name —
-  /// the app's types are loaded in the worker, in an AppDomain SageFs does not
-  /// own.
-  ///
-  /// So the plan names a thing the worker already has, and the worker does the
-  /// work it is the only process that can. This is also why a boundary's
-  /// `Migrate` hook is the right shape rather than one option among several:
-  /// it runs in the worker, with the value in hand.
-  | Migrate of boundary: string
+  // `Migrate` used to be a third plan, named for carrying a live value into the new
+  // shape. Nothing called the boundary hook with a carried value, so the plan was
+  // indistinguishable from RespawnOnly while promising preserved state. The
+  // pricing decision still lives in RestartAction.MigrateAndRespawn.
 
 /// `RestartRefusal` is defined in SageFsError.fs as a case of `SageFsError`:
 /// a refusal of a duplicate rebuild is a distinct, matchable outcome, not a

@@ -1171,8 +1171,8 @@ optionally rebuild the project, and create a fresh session. ALL definitions are 
 
 VALID REASONS (rare):
 - New files added to .fsproj or package references changed (rebuild=true needed)
-- Module opens failed during warm-up (cascade of errors on EVERY eval, even '1+1;;')
-- Soft reset (reset_fsi_session) didn't fix a genuine session-level problem
+- Module opens failed during warm-up (errors on EVERY eval); soft reset didn't fix a genuine session-level problem
+- The worker or FSI host died (HostCrashed, WorkerCommunicationFailed, PipeClosed, FsiHostCrashed): definitions are gone; fix crashing code, then reset. A rebuild in flight: wait for get_session_status.lastRestart; a second reset is refused.
 
 INVALID REASONS (common mistakes):
 - Your code had a syntax error or type error → fix your code

@@ -170,6 +170,7 @@ let withHostSilence (noted: Noted option) (status: SessionLifecycleStatus) (heal
     let reason = describe note.Silence
     match health, sameWorker with
     | SessionHealth.Starting, _
+    | SessionHealth.Recovering _, _
     | SessionHealth.Failed _, _
     | SessionHealth.Healthy, false
     | SessionHealth.Degraded _, false -> health

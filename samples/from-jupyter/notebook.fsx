@@ -19,8 +19,9 @@ let variance =
 // ── No kernel crashes. No "restart and run all". ──
 // Jupyter has one global mutable kernel state.
 // You run cell 7 after cell 3 and wonder why nothing works.
-// SageFs sessions are isolated processes.  Crash one → swap for a pre-warmed one.
-// `hard_reset_fsi_session` in 200ms.  Your data is still there.
+// SageFs sessions are isolated processes. A crashed host is reported with its exit
+// code and last output; the definitions it held are gone and `hard_reset_fsi_session`
+// starts a fresh one. There is no pre-warmed swap and no claim that your data survived.
 
 // ── Inline results instead of print() everywhere ──
 // Jupyter: you need a cell that ends in an expression, or use display()

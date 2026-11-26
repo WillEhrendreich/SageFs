@@ -286,6 +286,11 @@ module McpSessionRouting =
     | Routable _ -> ""
     | WarmingUp (sid, status) ->
       sprintf "Session '%s' is still warming up (%s). Warmup takes seconds on a small project and minutes on a large repo, and get_session_status reports its progress. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
+    | Unroutable (sid, WorkerProtocol.SessionLifecycleStatus.HostCrashed (_, crash)) ->
+      // The worker is alive; its FSI host is gone. "May be mid-restart" would have the agent
+      // wait on a session that will never come back, while health already carries the real
+      // recovery. Use the crash record's own words so the two surfaces cannot disagree.
+      sprintf "Session '%s' exists but its FSI host died. %s %s" sid (HostCrash.describe crash) HostCrash.recovery
     | Unroutable (sid, status) ->
       sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_session_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | FaultedSession (sid, cause) ->

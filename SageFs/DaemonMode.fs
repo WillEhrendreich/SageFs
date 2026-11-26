@@ -2302,8 +2302,7 @@ let run
   // #82: assigned after elmRuntime exists (below) — routes a run_app'd app's
   // stdout AND stderr lines to the session output panel via TuiEvent.OutputEmitted, with the
   // stream attached so the app-output pane can filter on it.
-  let mutable onAppOutputCallback : (string -> SageFs.AppOutput.Stream -> string -> unit) =
-    fun _ _ _ -> ()
+  let mutable onAppOutputCallback : (string -> SageFs.AppOutput.Stream -> string -> unit) = fun _ _ _ -> ()
   // Assigned after elmRuntime exists (below): whether the landing gate drives a session, which the manager must not level.
   let mutable whoDrivesCallback : (WorkerProtocol.SessionId -> SessionDriver) =
     fun _ -> SessionDriver.Everyone

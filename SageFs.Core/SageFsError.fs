@@ -672,7 +672,8 @@ module SageFsError =
     | SageFsError.SessionNotRoutable _ -> "Run get_session_status or list_sessions to check session state"
     | SageFsError.WorkerCommunicationFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.WorkerSpawnFailed _ -> "Check .NET SDK installation with 'dotnet --info'"
-    | SageFsError.WorkerTimeout _ -> "Retry or run hard_reset_fsi_session"
+    | SageFsError.WorkerTimeout _ ->
+      "Check get_session_status.lastRestart first: if a restart is already in progress, wait for it instead of starting another. Otherwise run hard_reset_fsi_session with rebuild=true; if the worker kept going silent, raise SAGEFS_WARMUP_INACTIVITY_SECONDS or set SAGEFS_MACHINE_TIER to a slower machine"
     | SageFsError.WorkerHttpError _ -> "Run hard_reset_fsi_session"
     | SageFsError.PipeClosed -> "Run hard_reset_fsi_session"
     | SageFsError.EvalFailed _ -> "Fix the code and resubmit"

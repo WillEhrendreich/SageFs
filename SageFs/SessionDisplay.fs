@@ -148,7 +148,10 @@ module SessionDisplay =
     | SessionLifecycleStatus.Faulted reason ->
       SessionDisplayStatus.Faulted (FaultReason.describe reason)
     | SessionLifecycleStatus.HostCrashed(_, crash) ->
-      SessionDisplayStatus.Faulted (HostCrash.describe crash)
+      // The main-area fault notice and the card reason both use this text. Carrying only the
+      // crash description told the user to stop and recreate, while the recorded recovery is
+      // hard reset. One string, so the two surfaces cannot disagree.
+      SessionDisplayStatus.Faulted (sprintf "%s %s" (HostCrash.describe crash) HostCrash.recovery)
     | SessionLifecycleStatus.Restarting _ ->
       SessionDisplayStatus.Restarting
     | SessionLifecycleStatus.Stopped ->

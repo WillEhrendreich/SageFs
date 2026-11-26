@@ -37,6 +37,31 @@ let private allKinds =
 let lastRestartTests =
   testList "SessionStatusPayload.lastRestart" [
 
+    testCase "WHY — a restarting session's health is in the status payload, so an agent never reads a silent 'Warming up' while its definitions are gone" <| fun _ ->
+      let info : SessionStatusPayload.SessionRecord =
+        { SessionId = "abc12345"
+          Projects = []
+          ProjectRoles = []
+          Status = WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart
+          Rebuild = LastRebuild.NeverRebuilt
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+      let health = SessionStatusPayload.healthOfSessionRecord info None
+      health.status |> Expect.equal "a restart is its own verdict, not silence" "Recovering"
+      health.reason |> Expect.isSome "and it says what is happening"
+
+    testCase "WHY — a crashed host's health in the status payload carries the same hard-reset recovery the dashboard shows" <| fun _ ->
+      let crash = { Exit = HostExit.ExitedWith 134; Output = "boom" }
+      let info : SessionStatusPayload.SessionRecord =
+        { SessionId = "abc12345"
+          Projects = []
+          ProjectRoles = []
+          Status = WorkerProtocol.SessionLifecycleStatus.HostCrashed ({ Pid = 1234; Port = None }, crash)
+          Rebuild = LastRebuild.NeverRebuilt
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+      let health = SessionStatusPayload.healthOfSessionRecord info None
+      health.status |> Expect.equal "a dead host is Failed" "Failed"
+      health.reason |> Option.defaultValue "" |> Expect.stringContains "with the way out" "hard_reset_fsi_session"
+
     testCase "WHY — a failed rebuild that left the old worker serving is IN the payload, with its reason, because that state looks identical to a rebuild still running and the caller was told to look here" <| fun _ ->
       let json =
         SessionStatusPayload.serialize

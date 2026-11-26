@@ -1339,8 +1339,8 @@ let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading
         (q.GetAppOutput sessionId)
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
-    // The daemon-health bar is gone; the tabline says Ready and the card says the rest.
-    let daemonHealthPanel = Elem.div [] []
+    // The viewed session's verdict used to be computed and discarded; render it under the tabline.
+    let daemonHealthPanel = renderSessionHealthLine viewedHealth
     // Friction review panel — local store only. Built server-side so the
     // client never assembles raw telemetry. The read is synchronous SQLite;
     // an SSE stream reuses its last-built panel within the worker-data TTL

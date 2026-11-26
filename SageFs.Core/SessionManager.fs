@@ -779,14 +779,11 @@ module SessionManager =
             Instrumentation.failSpan span (SageFsError.describe (SageFsError.HardResetRefused RestartRefusal.AlreadyInProgress))
             return state
           | Some session ->
-            // A unit scope still rebuilds — SageFs rebuilds a PROJECT, so there
-            // is no narrower build today. `Migrate` respawns too, and stays
-            // distinct because it keeps live state. See `RestartPlan.Migrate`.
+            // respawn-only means no build; rebuild is the other plan.
             let rebuild =
               match plan with
               | SageFs.RestartPlan.Rebuild _ -> true
-              | SageFs.RestartPlan.RespawnOnly
-              | SageFs.RestartPlan.Migrate _ -> false
+              | SageFs.RestartPlan.RespawnOnly -> false
 
             match rebuild with
             | false ->
@@ -1141,7 +1138,8 @@ module SessionManager =
                     Proxy = pendingProxy
                     WorkerBaseUrl = ""
                     RestartState = newRestartState
-                    Info = { session.Info with Status = newStatus } }
+                    // The app died with this worker; mark it gone now, not after the restart delay.
+                    Info = { session.Info with App = AppRun.acrossWorkerRestart session.Info.App; Status = newStatus } }
               let newState = ManagerState.addSession id updated state
               Async.Start(async {
                 do! Async.Sleep(int delay.TotalMilliseconds)
@@ -1179,10 +1177,7 @@ module SessionManager =
                     Proxy = pendingProxy
                     WorkerBaseUrl = ""
                     AdoptedCore = spawned.AdoptedCore
-                    Info =
-                      { session.Info with
-                          Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }
-                          LastActivity = DateTime.UtcNow } }
+                    Info = { session.Info with App = AppRun.acrossWorkerRestart session.Info.App; Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }; LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
               runtime.AwaitWorkerPort id proc inbox ct (StartTimeoutDecision.firstStartBudget runtime.Ledger)
               Instrumentation.tagSpan recoverySpan [ "recovery.outcome", box "restarted" ]

@@ -796,8 +796,8 @@ module McpTools =
         // session that never became ready.
         let! refusal =
           match Affordances.ToolName.tryParse toolName |> Option.bind SessionAction.ofTool, resolution with
-          | Some action, Routable sid -> sessionAccessRefusalForCall ctx action sid
-          | Some _, (WarmingUp _ | Unroutable _ | FaultedSession _ | InvalidSessionId _ | Gone _)
+          | Some action, (Routable sid | WarmingUp (sid, _) | Unroutable (sid, _) | FaultedSession (sid, _)) -> sessionAccessRefusalForCall ctx action sid // faulted still holds another's state
+          | Some _, (InvalidSessionId _ | Gone _)
           | None, (Routable _ | WarmingUp _ | Unroutable _ | FaultedSession _ | InvalidSessionId _ | Gone _) -> Task.FromResult None
         match refusal with
         | Some error -> return Error(SageFsError.describeForAgent error)
@@ -1450,7 +1450,7 @@ module McpTools =
              target = targets |> List.map SessionProjectTarget.toWire
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid status
-             workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid)
+             workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid); health = SessionStatusPayload.healthOfInfo info status
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
@@ -1464,7 +1464,7 @@ module McpTools =
           {| state = SessionStatusPayload.stateLabelOf SessionState.Faulted
              scope = "Session"
              sessionId = sid
-             faultReason = FaultCause.describe cause; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid)
+             faultReason = FaultCause.describe cause; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid); health = info |> Option.map (fun i -> SessionStatusPayload.healthOfInfo (Some i) i.Status) |> Option.defaultWith (fun () -> SessionHealth.toJson (SessionHealth.Failed (FaultCause.describe cause)))
              target = targets |> List.map SessionProjectTarget.toWire
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)

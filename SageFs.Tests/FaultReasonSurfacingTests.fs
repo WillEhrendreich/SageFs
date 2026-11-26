@@ -62,6 +62,14 @@ let tests =
       FaultCause.ofStatus (SessionLifecycleStatus.Faulted (FaultReason.Reported "  "))
       |> Expect.equal "whitespace isn't a reason" FaultCause.NoReasonRecorded
 
+    testCase "WHY — a crashed host is told to hard reset, not that it may be mid-restart" <| fun _ ->
+      let crash = { Exit = HostExit.ExitedWith 134; Output = "unhandled exception" }
+      let handle = { Pid = 1234; Port = Some 37749 }
+      let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.HostCrashed (handle, crash)))) false
+      let text = formatSessionResolution resolution
+      text |> Expect.stringContains "names the recovery the crash record already carries" "hard_reset_fsi_session"
+      text.Contains "may be mid-restart" |> Expect.isFalse "a dead host is not a worker that is still starting"
+
     testCase "WHY: a warming session's text promises no fixed duration, and points at progress and the wait" <| fun _ ->
       let text = formatSessionResolution (SessionResolution.WarmingUp ("a0a0a0a0", SessionLifecycleStatus.Stopped))
       text.Contains "15-30" |> Expect.isFalse "a big repo warms for minutes, so a fixed estimate misleads"

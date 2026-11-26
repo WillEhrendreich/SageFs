@@ -200,8 +200,9 @@ and private restartForChanges
         // carry it cannot perform — and it says so, because "silently not
         // migrated" is the failure this whole path exists to prevent.
         match subject with
-        | GranularRestart.RestartSubject.UnitScope boundaryId ->
-          ops.RestartSession sessionId (RestartPlan.Migrate boundaryId)
+        | GranularRestart.RestartSubject.UnitScope _ ->
+          // No boundary hook is invoked with a carried value, so this is a respawn.
+          ops.RestartSession sessionId RestartPlan.RespawnOnly
         | GranularRestart.RestartSubject.Worker ->
           ops.RestartSession sessionId (RestartPlan.Rebuild subject)
 

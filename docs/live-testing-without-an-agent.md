@@ -167,7 +167,7 @@ The daemon's reason for picking tests was: "Coverage evidence widened the impact
 
 Those times are slow. The load average on the machine was around 45 on 8 cores, with other agents building on it. [how-live-testing-works.md](how-live-testing-works.md) reports about 0.7 seconds from an edit to a verdict, measured on one quiet 16-thread machine. I have no number for a calm laptop.
 
-After a save there is a second step. About two seconds after your edits go quiet, SageFs starts a real build of the saved text and runs the tests again against it, to confirm or contradict the first answer. It took about 35 seconds on that loaded machine. While it runs, the dashboard session card shows an amber "Rebuilding" note and the status call says `"Confirmation":"building"`. It restarts the worker, so the output pane shows a fresh `Loaded ... FSI session created` block. The verdict stays on screen the whole time.
+After a save there is a second step. About two seconds after your edits go quiet, SageFs starts a real build of the saved text and runs the tests again against it, to confirm or contradict the first answer. It took about 35 seconds on that loaded machine. While it runs, the dashboard session card shows an amber "Rebuilding" note and the status call says `"Confirmation":"building"`. When the session holds definitions or unsaved buffers, the build and its tests run in a throwaway worker so the session's own REPL keeps what it holds; a session holding nothing still swaps. The verdict stays on screen the whole time.
 
 The whole thing, from creating the session to seeing green again, took under three minutes, and most of that was the cold start and me typing.
 

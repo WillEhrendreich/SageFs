@@ -68,14 +68,16 @@ let private assemblyLoadedButNothingToOpenWarmup : WarmupContext =
 [<Tests>]
 let sessionHealthClassifyTests = testList "SessionHealth.classify" [
 
-  testCase "WHY — Starting/Building/Restarting can't be judged yet, so health must say Starting, not guess"
+  testCase "WHY — Starting/Building cannot be judged yet, but Restarting is a known loss and must say so"
   <| fun _ ->
     SessionHealth.classify (SessionLifecycleStatus.Starting handle) [ myApp ] None
     |> Expect.equal "starting" SessionHealth.Starting
     SessionHealth.classify (SessionLifecycleStatus.Building("dotnet build", handle)) [ myApp ] None
     |> Expect.equal "building" SessionHealth.Starting
-    SessionHealth.classify (SessionLifecycleStatus.Restarting (PreviousWorker.Was 1)) [ myApp ] None
-    |> Expect.equal "restarting" SessionHealth.Starting
+    match SessionHealth.classify (SessionLifecycleStatus.Restarting (PreviousWorker.Was 1)) [ myApp ] None with
+    | SessionHealth.Recovering reason ->
+      reason |> Expect.stringContains "names what the old worker held" "unsaved buffers"
+    | other -> failtestf "expected Recovering, got %A" other
 
   testCase "WHY — Faulted must carry the real fault reason, not a generic label"
   <| fun _ ->

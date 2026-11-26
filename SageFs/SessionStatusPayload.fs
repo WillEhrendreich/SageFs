@@ -16,6 +16,8 @@ namespace SageFs
 // `state == Ready` evaluated against a session with no assemblies loaded.
 module SessionStatusPayload =
 
+  open SageFs.ProjectLoading
+
   /// The top-level state label for a session state.
   ///
   /// `Evaluating` and `Ready` both report "Ready": an in-flight eval is a LOADED
@@ -96,6 +98,40 @@ module SessionStatusPayload =
     /// Whether the session's own SageFs.Core runs in the worker, and when it does not, why.
     CoreAdoption: HostCoreAdoption.AdoptionNote
   }
+
+  /// The facts the health verdict needs from a session record. Named, so the
+  /// warming and faulted status shapes cannot omit a field without a compile error.
+  type SessionRecord =
+    { SessionId: string
+      Projects: string list
+      ProjectRoles: ClassifiedProject list
+      Status: WorkerProtocol.SessionLifecycleStatus
+      Rebuild: LastRebuild
+      Workflow: WorkflowTypes.SessionWorkflow }
+
+  /// The health verdict for a session record, in the wire shape. Every status
+  /// shape uses this: the warming and faulted shapes used to omit `health`
+  /// altogether although the tool description promises it and the verdict had
+  /// already been computed.
+  let healthOfSessionRecord (record: SessionRecord) (warmup: WarmupContext option) : HealthView =
+    SessionHealth.classify record.Status record.ProjectRoles warmup
+    |> SessionHealth.applyRebuild record.Rebuild
+    |> SilentHost.healthOf record.SessionId record.Status
+    |> SessionHealth.toJson
+
+  /// The shape callers that already hold a SessionInfo use: one line so the
+  /// warming and faulted status shapes cannot drift from the routable one.
+  let healthOfInfo (info: WorkerProtocol.SessionInfo option) (status: WorkerProtocol.SessionLifecycleStatus) : HealthView =
+    match info with
+    | Some i ->
+      healthOfSessionRecord
+        { SessionId = WorkerProtocol.SessionId.value i.Id
+          Projects = i.Projects
+          ProjectRoles = i.ProjectRoles
+          Status = status
+          Rebuild = i.Rebuild
+          Workflow = i.Workflow } None
+    | None -> SessionHealth.classify status [] None |> SessionHealth.toJson
 
   /// What a session's rebuild history says, in the payload's terms. The one
   /// projection every surface uses (MCP status, /api/sessions), so none can read
