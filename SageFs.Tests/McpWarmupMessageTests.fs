@@ -83,7 +83,7 @@ let mcpWarmupMessageTests =
       let ctx = warmingContext sessionId
       let status = WorkerProtocol.SessionLifecycleStatus.Starting { Pid = 4242; Port = None }
       let! routed =
-        routeToSessionWithin ctx CancellationToken.None sessionId (fun _ -> WorkerProtocol.WorkerMessage.GetStatus "rid")
+        routeToSessionWithin ctx CancellationToken.None sessionId (fun _ -> WorkerProtocol.WorkerMessage.GetStatus "rid") false
       match routed with
       | Result.Ok _ -> failtest "a session with no worker transport cannot be routed to"
       | Result.Error (Message text) ->
@@ -98,4 +98,40 @@ let mcpWarmupMessageTests =
       text |> Expect.stringContains "progress is in get_session_status" "get_session_status"
       text |> Expect.stringContains "waits on the server" "wait_seconds=60"
       text.Contains "15-30s" |> Expect.isFalse "no fixed figure"
+
+    testTask "WHY — one dropped status reply is retried, not treated as a dead worker that drops every definition" {
+      let sid = "bb220011"
+      let info = { warmingInfo (SageFs.McpSessionRouting.toSessionId sid) with Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 4242; Port = Some 45000 } }
+      let mutable calls = 0
+      let mutable died = 0
+      let proxy : WorkerProtocol.SessionProxy = fun _ -> async {
+        calls <- calls + 1
+        if calls = 1 then return raise (IO.IOException("pipe broke under load"))
+        return WorkerProtocol.WorkerResponse.WorkerError (SageFsError.WorkerTimeout("x", "y", 1.0))
+      }
+      let ops =
+        { (warmingContext sid).SessionOps with
+            GetProxy = fun _ -> Task.FromResult(Some proxy)
+            GetSessionInfo = fun _ -> Task.FromResult(Some info)
+            NotifyWorkerDied = fun _ -> died <- died + 1 }
+      let ctx = { (warmingContext sid) with SessionOps = ops }
+      let! route = routeStatusQuery ctx sid (fun _ -> WorkerProtocol.WorkerMessage.GetStatus "rid")
+      calls |> Expect.equal "the status query was tried twice" 2
+      died |> Expect.equal "one dropped reply did not kill the worker" 0
+      route |> Expect.isOk "the retry answered"
+    }
+
+    testTask "WHY — a side-effecting call is never retried, because its first attempt may already have run" {
+      let sid = "bb220012"
+      let info = { warmingInfo (SageFs.McpSessionRouting.toSessionId sid) with Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 4242; Port = Some 45000 } }
+      let mutable calls = 0
+      let proxy : WorkerProtocol.SessionProxy = fun _ -> async { calls <- calls + 1; return raise (IO.IOException("pipe broke")) }
+      let ops =
+        { (warmingContext sid).SessionOps with
+            GetProxy = fun _ -> Task.FromResult(Some proxy)
+            GetSessionInfo = fun _ -> Task.FromResult(Some info) }
+      let ctx = { (warmingContext sid) with SessionOps = ops }
+      let! _ = routeToSession ctx sid (fun _ -> WorkerProtocol.WorkerMessage.EvalCode("1+1;;", "rid"))
+      calls |> Expect.equal "the eval was attempted once" 1
+    }
   ]

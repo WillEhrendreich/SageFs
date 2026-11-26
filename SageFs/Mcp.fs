@@ -250,6 +250,7 @@ module McpTools =
     (cancellation: System.Threading.CancellationToken)
     (sessionId: string)
     (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
+    (retryOnTransportFailure: bool)
     : Task<Result<WorkerProtocol.WorkerResponse, RouteError>> =
     task {
       match WorkerProtocol.SessionId.validate sessionId with
@@ -276,43 +277,41 @@ module McpTools =
           | :? OperationCanceledException as cancellation ->
             return raise cancellation
           | ex ->
-            match tryMapTransportFailure sessionId ex with
-            | Some transportError ->
-              // INVARIANT (reader cannot fault a starting/restarting session):
-              // a transport failure observed while the SessionManager is
-              // deliberately respawning the worker is expected — the worker is
-              // being swapped. It must NOT NotifyWorkerDied (which posts a
-              // synthetic WorkerExited(pid=-1) that the stale-pid guards do not
-              // catch and which can schedule a second restart) and must NOT mark
-              // the session Faulted. Only the restart owner faults a restarting
-              // session.
-              // Discriminator: a daemon-owned cold restart with no prior
-              // worker is Restarting with no pid to guard (SessionManager
-              // cold-restart path — see RestartSession/ScheduleRestart).
-              // A caller-driven reset (resetSession / hardReset rebuild=false)
-              // flips Status via UpdateSessionStatus, which PRESERVES the
-              // worker handle (see startingWhileReset), so its pid is never None
-              // — a transport failure there is a real worker death and must
-              // trigger NotifyWorkerDied recovery.
-              let! info = ctx.SessionOps.GetSessionInfo validId
-              match info with
-              | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart -> true | _ -> false) ->
-                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Call get_session_status with wait_seconds=60 to wait for it; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
-              | _ ->
-                ctx.SessionOps.NotifyWorkerDied validId
-                do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (routeErrorMessage transportError)))
-                return Result.Error transportError
+            // A dropped read-only reply is not a dead worker. Retry once; side effects never retry.
+            let! retried = task {
+              if not retryOnTransportFailure then return None
+              else
+                let! outcome = (async { return! Async.AwaitTask(send (msg (WorkerProtocol.SessionId.newId ())) |> Async.StartAsTask) } |> Async.Catch |> Async.StartAsTask)
+                match outcome with
+                | Choice1Of2 response -> return Some (Result.Ok response)
+                | Choice2Of2 _ -> return None
+            }
+            match retried with
+            | Some ok -> return ok
             | None ->
-              return raise ex
+              match tryMapTransportFailure sessionId ex with
+              | Some transportError ->
+                // A transport failure while the manager is deliberately respawning is
+                // expected; only the restart owner may fault that session.
+                let! info = ctx.SessionOps.GetSessionInfo validId
+                match info with
+                | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart -> true | _ -> false) ->
+                  return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Call get_session_status with wait_seconds=60 to wait for it; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
+                | _ ->
+                  ctx.SessionOps.NotifyWorkerDied validId
+                  do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (routeErrorMessage transportError)))
+                  return Result.Error transportError
+              | None ->
+                return raise ex
     }
 
   /// Route a WorkerMessage to a specific session via proxy.
-  let routeToSession
-    (ctx: McpContext)
-    (sessionId: string)
-    (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
-    : Task<Result<WorkerProtocol.WorkerResponse, RouteError>> =
-    routeToSessionWithin ctx System.Threading.CancellationToken.None sessionId msg
+  let routeToSession (ctx: McpContext) (sessionId: string) (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage) =
+    routeToSessionWithin ctx System.Threading.CancellationToken.None sessionId msg false
+
+  /// A read-only status query: one dropped reply is not a dead worker, so retry once.
+  let routeStatusQuery (ctx: McpContext) (sessionId: string) (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage) =
+    routeToSessionWithin ctx System.Threading.CancellationToken.None sessionId msg true
 
   /// Route to the active session or the specified session.
   /// When no agent mapping exists, resolves by the caller's working directory.
@@ -612,7 +611,7 @@ module McpTools =
       use abandon = new System.Threading.CancellationTokenSource()
       let probe =
         routeToSessionWithin ctx abandon.Token sessionId
-          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId)) true
       let! first = Task.WhenAny(probe :> Task, Task.Delay(bound, abandon.Token))
       abandon.Cancel()
       match obj.ReferenceEquals(first, probe) with
@@ -1475,7 +1474,7 @@ module McpTools =
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let! routeResult =
-          routeToSession ctx sid (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
+          routeStatusQuery ctx sid (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
         match info, routeResult with
         | Some sessionInfo, Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
           let targets = SessionProjectTarget.tryCreateMany sessionInfo.Projects |> Result.defaultValue []
