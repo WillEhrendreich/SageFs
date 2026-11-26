@@ -93,11 +93,18 @@ let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (s
   // "Operation could not be completed due to earlier error", whose text can still contain the submitted
   // code (and its literal), so a single sample can look like a made binding. Poll the observable answer
   // until it actually carries the value and is not a failure.
+  let last = ref ""
   await TestTimeouts.buildConfirmation
-    (fun () -> sprintf "the REPL answer to %s to contain %s" code expected)
+    (fun () ->
+      // The answer is the evidence. A CI-only failure here once said only "to contain 43" after 2376
+      // polls, which cannot distinguish a lost binding from a worker that kept answering something
+      // else. Carry a short tail of the last answer so the next red names what the REPL actually said.
+      let tail = if last.Value.Length > 200 then last.Value.Substring(last.Value.Length - 200) else last.Value
+      sprintf "the REPL answer to %s to contain %s. Last answer: %s" code expected tail)
     (fun () -> task {
       do! awaitQuietSession client http
       let! answer = evalIn client sessionId code
+      last.Value <- answer
       return
         if answer.Contains expected && not (answer.Contains "Evaluation failed") then Ok(Some answer)
         else Ok None })
