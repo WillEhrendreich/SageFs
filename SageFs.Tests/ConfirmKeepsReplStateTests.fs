@@ -109,8 +109,20 @@ let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (s
       let good = answer.Contains expected && not (answer.Contains "Evaluation failed")
       if not good then
         // Only pay for the extra status read on the failure path; a green poll ends here.
+        // Pull the few fields that say whether the worker that made the binding is still
+        // the one serving, rather than truncating the wire payload before them.
         let! status = callTool client "get_session_status" [ "session_id", box sessionId ]
-        lastStatus.Value <- status.Replace("\n", " ").Substring(0, min 240 status.Length)
+        let field name =
+          let marker = sprintf "\"%s\":" name
+          match status.IndexOf marker with
+          | -1 -> "?"
+          | i ->
+            let rest = status.Substring(i + marker.Length).TrimStart()
+            let stop = rest.IndexOfAny([| ','; '}' |])
+            if stop < 0 then rest else rest.Substring(0, stop)
+        lastStatus.Value <-
+          sprintf "state=%s lifecycle=%s health=%s workerPid=%s lastRestart=%s fault=%s"
+            (field "state") (field "lifecycle") (field "health") (field "workerPid") (field "lastRestart") (field "faultReason")
       return if good then Ok(Some answer) else Ok None })
 
 /// The daemon's own record of the last rebuild, and the REPL binding. An OS pid is not a stable proxy for
