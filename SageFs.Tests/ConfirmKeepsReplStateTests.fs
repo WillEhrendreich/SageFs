@@ -94,20 +94,24 @@ let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (s
   // code (and its literal), so a single sample can look like a made binding. Poll the observable answer
   // until it actually carries the value and is not a failure.
   let last = ref ""
+  let lastStatus = ref ""
   await TestTimeouts.buildConfirmation
     (fun () ->
-      // The answer is the evidence. A CI-only failure here once said only "to contain 43" after 2376
-      // polls, which cannot distinguish a lost binding from a worker that kept answering something
-      // else. Carry a short tail of the last answer so the next red names what the REPL actually said.
+      // The answer and the session status are the evidence. One CI failure after 1830 polls showed
+      // "marker is not defined" but no reason: carry both so the next red says what the REPL answered
+      // and whether the worker the binding was made in is still the one serving.
       let tail = if last.Value.Length > 200 then last.Value.Substring(last.Value.Length - 200) else last.Value
-      sprintf "the REPL answer to %s to contain %s. Last answer: %s" code expected tail)
+      sprintf "the REPL answer to %s to contain %s. Last answer: %s. Session: %s" code expected tail lastStatus.Value)
     (fun () -> task {
       do! awaitQuietSession client http
       let! answer = evalIn client sessionId code
       last.Value <- answer
-      return
-        if answer.Contains expected && not (answer.Contains "Evaluation failed") then Ok(Some answer)
-        else Ok None })
+      let good = answer.Contains expected && not (answer.Contains "Evaluation failed")
+      if not good then
+        // Only pay for the extra status read on the failure path; a green poll ends here.
+        let! status = callTool client "get_session_status" [ "session_id", box sessionId ]
+        lastStatus.Value <- status.Replace("\n", " ").Substring(0, min 240 status.Length)
+      return if good then Ok(Some answer) else Ok None })
 
 /// The daemon's own record of the last rebuild, and the REPL binding. An OS pid is not a stable proxy for
 /// "the session was left alone": an FSI host can be recreated for reasons unrelated to a confirmation, and
