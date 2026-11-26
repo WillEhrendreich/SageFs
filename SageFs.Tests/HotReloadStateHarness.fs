@@ -447,8 +447,27 @@ let awaitVerdictAfter (budget: TimeSpan) (app: RunningApp) (what: string) (write
     else
       return verdict
   }
-  let! verdict = readStream 0
-  match verdict with
+  let outcomeUrl = app.WorkerUrl + "/hotreload/last-outcome"
+  let mutable before = ""
+  try before <- http.GetStringAsync(outcomeUrl).Result with _ -> ()
+  let! fromStream = readStream 0
+  // The SSE stream can end without a terminal event under load. The worker still records
+  // the verdict on /hotreload/last-outcome, so read that before calling the save lost.
+  let! fromPolling = task {
+    if fromStream <> "" then return fromStream
+    else
+      let! changed =
+        TestInfrastructure.waitForAsync (int budget.TotalMilliseconds) (fun () -> task {
+          try
+            let! payload = http.GetStringAsync(outcomeUrl)
+            return payload <> before && isVerdict payload
+          with _ -> return false })
+      if not changed then return ""
+      else
+        let! payload = http.GetStringAsync(outcomeUrl)
+        return if isVerdict payload then payload else ""
+  }
+  match fromPolling with
   | "" ->
     return
       failwithf "no verdict within %.0fs for %s. Saw:\n%s\nHost log:\n%s"
