@@ -1512,6 +1512,7 @@ h2 {
 
 .live-dock .live-pane-bar button.session-btn {
   padding: 1px 5px;
+  height: 20px;
   min-height: 20px;
   gap: 3px;
   font-size: 0.857rem;
