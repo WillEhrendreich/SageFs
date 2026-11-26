@@ -119,7 +119,14 @@ let private deliver (deps: TrunkShellDeps) (session: string) (files: SavedFile l
   let rec ask (attempt: int) = async {
     try
       let! answer = deps.Ask session (WorkerProtocol.WorkerMessage.ApplySaves (files, replyId))
-      return Some answer
+      // A worker that died mid-delivery answers WorkerCommunicationFailed rather than throwing. It is
+      // the same transient condition as a dropped socket: retry the same ask before recording it as the
+      // landing's permanent answer. A worker that REFUSES gives a different error and is not retried.
+      match answer with
+      | Result.Error (SageFsError.WorkerCommunicationFailed _) when attempt < 3 ->
+        do! Async.Sleep (int Timeouts.restartBaseBackoff.TotalMilliseconds * (attempt + 1))
+        return! ask (attempt + 1)
+      | _ -> return Some answer
     with
     | :? System.Net.Http.HttpRequestException
     | :? System.IO.IOException
