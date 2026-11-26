@@ -18,18 +18,20 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// no private directory is ever materialized, `AdoptedCore` is `None`, and
 /// a naive "assert the private root is gone after stop" test would pass
 /// VACUOUSLY (there was never a directory to begin with). The fixture here
-/// is SageFs's own SageFs.Tests project — exactly like DogfoodReplTests.fs
-/// — because it is the one project in this repo guaranteed to ship a
-/// same-version build of SageFs.Core and therefore force a REAL adoption.
+/// is the ConsoleTicker sample: the gate rebuilds it with the daemon's own
+/// SageFs.Core, so it forces a REAL adoption, and it is two source files
+/// instead of the eight projects SageFs.Tests would load into the FSI worker.
+/// That mattered at load 18.6: the heavy fixture's worker died before it
+/// reported a port, which is a machine failure rather than a sweep failure.
 /// The `AdoptedCore |> Expect.isSome` assertion below is not incidental:
 /// it is what stops this test from being the vacuous one it warns about.
 let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private testsProject =
-  Path.Combine(repoRoot, "SageFs.Tests", "SageFs.Tests.fsproj")
+  Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker", "SageFs.Samples.ConsoleTicker.fsproj")
 
 let private testsDir =
-  Path.Combine(repoRoot, "SageFs.Tests")
+  Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
 
 [<Tests>]
 let tests =
