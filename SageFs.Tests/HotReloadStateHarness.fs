@@ -408,31 +408,45 @@ let private isVerdict (payload: string) =
 /// on purpose. Two saves in a row have to be further apart than that or the
 /// product (correctly) sees one.
 let awaitVerdictAfter (budget: TimeSpan) (app: RunningApp) (what: string) (write: unit -> Task<unit>) : Task<string> = task {
-  use req = new HttpRequestMessage(HttpMethod.Get, app.WorkerUrl + "/__sagefs__/reload")
-  req.Headers.Accept.ParseAdd "text/event-stream"
-  use streamClient = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
-  use! resp = streamClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
-  resp.EnsureSuccessStatusCode() |> ignore
-  use! stream = resp.Content.ReadAsStreamAsync()
-  use reader = new StreamReader(stream)
-  do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
-  do! write ()
-  use cts = new CancellationTokenSource(budget)
   let seen = ResizeArray<string>()
-  let mutable verdict = ""
-  try
-    while verdict = "" do
-      let! line = reader.ReadLineAsync(cts.Token)
-      match line with
-      | null -> cts.Cancel()
-      | l when l.StartsWith("data: ", StringComparison.Ordinal) ->
-        let payload = l.Substring "data: ".Length
-        seen.Add payload
-        match isVerdict payload with
-        | true -> verdict <- payload
-        | false -> ()
-      | _ -> ()
-  with :? OperationCanceledException -> ()
+  // The worker's SSE stream is long-lived. Under load the connection can drop mid-read with an
+  // HttpIOException; that is a transport failure, not a verdict. Reopen and send the same edit once more
+  // before giving up, so a dropped socket does not fail a save whose product behaviour was fine.
+  let rec readStream (attempt: int) : Task<string> = task {
+    use req = new HttpRequestMessage(HttpMethod.Get, app.WorkerUrl + "/__sagefs__/reload")
+    req.Headers.Accept.ParseAdd "text/event-stream"
+    use streamClient = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
+    use! resp = streamClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
+    resp.EnsureSuccessStatusCode() |> ignore
+    use! stream = resp.Content.ReadAsStreamAsync()
+    use reader = new StreamReader(stream)
+    if attempt = 0 then do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
+    do! write ()
+    use cts = new CancellationTokenSource(budget)
+    let mutable verdict = ""
+    let mutable streamDied = false
+    try
+      while verdict = "" do
+        let! line = reader.ReadLineAsync(cts.Token)
+        match line with
+        | null -> cts.Cancel()
+        | l when l.StartsWith("data: ", StringComparison.Ordinal) ->
+          let payload = l.Substring "data: ".Length
+          seen.Add payload
+          match isVerdict payload with
+          | true -> verdict <- payload
+          | false -> ()
+        | _ -> ()
+    with
+    | :? OperationCanceledException -> ()
+    | :? IOException -> streamDied <- true
+    if streamDied && attempt < 2 then
+      let! retried = readStream (attempt + 1)
+      return retried
+    else
+      return verdict
+  }
+  let! verdict = readStream 0
   match verdict with
   | "" ->
     return
