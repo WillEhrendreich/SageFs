@@ -409,23 +409,23 @@ let private isVerdict (payload: string) =
 /// product (correctly) sees one.
 let awaitVerdictAfter (budget: TimeSpan) (app: RunningApp) (what: string) (write: unit -> Task<unit>) : Task<string> = task {
   let seen = ResizeArray<string>()
-  // The worker's SSE stream is long-lived. Under load the connection can drop mid-read with an
-  // HttpIOException; that is a transport failure, not a verdict. Reopen and send the same edit once more
-  // before giving up, so a dropped socket does not fail a save whose product behaviour was fine.
+  // The worker's SSE stream is long-lived. Under load the connection can be refused on open or drop
+  // mid-read; both are transport failures, not a verdict. Reopen and send the same edit once more before
+  // giving up, so a broken socket does not fail a save whose product behaviour was fine.
   let rec readStream (attempt: int) : Task<string> = task {
-    use req = new HttpRequestMessage(HttpMethod.Get, app.WorkerUrl + "/__sagefs__/reload")
-    req.Headers.Accept.ParseAdd "text/event-stream"
-    use streamClient = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
-    use! resp = streamClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
-    resp.EnsureSuccessStatusCode() |> ignore
-    use! stream = resp.Content.ReadAsStreamAsync()
-    use reader = new StreamReader(stream)
-    if attempt = 0 then do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
-    do! write ()
-    use cts = new CancellationTokenSource(budget)
     let mutable verdict = ""
     let mutable streamDied = false
     try
+      use req = new HttpRequestMessage(HttpMethod.Get, app.WorkerUrl + "/__sagefs__/reload")
+      req.Headers.Accept.ParseAdd "text/event-stream"
+      use streamClient = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
+      use! resp = streamClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
+      resp.EnsureSuccessStatusCode() |> ignore
+      use! stream = resp.Content.ReadAsStreamAsync()
+      use reader = new StreamReader(stream)
+      if attempt = 0 then do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
+      do! write ()
+      use cts = new CancellationTokenSource(budget)
       while verdict = "" do
         let! line = reader.ReadLineAsync(cts.Token)
         match line with
@@ -439,6 +439,7 @@ let awaitVerdictAfter (budget: TimeSpan) (app: RunningApp) (what: string) (write
         | _ -> ()
     with
     | :? OperationCanceledException -> ()
+    | :? HttpRequestException -> streamDied <- true
     | :? IOException -> streamDied <- true
     if streamDied && attempt < 2 then
       let! retried = readStream (attempt + 1)
