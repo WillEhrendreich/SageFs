@@ -25,12 +25,11 @@ let stillAlive (send: SessionProxy) (probeId: string) : Task<bool> =
 /// it also fails to answer. Returns true when the session was marked dead.
 let markIfDead (ops: SessionManagementOps) (sid: SessionId) (reason: string) : Task<bool> =
   task {
-    let mutable alive = false
-    match! ops.GetProxy sid with
-    | Some send ->
-      let! answered = stillAlive send (SessionId.value (SessionId.newId ()))
-      alive <- answered
-    | None -> ()
+    let! proxy = ops.GetProxy sid
+    let! alive =
+      match proxy with
+      | Some send -> stillAlive send (SessionId.value (SessionId.newId ()))
+      | None -> Task.FromResult false
     if alive then
       return false
     else
