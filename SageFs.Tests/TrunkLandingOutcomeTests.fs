@@ -797,7 +797,12 @@ let tests =
         File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
         |> Expect.stringContains "the trunk checkout holds bob's landed file" "bob:v2"
         let! serving =
-          match appliedLine.Contains "no running app to update" with
+          // Either line means the app that answered is not the landed checkout's: one had no app at all, the
+          // other had one that never held the file. Bring it back from the landing before asking it anything.
+          let nothingRan =
+            appliedLine.Contains "no running app to update"
+            || appliedLine.Contains "is not watched, so nothing ran"
+          match nothingRan with
           | true ->
             task {
               let! restarted = startTrunkApp w
