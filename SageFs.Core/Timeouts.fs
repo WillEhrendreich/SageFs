@@ -338,6 +338,10 @@ module Timeouts =
   /// this is longer than the walk's budget, and short enough that a getter that never returns does not look like a
   /// hung pane. No recorded reason for 5s.
   let memberEvaluationDeadline = forMachine (TimeSpan.FromSeconds(5.0))
+  /// How long the daemon waits for a host to answer a live-binding click before the click says it has no answer yet.
+  /// The host gives its own getter the deadline above and then the grace, so 15 s is three times what a host that is
+  /// running the getter needs: past that the host is silent, not slow, and the click must not wait forever.
+  let memberHostCeiling = forMachine (TimeSpan.FromSeconds(15.0))
   /// How long a getter that was interrupted gets to leave its wait before its thread is given up on. An interrupt
   /// frees a blocked wait at once, so this only bounds a getter that ignores it. No recorded reason for 250ms.
   let memberEvaluationGrace = TimeSpan.FromMilliseconds(250.0)

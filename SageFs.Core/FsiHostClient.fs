@@ -386,12 +386,18 @@ type FsiHostSession
 
   /// Run one "not evaluated" getter under containment and get the binding walked again. `path` is the labels below
   /// the binding, ending at the member.
+  ///
+  /// Bounded, unlike the other calls: a click the host never answers used to leave the pane on "evaluating" for good.
+  /// A silent host is not gone — `roundTripWithin` keeps the request pending, so a late answer is still read — but the
+  /// caller gets an outcome it can show instead of waiting forever.
   member _.EvaluateMember(binding: string, path: string list) : Async<HostCall<MemberOutcome>> =
     async {
-      match! roundTrip CancellationToken.None (fun id -> EvaluateMember(id, binding, path)) with
-      | Got(MemberResult(_, outcome)) -> return Answered outcome
-      | Got other -> return HostGone(unexpected "evaluate member" other)
-      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
+      match! roundTripWithin Timeouts.memberHostCeiling (fun id -> EvaluateMember(id, binding, path)) with
+      | SilentHost.WaitEnd.Replied(MemberResult(_, outcome)) -> return Answered outcome
+      | SilentHost.WaitEnd.Replied other -> return HostGone(unexpected "evaluate member" other)
+      | SilentHost.WaitEnd.NoAnswer ->
+        return Answered(MemberUnavailable(HostDidNotAnswer(int Timeouts.memberHostCeiling.TotalMilliseconds)))
+      | SilentHost.WaitEnd.HostGone reason -> return HostGone reason
     }
 
   /// Choose how much of a class the live-values walk may run, from now on. Answers with the mode the host now holds.

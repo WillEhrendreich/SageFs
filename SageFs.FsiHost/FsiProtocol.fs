@@ -122,6 +122,9 @@ type MemberUnavailableReason =
   | NoIsolatedHost
   /// The session's host is gone, for this reason.
   | HostNotRunning of reason: string
+  /// The host was asked and did not answer within the click's ceiling. Not the same as gone: the answer may come
+  /// later and still count, but the caller cannot wait forever, so the click says why it has no answer yet.
+  | HostDidNotAnswer of waitedMs: int
 
 /// What a click on a "not evaluated" row came to.
 type MemberOutcome =
@@ -666,6 +669,7 @@ module MemberClick =
     match reason with
     | NoIsolatedHost -> "this session runs F# Interactive inside the worker, so a getter cannot be run under containment"
     | HostNotRunning why -> sprintf "the session's host is gone: %s" why
+    | HostDidNotAnswer waitedMs -> sprintf "the click did not return in time: the host did not answer within %dms" waitedMs
 
 /// What the host process refuses, and how it says so. Pure decisions, plus the one file read at the edge
 /// (`readArgsFile`). Lives here, not in Program.fs, because Program.fs needs the F# compiler service and

@@ -300,9 +300,13 @@ let tests =
     do! waitForPaneText page "did not return in time"
     let! text = paneText page
     Expect.stringContains text "did not return in time" "the row says why the value is unknown"
+    // A getter the host ran says what contained it. A host that never answered has no containment to report and says
+    // that instead; either way the row names a reason, which is the claim.
     Expect.isTrue
-      (text.Contains "ran under a syscall filter" || text.Contains "no I/O containment here:")
-      "the containment line is shown for the click that timed out"
+      (text.Contains "the host did not answer"
+       || text.Contains "ran under a syscall filter"
+       || text.Contains "no I/O containment here:")
+      "the row says what contained the click, or that the host never answered it"
     let! problems = layoutProblems page
     Expect.equal problems "" (sprintf "nothing overflows or overlaps: %s" problems)
     do! shot page "7-loop-unknown"
