@@ -1434,10 +1434,9 @@ module McpTools =
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
       match resolution with
       | Gone _ | InvalidSessionId _ ->
+        // `lifecycle` is in EVERY shape, so polling for it sees "not this one yet", not a crash.
         return Json.serialize Json.standard (
-          {| state = "NoSession"
-             scope = "Session"
-             message = formatSessionResolution resolution |})
+          {| state = "NoSession"; scope = "Session"; lifecycle = "NoSession"; message = formatSessionResolution resolution |})
       | WarmingUp (sid, status) | Unroutable (sid, status) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
@@ -1463,6 +1462,7 @@ module McpTools =
           {| state = SessionStatusPayload.stateLabelOf SessionState.Faulted
              scope = "Session"
              sessionId = sid
+             lifecycle = "Faulted"
              faultReason = FaultCause.describe cause; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid); health = info |> Option.map (fun i -> SessionStatusPayload.healthOfInfo (Some i) i.Status) |> Option.defaultWith (fun () -> SessionHealth.toJson (SessionHealth.Failed (FaultCause.describe cause)))
              target = targets |> List.map SessionProjectTarget.toWire
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []

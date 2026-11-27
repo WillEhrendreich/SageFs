@@ -166,6 +166,31 @@ let private faultedInfo : SessionInfo =
       Name = Some "faulted"
       Status = SessionLifecycleStatus.Faulted (FaultReason.Reported "warmup failed") }
 
+/// A faulted session only takes the FaultedSession shape when no proxy is available. With one,
+/// it is Routable and the answer comes from the worker instead.
+let private callStatusWithNoProxy (info: SessionInfo) : string =
+  let ctx = ctxFor info
+  let withoutProxy = { ctx with SessionOps = { ctx.SessionOps with GetProxy = fun _ -> Task.FromResult None } }
+  SageFsTools(withoutProxy, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
+    .get_session_status(info.WorkingDirectory)
+    .GetAwaiter()
+    .GetResult()
+
+[<Tests>]
+let sessionStatusEveryShapeTests = testList "session status answers every shape" [
+
+  // The shape a client meets while a session is faulted used to omit `lifecycle` entirely, so a
+  // poll for it threw KeyNotFoundException and took the whole TrunkLanding suite down with it.
+  testCase "WHY — a faulted session answers a lifecycle, because a missing key reads as a crash to a client polling it" <| fun _ ->
+    let json = callStatusWithNoProxy faultedInfo
+    use doc = JsonDocument.Parse(json)
+    let lifecycle =
+      match doc.RootElement.TryGetProperty "lifecycle" with
+      | true, v -> v.GetString()
+      | _ -> "<missing>"
+    lifecycle |> Expect.equal "a faulted session says Faulted instead of omitting the key" "Faulted"
+]
+
 /// The `target` entries as kind tokens, read through the real tool.
 /// `routable` false means the worker has no proxy yet, so a warming or faulted session
 /// resolves to its own status shape instead of the routable one.
