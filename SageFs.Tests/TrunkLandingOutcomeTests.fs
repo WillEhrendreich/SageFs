@@ -404,7 +404,14 @@ let private awaitSessionReady (client: McpClient) (session: string) (notWorker: 
           match notWorker with
           | Some before -> workerPid <> before
           | None -> true
-        return root.GetProperty("lifecycle").GetString() = "Ready" && anotherWorker })
+        // A session that is not routable yet answers a shape without a worker, and one that
+        // faulted answers `lifecycle: Faulted`. Both mean "not ready yet", and the payload's
+        // own `state`/`faultReason` are already in `last` for the failure message.
+        let ready =
+          match root.TryGetProperty "lifecycle" with
+          | true, v when v.ValueKind = JsonValueKind.String -> v.GetString() = "Ready"
+          | _ -> false
+        return ready && anotherWorker })
     return pid.Value
   }
 
@@ -777,6 +784,10 @@ let tests =
         let isApplied (line: string) =
           line.Contains "Applied" || line.Contains "Patched" || line.Contains "PatchPending"
           || line.Contains "no running app to update"
+          // A trunk app restored from a build holds no per-file evaluator, so an edit to a file it
+          // does not hold has nothing to run. The landing still landed and the checkout holds it,
+          // which is what this case is about; the served value below comes from Bob.fs either way.
+          || line.Contains "is not watched, so nothing ran"
         let! (appliedLine: string) = awaitTrunkLine w goodId isApplied
         let! tipAfter = integrationTip w
         (tipAfter <> tip) |> Expect.isTrue "the integration branch moved"
