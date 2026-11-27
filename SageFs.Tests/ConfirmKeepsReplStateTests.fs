@@ -88,6 +88,10 @@ let private awaitQuietSession (client: McpClient) (http: Net.Http.HttpClient) : 
 /// Read the REPL's answer until it says the expected thing. Under load a confirmation can settle after the status
 /// endpoint goes idle, so a binding check that samples once reads a session that is still catching up. Polling the
 /// observable fact removes the race: it passes as soon as the binding is there and still fails if it is lost.
+/// The worker pid that held the binding, captured after the first eval. Carried into
+/// later failures so a silent swap is visible without guessing from a fresh status.
+let mutable private bindingWorkerPid = ""
+
 let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (sessionId: string) (code: string) (expected: string) : Task<string> =
   // A settled session is not an idle FSI: an eval sent into a still-processing worker is answered with
   // "Operation could not be completed due to earlier error", whose text can still contain the submitted
@@ -101,7 +105,7 @@ let private awaitEvalContains (client: McpClient) (http: Net.Http.HttpClient) (s
       // "marker is not defined" but no reason: carry both so the next red says what the REPL answered
       // and whether the worker the binding was made in is still the one serving.
       let tail = if last.Value.Length > 200 then last.Value.Substring(last.Value.Length - 200) else last.Value
-      sprintf "the REPL answer to %s to contain %s. Last answer: %s. Session: %s" code expected tail lastStatus.Value)
+      sprintf "the REPL answer to %s to contain %s. Last answer: %s. Binding worker: %s. Session: %s" code expected tail bindingWorkerPid lastStatus.Value)
     (fun () -> task {
       do! awaitQuietSession client http
       let! answer = evalIn client sessionId code
@@ -207,6 +211,12 @@ let private body (client: McpClient) (http: Net.Http.HttpClient) (baseline: stri
     // can land while the worker is still warming and be answered with FSI's generic "earlier error".
     let! made = awaitEvalContains client http sessionId "let marker = 42;;" "42"
     made |> Expect.stringContains "the REPL made the binding" "42"
+    let! afterBind = callTool client "get_session_status" [ "session_id", box sessionId ]
+    let pidMarker = "\"workerPid\":"
+    bindingWorkerPid <-
+      match afterBind.IndexOf pidMarker with
+      | -1 -> "?"
+      | i -> afterBind.Substring(i + pidMarker.Length).Split([| ','; '}' |]).[0].Trim()
     let! restartBefore = lastRestartOf client
 
     // 2. A green edit is evaluated, then confirmed by a real build, and the binding survives it.
