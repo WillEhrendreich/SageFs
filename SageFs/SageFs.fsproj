@@ -170,6 +170,7 @@
         <Compile Include="EvalProgress.fs" />
         <Compile Include="McpSessionRouting.fs" />
         <Compile Include="McpSessionState.fs" />
+        <Compile Include="McpWorkerLiveness.fs" />
         <Compile Include="McpRouteError.fs" />
         <Compile Include="McpEcho.fs" />
         <Compile Include="McpToolRefusals.fs" />

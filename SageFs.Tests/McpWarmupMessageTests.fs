@@ -121,11 +121,49 @@ let mcpWarmupMessageTests =
       route |> Expect.isOk "the retry answered"
     }
 
+    testTask "WHY — a dead eval reply with a live worker leaves the session alone" {
+      let sid = "bb220013"
+      let info = { warmingInfo (SageFs.McpSessionRouting.toSessionId sid) with Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 4242; Port = Some 45000 } }
+      let mutable died = 0
+      let proxy : WorkerProtocol.SessionProxy = fun m -> async {
+        match m with
+        | WorkerProtocol.WorkerMessage.GetStatus _ ->
+          return WorkerProtocol.WorkerResponse.StatusResult("rid", { Status = WorkerProtocol.SessionStatus.Ready; StatusMessage = None; EvalCount = 0; AvgDurationMs = FixtureDurations.unmeasuredMs; MinDurationMs = FixtureDurations.unmeasuredMs; MaxDurationMs = FixtureDurations.unmeasuredMs; Projects = []; CoreVersion = "0" })
+        | _ -> return raise (IO.IOException("eval reply ended early"))
+      }
+      let ops =
+        { (warmingContext sid).SessionOps with
+            GetProxy = fun _ -> Task.FromResult(Some proxy)
+            GetSessionInfo = fun _ -> Task.FromResult(Some info)
+            NotifyWorkerDied = fun _ -> died <- died + 1 }
+      let! marked = SageFs.McpWorkerLiveness.markIfDead ops (SageFs.McpSessionRouting.toSessionId sid) "broken reply"
+      marked |> Expect.isFalse "a live worker is not marked dead"
+      died |> Expect.equal "no death was announced" 0
+    }
+
+    testTask "WHY — a worker that fails its status probe too is marked dead" {
+      let sid = "bb220014"
+      let proxy : WorkerProtocol.SessionProxy = fun _ -> async { return raise (IO.IOException("pipe closed")) }
+      let mutable died = 0
+      let ops =
+        { (warmingContext sid).SessionOps with
+            GetProxy = fun _ -> Task.FromResult(Some proxy)
+            NotifyWorkerDied = fun _ -> died <- died + 1 }
+      let! marked = SageFs.McpWorkerLiveness.markIfDead ops (SageFs.McpSessionRouting.toSessionId sid) "broken reply"
+      marked |> Expect.isTrue "a worker that answers nothing is dead"
+      died |> Expect.equal "the death was announced once" 1
+    }
+
     testTask "WHY — a side-effecting call is never retried, because its first attempt may already have run" {
       let sid = "bb220012"
       let info = { warmingInfo (SageFs.McpSessionRouting.toSessionId sid) with Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 4242; Port = Some 45000 } }
       let mutable calls = 0
-      let proxy : WorkerProtocol.SessionProxy = fun _ -> async { calls <- calls + 1; return raise (IO.IOException("pipe broke")) }
+      // The liveness probe after a failed eval also uses the proxy; count only evals.
+      let proxy : WorkerProtocol.SessionProxy = fun m -> async {
+        match m with
+        | WorkerProtocol.WorkerMessage.EvalCode _ -> calls <- calls + 1
+        | _ -> ()
+        return raise (IO.IOException("pipe broke")) }
       let ops =
         { (warmingContext sid).SessionOps with
             GetProxy = fun _ -> Task.FromResult(Some proxy)

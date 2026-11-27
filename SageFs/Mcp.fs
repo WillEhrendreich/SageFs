@@ -298,8 +298,8 @@ module McpTools =
                 | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart -> true | _ -> false) ->
                   return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Call get_session_status with wait_seconds=60 to wait for it; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
                 | _ ->
-                  ctx.SessionOps.NotifyWorkerDied validId
-                  do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (routeErrorMessage transportError)))
+                  // A broken reply is not a dead worker: probe before destroying its state.
+                  let! _ = McpWorkerLiveness.markIfDead ctx.SessionOps validId (routeErrorMessage transportError)
                   return Result.Error transportError
               | None ->
                 return raise ex
