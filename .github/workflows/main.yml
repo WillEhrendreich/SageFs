@@ -58,9 +58,15 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: [self-hosted, sagefs-local]
     timeout-minutes: 120
+    # One group per branch, so a push supersedes the run it replaces. A per-SHA
+    # group gives every push its own group, which means nothing is ever cancelled:
+    # runs queue up and the second gate starts while the first still holds this
+    # machine, and a timing case turns red for a reason that has nothing to do
+    # with the commit. Cancelling is safe for publishing: `publish release` only
+    # fires on `conclusion == 'success'`, so a superseded run publishes nothing.
     concurrency:
-      group: sagefs-local-${{ github.sha }}
-      cancel-in-progress: false
+      group: sagefs-local-${{ github.ref }}
+      cancel-in-progress: true
 
     steps:
     - uses: actions/checkout@v5

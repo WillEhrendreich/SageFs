@@ -359,6 +359,28 @@ let selfHostedSafetyTests =
       |> List.exists SelfHostedSafety.isSelfHosted
       |> Expect.isTrue "the main build should run on this machine's self-hosted runner"
 
+    testCase "the self-hosted gate is one per branch and cancels the run it replaces" <| fun _ ->
+      // A per-SHA group gives every push its own group, so nothing is ever superseded and two
+      // gates end up running on this machine at once. That load is indistinguishable from a
+      // product failure in the tier that asserts on time.
+      let gateGroups =
+        workflows.Value
+        |> List.collect (fun (file, text) ->
+          text.Replace("\r\n", "\n").Split('\n')
+          |> Array.choose (fun line ->
+            let trimmed = line.Trim()
+            match trimmed.StartsWith "group: sagefs-local-" with
+            | true -> Some (file, trimmed.Substring "group: ".Length, text)
+            | false -> None)
+          |> Array.toList)
+      gateGroups
+      |> Expect.isNonEmpty "a self-hosted gate declares its concurrency group, or this check is vacuous"
+      for (file, group, text) in gateGroups do
+        group
+        |> Expect.equal (sprintf "%s: the group is one per branch, so a push supersedes the run before it" file) "sagefs-local-${{ github.ref }}"
+        text.Contains "cancel-in-progress: true"
+        |> Expect.isTrue (sprintf "%s: a new push cancels the run it replaces instead of queueing behind it on this machine" file)
+
     testCase "every workflow file is read, not just main.yml" <| fun _ ->
       workflows.Value
       |> List.map fst
