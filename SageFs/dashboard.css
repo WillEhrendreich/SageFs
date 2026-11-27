@@ -37,10 +37,12 @@
   --syn-number: #d27e99;
   --font-size: 93.75%;
   --sidebar-width: 320px;
-  /* The bottom dock holds the live bindings: a watch window, not the page. A quarter to a third of the viewport leaves the
-     transcript as the main surface and the bindings as a strip underneath. The dock can still be dragged larger; this is the
-     initial size only. Mirrored by DashboardTypes.DockHeightDefault, which the signal and a test both use. */
-  --dock-max-height: min(30vh, 18rem);
+  /* The bottom dock holds the live bindings: a watch window, not the page. Between a quarter and just over a third of the
+     viewport leaves the transcript as the main surface and the bindings as a strip underneath. Two panes stack in it by
+     default, so the short-window share must hold the bindings pane's chrome and three rows and still leave the output
+     pane a strip; the cap keeps a tall window's dock a strip. The dock can still be dragged larger; this is the initial
+     size only. Mirrored by DashboardTypes.DockHeightDefault, which the signal and a test both use. */
+  --dock-max-height: min(36vh, 18rem);
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
@@ -1468,10 +1470,19 @@ h2 {
   height: var(--dock-max-height);
 }
 
-/* Each pane has its own size: the splitter writes --pane-split and the other pane takes the rest. */
+/* Each pane has its own size: the splitter writes --pane-split and the other pane takes the rest. The basis
+   is a FLOOR, not the answer: the tree under the chrome must keep half the dock (and three rows) whatever the
+   splitter says, so at a tall dock this pane grows past the split rather than leaving the tree a quarter of it.
+   68px is the compact chrome above the tree at one line (`--live-chrome-floor`), measured; the splitter still
+   enlarges the pane, and the basis can SHRINK when the dock itself is smaller than it — without shrink a dock
+   dragged to 5rem kept a 13rem pane and pushed the tree outside the dock. */
 .live-dock > #live-pane,
 .live-dock > #bindings-panel {
-  flex: 0 0 var(--pane-split, 11rem);
+  --live-chrome-floor: 68px;
+  flex-grow: 0;
+  flex-shrink: 1;
+  flex-basis: max(var(--pane-split, 13rem), calc(50% + var(--live-chrome-floor)));
+  min-height: 0;
 }
 
 .live-dock > #app-output-pane {
@@ -1498,9 +1509,13 @@ h2 {
 }
 
 /* Both dock bars are one line of controls: the pane's job is to show values and output, not to describe
-   itself. Nothing here wraps, so a filter box never drops to a second row beside short buttons. */
+   itself. `nowrap` keeps that line, and `overflow-x` is what answers a dock too narrow for it: without the
+   scroll the row ran to 578px inside a 390px dock and put the filter and two buttons outside the viewport.
+   Wrapping would answer the width too, but it makes the chrome two lines on a narrow pane, and the pane's
+   height floor (half the dock plus the chrome) is only exact while the chrome is one line. */
 .live-dock .live-pane-bar {
   flex-wrap: nowrap;
+  overflow-x: auto;
   gap: 0 0.35rem;
   padding: 2px 6px;
   min-height: 24px;
@@ -6045,6 +6060,15 @@ body {
   .live-pane-chrome {
     max-height: none;
     overflow: visible;
+  }
+
+  /* A phone-width dock cannot hold the compact bar's one line: the controls ran 578px wide inside a 390px
+     dock and the chrome clips sideways, so nothing could scroll them into reach. Wrapping is the answer here
+     and only here: the pane's height floor (half the dock plus a one-line chrome) is not asserted when the
+     panes are stacked, and above this width the bar stays one line. */
+  .live-dock .live-pane-bar {
+    flex-wrap: wrap;
+    overflow-x: visible;
   }
 
   .live-dock .live-view-panel {

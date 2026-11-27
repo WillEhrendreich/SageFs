@@ -7,6 +7,8 @@ module SageFs.Server.DockPaneLayout
 /// Where the app-output pane lives: `stacked` under the bindings, or `side` beside the transcript.
 let [<Literal>] PaneLayoutSignal = "paneLayout"
 /// The live-bindings pane's share of the dock, as a CSS length. The splitter writes this; the other pane takes the rest.
+/// The default fits the compact chrome plus the tree's sticky column header and three binding rows at the journey's 720px
+/// viewport (140px of tree); 11rem left the tree 110px, which is two rows once the header and the row heights are counted.
 let [<Literal>] PaneSplit = "paneSplit"
 /// True while the splitter between the two panes is being dragged.
 let [<Literal>] PaneResizing = "paneResizing"

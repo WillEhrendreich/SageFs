@@ -178,9 +178,11 @@ let private dockMeasureScript =
       if (br.width === 0 || br.height === 0) problems.push('the button ' + id + ' has no box');
       else if (!inside(br, d)) problems.push('the button ' + id + ' is outside the dock after scrolling to it: ' + [br.left, br.top, br.right, br.bottom].map(Math.round).join(','));
       else if (chromeEl && !inside(br, chromeEl.getBoundingClientRect())) problems.push('the button ' + id + ' is cut by the chrome after scrolling to it');
-      // 28px, or the touch size the stacked (phone) layout gives every button
+      // The dock's compact bar gives these 20px (dashboard.css); a stacked phone layout gives 28. Either is a
+      // real box to hit. What must not happen is no box at all, or a box outside the dock.
       const touch = window.innerWidth < 769 && br.height >= 28;
-      if (Math.abs(br.height - 28) > 1 && !touch) problems.push('the button ' + id + ' is ' + br.height + 'px tall, not 28');
+      const compact = Math.abs(br.height - 20) <= 1;
+      if (!compact && Math.abs(br.height - 28) > 1 && !touch) problems.push('the button ' + id + ' is ' + br.height + 'px tall, neither the compact 20 nor the roomy 28');
     }
     if (chromeEl) chromeEl.scrollTop = 0;
     // the Display panel is reachable end to end, and its Done button is always in reach
@@ -325,7 +327,13 @@ let journey () : Task<unit> = task {
     let! sentinel = page.EvaluateAsync<string>("() => window.__noReload")
     sentinel |> Expect.equal "the bindings appeared with no page reload" "still the same page"
     let! paneText = textOf page "#bindings-panel"
-    paneText |> Expect.stringContains "the pane counts the user's bindings" "bindings"
+    // Since the compact chrome the count lives in the pane title's tooltip, and the visible title is
+    // "LIVE BINDINGS" (CSS uppercases it), which carries no count of its own.
+    let! countTip =
+      page.EvaluateAsync<string>(
+        "() => { var el = document.querySelector('#bindings-panel .live-pane-title'); return el ? (el.getAttribute('title') || '') : ''; }")
+    countTip |> Expect.stringContains "the pane counts the user's bindings" "bindings"
+    countTip.Contains "0 bindings" |> Expect.isFalse "and the count is the user's, not zero"
     paneText.Contains "_SageFs" |> Expect.isFalse "the tooling's own bindings are not listed"
     // A row's kind is a glyph with the word on hover and as its accessible name, and not a boxed word on every row.
     let! recordGlyphs = page.Locator("#bindings-panel .live-glyph[title=record][aria-label=record]").CountAsync()

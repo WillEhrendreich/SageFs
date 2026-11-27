@@ -1130,7 +1130,7 @@ let renderDockWithRemedy
         DomEvent.PointerUp,
         sprintf "if(!$paneResizing)return; $paneResizing=false; try{localStorage.setItem('sagefs.paneSplit',$%s)}catch(e){}" PaneSplit
       )
-      Sink.onEvent (DomEvent.DoubleClick, sprintf "$%s='11rem'; try{localStorage.removeItem('sagefs.paneSplit')}catch(e){}" PaneSplit)
+      Sink.onEvent (DomEvent.DoubleClick, sprintf "$%s='13rem'; try{localStorage.removeItem('sagefs.paneSplit')}catch(e){}" PaneSplit)
     ] []
 
   let liveBindings =

@@ -291,9 +291,9 @@ module Signals =
   /// the stylesheet starts with). Datastar writes it into a `style` attribute rather than JS poking
   /// a custom property, so the drag is a signal and the inline script stays under its budget.
   let [<Literal>] DockHeight = "dockHeight"
-  /// The dock's default ceiling: a quarter to a third of the screen, not two-thirds.
-  /// The signal starts here, double-click on the resize handle returns here, and a test holds the CSS to it.
-  let [<Literal>] DockHeightDefault = "min(30vh, 18rem)"
+  /// The dock's default ceiling: between a quarter and just over a third of the screen. Two panes stack in it by
+  /// default, so the share must hold the bindings pane's chrome and three rows and still leave output a strip.
+  let [<Literal>] DockHeightDefault = "min(36vh, 18rem)"
   /// True while the dock's resize handle is being dragged, so pointermove knows a drag is live.
   let [<Literal>] DockResizing = "dockResizing"
   let [<Literal>] NewSessionDir = "newSessionDir"
