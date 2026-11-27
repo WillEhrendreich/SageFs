@@ -59,3 +59,32 @@ module CohortRebuildGate =
             | Error reason -> return Error(CohortOwner.VerificationFault.Environment reason)
             | Ok () -> return Ok()
     }
+
+  /// Which way a verification session was brought to the head.
+  [<RequireQualifiedAccess>]
+  type Recovery =
+    /// The cheap way: respawn the worker, keep the build, rebind the head's sources over it.
+    | Rebound
+    /// The expensive way, taken only when the cheap one could not work: rebuild and restart on the build.
+    | Rebuilt
+
+  /// Bring the verification session to the head cheaply first, then pay for a rebuild once.
+  ///
+  /// The cheap way respawns the worker but KEEPS the build. That is the right price for the common case, and impossible for a
+  /// landing that changed a signature: the sources no longer type-check against the build they are bound over, the eval answers
+  /// FSI's "earlier error", and retrying it changes nothing. Without the rebuild the session stays wedged, every later landing
+  /// verifies against a session that holds nothing, and the cohort is blocked for good. So one cheap failure escalates exactly
+  /// once and no more: a rebuild that also fails is reported with both reasons rather than looped on.
+  let rebindOrRebuild
+    (rebind: unit -> Async<Result<unit, 'error>>)
+    (rebuild: unit -> Async<Result<unit, 'error>>)
+    (bothFailed: 'error -> 'error -> 'error)
+    : Async<Result<Recovery, 'error>> =
+    async {
+      match! rebind () with
+      | Ok () -> return Ok Recovery.Rebound
+      | Error cheap ->
+        match! rebuild () with
+        | Ok () -> return Ok Recovery.Rebuilt
+        | Error missed -> return Error(bothFailed cheap missed)
+    }

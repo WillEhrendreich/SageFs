@@ -2880,28 +2880,25 @@ let run
             Log.info
               "[cohort-landing] the integration session holds %d source file(s) the head has moved on from (the last verification did not land) — respawning it and binding the head's own text"
               (List.length staleFiles)
-            match! resetIntegrationSessionToHead sessionId with
+            let ports : SageFs.CohortVerificationHead.Ports =
+              { Session = sessionId
+                Snapshot = snapshot
+                Reset = resetIntegrationSessionToHead
+                AwaitTrusted = awaitIntegrationSessionTrusted
+                BindBuild = freshWorkerBindsBuild
+                EvalSources = evalIntegrationFiles
+                RecordBound = noteIntegrationSourceBound
+                Rebuild =
+                  fun sid ->
+                    sessionOps.RestartSession (toSessionId sid) (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker)
+                    |> Async.AwaitTask }
+            match! SageFs.CohortVerificationHead.bring ports with
+            | Ok Features.CohortRebuildGate.Recovery.Rebound -> return Ok ()
+            | Ok Features.CohortRebuildGate.Recovery.Rebuilt ->
+              Log.warn
+                "[cohort-landing] the cheap rebind could not make the session hold the head — rebuilt the integration worktree and restarted the session on the build"
+              return Ok ()
             | Error reason -> return Error reason
-            | Ok () ->
-            match! awaitIntegrationSessionTrusted sessionId with
-            | Error reason -> return Error reason
-            | Ok _ ->
-            match! freshWorkerBindsBuild sessionId with
-            | false ->
-              // Without the build's compiled values behind them, a binding of the head's text cannot
-              // be typed against what the code it replaces is typed against, so the session would hold
-              // neither the head nor anything to check the head against.
-              Log.warn "[cohort-landing] the respawned integration session reported no build to bind the head over — failing closed"
-              return Error "the integration session could not be brought to the head — resubmit"
-            | true ->
-              let! outcome = evalIntegrationFiles sessionId (snapshot |> List.map fst) // RespawnOnly keeps the old build; the blob record names the old worker, so rebind every source, not just staleFiles (a landed file still holds bob:v1)
-              match outcome with
-              | Error reason -> return Error reason
-              | Ok () ->
-                // The stale sources are now the head's text, and everything else is what the build
-                // holds — which, having been built from this snapshot, is the head's text too.
-                for (full, blob) in snapshot do noteIntegrationSourceBound full blob
-                return Ok ()
       }
     // The landing queue is serial, so this runs for one landing at a time. The lock is for the
     // FILE-WATCHER rebuild a respawn triggers, which arrives on another thread and would otherwise

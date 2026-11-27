@@ -235,6 +235,7 @@
              already be bound. -->
         <Compile Include="McpCohortTools.fs" />
         <Compile Include="McpCohortIntegration.fs" />
+        <Compile Include="CohortVerificationHead.fs" />
         <Compile Include="McpCapability.fs" />
         <Compile Include="McpToolCatalog.fs" />
         <Compile Include="McpMintRoute.fs" />

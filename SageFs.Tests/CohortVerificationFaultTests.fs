@@ -327,3 +327,91 @@ let gateTests =
           (noteAt, restartAt) |> Expect.isLessThan "the note comes before the restart"
     }
   ]
+
+[<Tests>]
+let rebindOrRebuildTests =
+  testList "CohortRebuildGate (P16): a wedged verification session escalates to one rebuild" [
+
+    testCaseAsync "WHY — a rebind that succeeds never pays for a rebuild, because the cheap path is a respawn and nothing more" <|
+    async {
+      let mutable rebuilds = 0
+      let rebind () = async { return Ok () }
+      let rebuild () = async { rebuilds <- rebuilds + 1; return Ok () }
+      let! recovered = CohortRebuildGate.rebindOrRebuild rebind rebuild (fun cheap missed -> sprintf "%s; then %s" cheap missed)
+      recovered |> Expect.equal "the cheap way is the answer" (Ok CohortRebuildGate.Recovery.Rebound)
+      rebuilds |> Expect.equal "a successful rebind rebuilds nothing" 0
+    }
+
+    testCaseAsync "WHY — a rebind that cannot type-check the head escalates to a rebuild, because keeping the old build can never fix it" <|
+    async {
+      let mutable rebinds = 0
+      let mutable rebuilds = 0
+      let rebind () = async { rebinds <- rebinds + 1; return Error "re-eval of rebased file Alice.fs failed: earlier error" }
+      let rebuild () = async { rebuilds <- rebuilds + 1; return Ok () }
+      let! recovered = CohortRebuildGate.rebindOrRebuild rebind rebuild (fun cheap missed -> sprintf "%s; then %s" cheap missed)
+      recovered |> Expect.equal "the rebuild is the answer" (Ok CohortRebuildGate.Recovery.Rebuilt)
+      rebinds |> Expect.equal "the cheap way is tried first" 1
+      rebuilds |> Expect.equal "and the rebuild is paid for once" 1
+    }
+
+    testCaseAsync "WHY — a rebuild that also fails names both reasons instead of looping, because one escalation is all the cohort can afford" <|
+    async {
+      let mutable rebuilds = 0
+      let rebind () = async { return Error "earlier error" }
+      let rebuild () = async { rebuilds <- rebuilds + 1; return Error "the trunk never answered" }
+      let! recovered = CohortRebuildGate.rebindOrRebuild rebind rebuild (fun cheap missed -> sprintf "%s; then %s" cheap missed)
+      match recovered with
+      | Ok _ -> failtest "both paths failed, so this cannot be a recovery"
+      | Error reason ->
+        reason |> Expect.stringContains "the first reason travels with the refusal" "earlier error"
+        reason |> Expect.stringContains "and so does the rebuild's" "the trunk never answered"
+      rebuilds |> Expect.equal "and it does not try again" 1
+    }
+
+    // The wiring above the policy: which ports a rebuild actually calls, and in what order.
+    let observation : SageFs.Features.Verification.SessionTrust.SessionObservation =
+      { MatchingSessionIds = [ "s" ]
+        SessionStatus = None
+        LoadedState = None
+        TypeIdentityDiagnostic = None }
+
+    let ports (calls: ResizeArray<string>) (reset: unit -> Async<Result<unit, string>>) (bind: bool) (eval: unit -> Async<Result<unit, string>>) : SageFs.CohortVerificationHead.Ports =
+      { Session = "s"
+        Snapshot = [ "Alice.fs", "aaa"; "Bob.fs", "bbb" ]
+        Reset = fun _ -> reset ()
+        AwaitTrusted = fun _ -> async { calls.Add "await"; return Ok observation }
+        BindBuild = fun _ -> async { calls.Add "bind"; return bind }
+        EvalSources = fun _ _ -> eval ()
+        RecordBound = fun full _ -> calls.Add(sprintf "record %s" full)
+        Rebuild =
+          fun _ ->
+            async {
+              calls.Add "rebuild"
+              return Ok "s"
+            } }
+
+    testCaseAsync "WHY — a cheap rebind that works never rebuilds, and records the head's text it just bound" <|
+    async {
+      let calls = ResizeArray<string>()
+      let cheap () = async { calls.Add "reset"; return Ok () }
+      let eval () = async { calls.Add "eval"; return Ok () }
+      let! recovered = SageFs.CohortVerificationHead.bring (ports calls cheap true eval)
+      recovered |> Expect.equal "the cheap way" (Ok CohortRebuildGate.Recovery.Rebound)
+      calls.Contains "rebuild" |> Expect.isFalse "a working rebind pays for no build"
+      (calls.Contains "record Alice.fs" && calls.Contains "record Bob.fs")
+      |> Expect.isTrue "every source is recorded at the blob it is bound to"
+    }
+
+    testCaseAsync "WHY — a wedged session is rebuilt and the head's text recorded, because a rebuild leaves nothing evaluated over the build" <|
+    async {
+      let calls = ResizeArray<string>()
+      let wedged () = async { calls.Add "reset"; return Error "re-eval of rebased file Alice.fs failed: earlier error" }
+      let eval () = async { calls.Add "eval"; return Ok () }
+      let! recovered = SageFs.CohortVerificationHead.bring (ports calls wedged true eval)
+      recovered |> Expect.equal "the rebuild is the answer" (Ok CohortRebuildGate.Recovery.Rebuilt)
+      calls.Contains "rebuild" |> Expect.isTrue "the wedge escalates to a rebuild"
+      calls.Contains "eval" |> Expect.isFalse "a rebuilt session has nothing to re-evaluate"
+      (calls.Contains "record Alice.fs" && calls.Contains "record Bob.fs")
+      |> Expect.isTrue "the rebuilt session's record is the head's own text"
+    }
+  ]
