@@ -539,6 +539,32 @@ let private appWorld () : Task<World> =
       return started
   }
 
+/// An app started by run_app lives inside its worker. Under load that worker can
+/// die between cases, leaving the cached client pointing at a closed port. Bring it
+/// back with run_app alone: a hard reset here would replace the worker the cohort's
+/// integration session still needs.
+let private liveAppWorld () : Task<World> = task {
+  let! w = appWorld ()
+  let! alive =
+    TestInfrastructure.waitForAsync (int TestTimeouts.appFirstAnswer.TotalMilliseconds) (fun () -> task {
+      try
+        let! _ = w.App.GetStringAsync(sprintf "%s/pid" (w.App.BaseAddress.ToString().TrimEnd('/')))
+        return true
+      with :? HttpRequestException -> return false })
+  if alive then return w
+  else
+    let! switched = callTool w.Alice.Client "switch_session" [ "session_id", box w.TrunkSession ]
+    ignore switched
+    let! ran = callToolPatient w.Alice.Client "run_app" [ "project", box "" ]
+    let m = Regex.Match(ran, @"http://[^\s""\\/]+:(\d+)")
+    if not m.Success then return failwithf "run_app did not report where the trunk app listens: %s" ran
+    else
+      let client = new HttpClient(BaseAddress = Uri(sprintf "http://127.0.0.1:%s" m.Groups[1].Value), Timeout = TestTimeouts.httpRequest)
+      let fresh = { w with App = client }
+      mutableApp.Value <- Some fresh
+      return fresh
+}
+
 /// Ask the trunk app until it answers. A landing can restart the app, and a loaded machine stretches that restart;
 /// one request is a point-in-time sample that fails on a port the app has not reopened yet. This is a PROBE only:
 /// it waits out a slow restart, then reports failure. Restarting the app inside a poll kills the worker and
@@ -644,7 +670,7 @@ let tests =
       }
 
       testTask "WHY: a landing that conflicts with what landed is refused with its reason and the trunk app is untouched" {
-        let! w = appWorld ()
+        let! w = liveAppWorld ()
         let! before = statusOf w
         let! tipBefore = integrationTip w
         let! pidBefore = appGet w "pid"
@@ -668,7 +694,7 @@ let tests =
       }
 
       testTask "WHY: a landing that needs a restart restarts the app, names the cause, and says it landed" {
-        let! w = appWorld ()
+        let! w = liveAppWorld ()
         let! pidBefore = appGet w "pid"
         let! tip = integrationTip w
         let! landingId =
@@ -700,7 +726,7 @@ let tests =
       // exist, so the later landing does not build there, and verifying it against what the blocked landing left behind would let it
       // land on code that is not in the head.
       testTask "WHY: a landing whose code needs what a blocked landing defined is blocked, because the head does not hold it" {
-        let! w = appWorld ()
+        let! w = liveAppWorld ()
         let! tip = integrationTip w
         // Carol still holds the claim her refused landing took, in the row that refused it.
         do! releaseClaimsOn "Alice.fs"
@@ -731,7 +757,7 @@ let tests =
       // A landing is verified from the integration head, whatever happened to the landing before it. The blocked landing's change is
       // in the verifying session until something takes it out, so the landing after it has to find it gone.
       testTask "WHY: a landing after a blocked landing is verified from the integration head, so it lands" {
-        let! w = appWorld ()
+        let! w = liveAppWorld ()
         let! tip = integrationTip w
         let! bobLine = bindingLineAt w tip "Bob.fs" "let bobMessage () : string"
         let! blockedId = land w w.Carol "Bob.fs" tip [ bobLine, "let bobMessage () : string = \"broken\"" ] "carol: bob stops speaking as bob"
@@ -775,7 +801,7 @@ let tests =
       // Last, because a landing the gate blocks leaves what the verifying session evaluated for it in that session, and the next
       // landing is verified against that. The trunk follows only what lands, so this row's own claims hold wherever it runs.
       testTask "WHY: a landing whose verification fails does not land, and the trunk app serves the old behavior" {
-        let! w = appWorld ()
+        let! w = liveAppWorld ()
         let! tipBefore = integrationTip w
         let! servedBefore = appGet w "bob"
         // Carol changes bob's handler so it no longer speaks as bob, and the test that says what a handler's message looks like
