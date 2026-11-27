@@ -1867,8 +1867,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           evalActor.Post(EvalGetLiveValues reply)
         | EvaluateLiveMember(binding, path, reply) ->
           let session = match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with | Active (st, _) -> st.Session | Initializing _ | Faulted _ -> null
-          // On the thread pool, not an actor: the click may wait the getter's whole deadline.
-          System.Threading.Tasks.Task.Run(fun () -> reply.Reply(walkKeeper.EvaluateMember(session, binding, path, logger.LogWarning))) |> ignore
+          SageFs.Features.DedicatedThread.start "sagefs-live-member-click" (fun () -> reply.Reply(walkKeeper.EvaluateMember(session, binding, path, logger.LogWarning)))
 
         // Cancel — cooperative via CTS + thread interrupt, answered synchronously; also posts EvalMarkCancelling since it can't confirm the signal stopped anything.
         | CancelEval reply ->
