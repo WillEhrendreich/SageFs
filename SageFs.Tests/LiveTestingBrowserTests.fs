@@ -205,7 +205,7 @@ let tests =
         do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#bindings-panel" "marker"
         // The point was taken at the green settle nobody saw, so nothing has moved since it. A point taken only when somebody looked would
         // be the baseline's, from before `marker` was bound, and the tab would say the binding is new.
-        do! page.Locator("[data-testid=live-tab-since-green]").ClickAsync()
+        let! _ = page.SelectOptionAsync("[data-testid=live-tabs]", "since-green")
         do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "[data-testid=live-tab-empty-since-green]" "Nothing has moved"
         // Then the value moves while a test is red: Since green names it with what it was at the green settle.
         do! evaluate "let marker = 2;;" "marker: int = 2"

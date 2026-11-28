@@ -227,11 +227,13 @@ let journey () : Task<unit> = task {
     // says the rest once, with a count, and its reason is on hover.
     let! speedText = textIn page (row "speed")
     speedText.Trim() |> Expect.equal "a REPL-only row says n/a in its Source cell and nothing else" "n/a"
-    let! chipText = textIn page "[data-testid=live-repl-only]"
-    // The chip says what it counts in the pane's own words: the sentence for a count of 0, without the number in front.
-    chipText |> Expect.stringContains "the title bar counts the REPL-only bindings" ((SageFs.Features.LiveBindingsPane.PaneNote.text (SageFs.Features.LiveBindingsPane.PaneNote.NotInAnyFile 0)).Substring 1)
-    let! chipReason = page.Locator("[data-testid=live-repl-only]").GetAttributeAsync("title")
-    chipReason |> Expect.stringContains "and its reason is on hover" "nothing to save it to"
+    // The count lives in the pane title's tooltip since the compact chrome, and the reason rides with it: the bar
+    // has no chip to read, so the title is where the sentence is.
+    let! titleTip =
+      page.EvaluateAsync<string>(
+        "() => { var el = document.querySelector('#bindings-panel .live-pane-title'); return el ? (el.getAttribute('title') || '') : ''; }")
+    titleTip |> Expect.stringContains "the title bar counts the REPL-only bindings" ((SageFs.Features.LiveBindingsPane.PaneNote.text (SageFs.Features.LiveBindingsPane.PaneNote.NotInAnyFile 0)).Substring 1)
+    titleTip |> Expect.stringContains "and its reason is on hover" "nothing to save it to"
     let! jumpControl = page.Locator(sprintf "%s [data-testid=tweak-expression]" (row "jump")).CountAsync()
     jumpControl |> Expect.equal "a formula is edited as an expression" 1
     let! speedControls = page.Locator(sprintf "%s input, %s button" (row "speed") (row "speed")).CountAsync()
@@ -701,7 +703,15 @@ let statesJourney () : Task<unit> = task {
       waitJs page (sprintf "%s to be %s" name (match expected with | true -> "listed" | false -> "hidden")) BrowserWaits.panelUpdates
         "([sel, expected]) => { const e = document.querySelector(sel); return !!e && !e.classList.contains('live-hidden') === expected; }"
         [| box (bindingBox name); box expected |]
-    let openTab (token: string) = page.Locator(sprintf "[data-testid=live-tab-%s]" token).ClickAsync()
+    // One picker instead of five buttons: choosing a tab is a select, and the counts are in the option labels.
+    let openTab (token: string) = task {
+      let! _ = page.SelectOptionAsync("[data-testid=live-tabs]", token)
+      return ()
+    }
+    let optionLabel (token: string) =
+      page.EvaluateAsync<string>(
+        "tok => { const s = document.querySelector('[data-testid=live-tabs]'); const o = s ? [...s.options].find(x => x.value === tok) : null; return o ? o.textContent : ''; }",
+        token)
     do! openTab "changes"
     do! waitListed "gravity" true
     do! waitListed "lives" false
@@ -718,8 +728,9 @@ let statesJourney () : Task<unit> = task {
     do! openTab "pinned"
     do! waitListed "gravity" true
     do! waitListed "lives" false
-    let! pinnedCount = textIn page "[data-testid=live-tab-count-pinned]"
-    pinnedCount.Trim() |> Expect.equal "the Pinned tab counts the pin" "1"
+    let! pinnedLabel = optionLabel "pinned"
+    // Pins are browser-local, so the picker's label does not claim a count: what matters is that the pin lists the row.
+    pinnedLabel |> Expect.equal "the Pinned option says what it is" "Pinned"
     do! shot page "13b-tab-pinned"
     do! openTab "all"
     do! waitListed "lives" true
@@ -795,8 +806,8 @@ let statesJourney () : Task<unit> = task {
     do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     do! openTab "watch"
     do! waitWatch "both expressions after a reload" "rows.length === 2 && rows[0].expr === 'gravity'"
-    let! watchCount = textIn page "[data-testid=live-tab-count-watch]"
-    watchCount.Trim() |> Expect.equal "the tab counts the expressions" "2"
+    let! watchCount = optionLabel "watch"
+    watchCount |> Expect.stringContains "the tab counts the expressions" "(2)"
     // a row can be removed
     do! page.Locator(sprintf "%s:nth-child(2) [data-testid=live-watch-remove]" watchRows).ClickAsync()
     do! waitWatch "one row left after a remove" "rows.length === 1 && rows[0].expr === 'gravity'"

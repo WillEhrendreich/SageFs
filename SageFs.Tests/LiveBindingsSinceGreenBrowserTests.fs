@@ -110,9 +110,16 @@ let private tabReport : string =
     const outside = rows.length && [...document.querySelectorAll('.live-binding-node')].some(r => r.checkVisibility() && (r.getBoundingClientRect().right > tree.right + 1));
     return JSON.stringify({
       rows,
-      pressed: document.querySelector('[data-testid=live-tab-since-green]').getAttribute('aria-pressed'),
-      allPressed: document.querySelector('[data-testid=live-tab-all]').getAttribute('aria-pressed'),
-      count: document.querySelector('[data-testid=live-tab-count-since-green]')?.innerText.trim() ?? '(no count)',
+      pressed: (document.querySelector('[data-testid=live-tabs]') || {}).value || '',
+      allPressed: '',
+      // The counts live in the option labels now, so read the one this tab carries.
+      count: (() => {
+        const s = document.querySelector('[data-testid=live-tabs]');
+        const o = s ? [...s.options].find(x => x.value === 'since-green') : null;
+        if (!o) return '(no count)';
+        const m = /\((\d+)\)/.exec(o.textContent);
+        return m ? m[1] : o.textContent;
+      })(),
       empty: visible(empty) ? empty.innerText.trim() : '',
       left: visible(left) ? left.innerText.trim() : '',
       outside,
@@ -139,8 +146,8 @@ let private journey () : Task<unit> = task {
         page.PageError.Add(fun error -> errors.Add error)
         do! serve (shellHtml said) page
         let! _ = page.GotoAsync(sprintf "%s/dashboard" origin)
-        let! _ = page.WaitForSelectorAsync("[data-testid=live-tab-since-green]", PageWaitForSelectorOptions(Timeout = float32 BrowserWaits.pageRenders))
-        do! page.Locator("[data-testid=live-tab-since-green]").ClickAsync()
+        let! _ = page.WaitForSelectorAsync("[data-testid=live-tabs]", PageWaitForSelectorOptions(Timeout = float32 BrowserWaits.pageRenders))
+        let! _ = page.SelectOptionAsync("[data-testid=live-tabs]", "since-green")
         let! _ = page.WaitForFunctionAsync("() => [...document.querySelectorAll('.live-binding-node')].some(row => !row.checkVisibility())", null, PageWaitForFunctionOptions(Timeout = float32 BrowserWaits.pageRenders))
         let! json = page.EvaluateAsync<string>(tabReport)
         let report = Text.Json.JsonDocument.Parse(json).RootElement
@@ -153,8 +160,7 @@ let private journey () : Task<unit> = task {
           match rows |> List.tryFind (fun (n, _, _) -> n = wanted) with
           | Some row -> row
           | None -> Tests.failtestf "no row named %s (%s); the rows are: %s" wanted what (rows |> List.map (fun (n, v, w) -> sprintf "%s visible=%b was='%s'" n v w) |> String.concat ", ")
-        report.GetProperty("pressed").GetString() |> Expect.equal (sprintf "the Since green tab is the pressed one (%s)" what) "true"
-        report.GetProperty("allPressed").GetString() |> Expect.equal (sprintf "and All is not (%s)" what) "false"
+        report.GetProperty("pressed").GetString() |> Expect.equal (sprintf "the picker shows Since green (%s)" what) "since-green"
         report.GetProperty("outside").GetBoolean() |> Expect.isFalse (sprintf "no row sticks out of the tree (%s)" what)
         report.GetProperty("pageScrollsSideways").GetBoolean() |> Expect.isFalse (sprintf "the page does not scroll sideways (%s)" what)
         match name with

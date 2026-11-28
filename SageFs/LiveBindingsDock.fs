@@ -939,7 +939,17 @@ let tabSelect (counts: TabCounts) : XmlNode =
           | WatchTab.SinceGreen -> string counts.Moved
           | WatchTab.Watch -> string counts.Watched
           | WatchTab.Pinned -> "0"
-        Elem.option [ Attr.value (attrEnc (WatchTab.token tab)) ] [ textEnc (sprintf "%s (%s)" (WatchTab.label tab) count) ] ]
+        Elem.option
+          [ Attr.value (attrEnc (WatchTab.token tab)) ]
+          [ textEnc (
+              // Pins live in the browser (a class on the row and a signal), so the server cannot count them and the
+              // label does not claim a number. Every other tab's count is the server's own.
+              match tab with
+              | WatchTab.Pinned -> WatchTab.label tab
+              | WatchTab.All
+              | WatchTab.Changes
+              | WatchTab.SinceGreen
+              | WatchTab.Watch -> sprintf "%s (%s)" (WatchTab.label tab) count) ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
 /// What the pane is for, in a sentence: under the title while the dock is tall, and the title's tooltip and a note in the Display panel
