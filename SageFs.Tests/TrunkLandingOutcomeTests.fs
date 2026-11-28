@@ -596,6 +596,27 @@ let private appGet (w: World) (route: string) : Task<string> =
     | false -> return failwithf "the trunk app never answered %s" route
   }
 
+/// Ask the trunk app for a route, bringing it back ONCE if it is not answering. Deliberate, never inside a poll: a
+/// restart recreates the session. For a case that has to see what the landed checkout serves after a series of
+/// landings, one of which may have lost the app. Not for a case that compares pids: a restart would be the answer.
+let private appServing (w: World) (route: string) : Task<World * string> =
+  task {
+    let! first =
+      task {
+        try
+          let! body = appGet w route
+          return Some body
+        with _ -> return None
+      }
+    match first with
+    | Some body -> return w, body
+    | None ->
+      let! restarted = startTrunkApp w
+      mutableApp.Value <- Some restarted
+      let! body = appGet restarted route
+      return restarted, body
+  }
+
 /// Wait for the trunk's line about a landing while the app keeps being asked. A reload that no request enters is judged
 /// NeverEntered once its grace window passes, and that verdict is final, so a waiter that only reads status lets a loaded
 /// machine run the window out before the new body ever runs. Asking the app on every poll enters the body the moment the
@@ -819,7 +840,7 @@ let tests =
       testTask "WHY: a landing whose verification fails does not land, and the trunk app serves the old behavior" {
         let! w = liveAppWorld ()
         let! tipBefore = integrationTip w
-        let! servedBefore = appGet w "bob"
+        let! _, servedBefore = appServing w "bob"
         // Carol changes bob's handler so it no longer speaks as bob, and the test that says what a handler's message looks like
         // goes red in the verifying session.
         let! landingId = land w w.Carol "Bob.fs" tipBefore [ "bob:v2", "broken" ] "carol: bob stops speaking as bob"
@@ -830,7 +851,7 @@ let tests =
         (trunkLine status landingId) |> Expect.isNone "the trunk was told nothing about it"
         File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
         |> Expect.stringContains "the trunk checkout still holds bob's landed file" "bob:v2"
-        let! servedAfter = appGet w "bob"
+        let! _, servedAfter = appServing w "bob"
         splitCounted servedAfter |> fst |> Expect.equal "the app serves the old behavior" (fst (splitCounted servedBefore))
       }
     ]
