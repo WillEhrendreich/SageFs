@@ -99,7 +99,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" None (Some "/mcp-json-wire/none")
       text
       |> equalJson "NoSession payload"
-           """{"message":"No sessions match workingDirectory \\u0027/mcp-json-wire/none\\u0027. Running sessions: (none running). Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session for that directory, or switch_session to an existing matching session.","scope":"Session","state":"NoSession","wait":{"outcome":"NotNeeded","waitedMs":0,"lastRebuild":"NoneRecorded"}}"""
+           """{"lifecycle":"NoSession","message":"No sessions match workingDirectory \\u0027/mcp-json-wire/none\\u0027. Running sessions: (none running). Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session for that directory, or switch_session to an existing matching session.","scope":"Session","state":"NoSession","wait":{"outcome":"NotNeeded","waitedMs":0,"lastRebuild":"NoneRecorded"}}"""
     }
 
     testTask "WHY — a warming session writes the WarmingUp shape with its target list and null reload fields" {
@@ -117,7 +117,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" (Some "cc33dd44") None
       text
       |> Expect.equal "Faulted payload"
-           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline","discover_features"],"coreAdoption":null,"faultReason":"warmup failed","health":{"status":"Failed","reason":"warmup failed"},"lastReload":null,"lastRestart":null,"loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"cc33dd44","sourceState":{"message":"Whether the build is current could not be told: the session loaded no project, so there is no build to be behind.","reason":{"detail":"the session loaded no project, so there is no build to be behind","kind":"NoProjectLoaded"},"state":"Unknown"},"state":"Faulted","target":[{"kind":"Bare","path":null}],"wait":{"outcome":"NotNeeded","waitedMs":0,"lastRebuild":"NoneRecorded"}}"""
+           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline","discover_features"],"coreAdoption":null,"faultReason":"warmup failed","health":{"status":"Failed","reason":"warmup failed"},"lastReload":null,"lastRestart":null,"lifecycle":"Faulted","loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"cc33dd44","sourceState":{"message":"Whether the build is current could not be told: the session loaded no project, so there is no build to be behind.","reason":{"detail":"the session loaded no project, so there is no build to be behind","kind":"NoProjectLoaded"},"state":"Unknown"},"state":"Faulted","target":[{"kind":"Bare","path":null}],"wait":{"outcome":"NotNeeded","waitedMs":0,"lastRebuild":"NoneRecorded"}}"""
     }
 
     testTask "WHY — a ready session with no worker proxy is reported as WarmingUp, lifecycle as it is" {
